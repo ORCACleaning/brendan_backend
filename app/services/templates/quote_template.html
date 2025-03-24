@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vacate Cleaning Quote</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 65px 60px 30px 60px; /* top, right, bottom, left */
+    }
+    body {
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      color: #333;
+      max-width: 800px;
+      margin: auto;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .logo img {
+      max-width: 180px;
+    }
+    .company-details {
+      text-align: right;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .company-details .brand {
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 4px;
+      display: block;
+    }
+    .line {
+      border-top: 2px solid #ccc;
+      margin: 20px 0;
+    }
+    h2 {
+      margin: 10px 0 5px 0;
+      color: #1a1a1a;
+    }
+    p {
+      margin: 4px 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 10px;
+      text-align: center;
+    }
+    .top-table tr:nth-child(1),
+    .top-table tr:nth-child(3),
+    .top-table tr:nth-child(5) {
+      background-color: #f8f8f8;
+    }
+    .totals {
+      margin-top: 20px;
+    }
+    .totals td {
+      font-weight: bold;
+      text-align: left;
+    }
+    .note {
+      margin-top: 15px;
+      font-style: italic;
+      color: #444;
+    }
+    .footer {
+      margin-top: 40px;
+      border-top: 1px solid #ccc;
+      padding-top: 10px;
+      font-size: 12px;
+      color: #555;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo">
+      <img src="data:image/png;base64,{{ logo_base64 }}" alt="Orca Cleaning Logo">
+    </div>
+    <div class="company-details">
+      <span class="brand">ORCA Cleaning</span>
+      ABN: 57 682 794 047<br>
+      U2010 659 Murray Street<br>
+      West Perth WA 6005<br>
+      1300 918 388<br>
+      info@orcacleaning.com.au
+    </div>
+  </div>
+
+  <h2>Vacate Cleaning Quote</h2>
+  <p><strong>Quote ID:</strong> {{ quote_id }}</p>
+  <p><strong>Suburb:</strong> {{ suburb }}</p>
+
+  <div class="line"></div>
+
+  <p><strong>Customer Name:</strong> {{ customer_name }}</p>
+  <p><strong>Phone:</strong> {{ customer_phone }}</p>
+  <p><strong>Address:</strong> {{ customer_address }}</p>
+    {% if business_name %}
+  <p><strong>Business Name:</strong> {{ business_name }}</p>
+    {% endif %}
+
+
+  <table class="top-table">
+    <tr>
+      <th>Bedrooms</th>
+      <th>Bathrooms</th>
+      <th>Furnished</th>
+    </tr>
+    <tr>
+      <td>{{ bedrooms }}</td>
+      <td>{{ bathrooms }}</td>
+      <td>{{ furnished }}</td>
+    </tr>
+    <tr>
+      <th>Oven Clean</th>
+      <th>Carpet Steam</th>
+      <th>After Hours</th>
+    </tr>
+    <tr>
+      <td>{{ "Yes" if oven_cleaning else "No" }}</td>
+      <td>{{ "Yes" if carpet_cleaning else "No" }}</td>
+      <td>{{ "Yes" if after_hours else "No" }}</td>
+    </tr>
+    <tr>
+      <th>Weekend</th>
+      <th>Mandurah</th>
+      <th>Property Manager</th>
+    </tr>
+    <tr>
+      <td>{{ "Yes" if weekend_cleaning else "No" }}</td>
+      <td>{{ "Yes" if mandurah_property else "No" }}</td>
+      <td>{{ "Yes" if is_property_manager else "No" }}</td>
+    </tr>
+  </table>
+
+  <table class="totals">
+    <tr>
+      <td>Base Hourly Rate</td>
+      <td>${{ "%.2f"|format(base_hourly_rate) }}</td>
+    </tr>
+    <tr>
+      <td>Estimated Time</td>
+      <td>
+        {% if is_range %}
+          {{ minimum_time_mins }}–{{ estimated_time_mins }} mins
+        {% else %}
+          {{ estimated_time_mins }} mins
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <td>Weekend Surcharge</td>
+      <td>${{ "%.2f"|format(weekend_surcharge) }}</td>
+    </tr>
+    <tr>
+      <td>After-Hours Surcharge</td>
+      <td>${{ "%.2f"|format(after_hours_surcharge) }}</td>
+    </tr>
+    <tr>
+      <td>Mandurah Surcharge</td>
+      <td>${{ "%.2f"|format(mandurah_surcharge) }}</td>
+    </tr>
+    <tr>
+      <td>Discount</td>
+      <td>-${{ "%.2f"|format(discount_applied) }}</td>
+    </tr>
+    <tr>
+      <td>GST</td>
+      <td>${{ "%.2f"|format(gst_applied) }}</td>
+    </tr>
+    <tr>
+      <td>Total Price (incl. GST)</td>
+      <td><strong>${{ "%.2f"|format(total_price) }}</strong></td>
+    </tr>
+  </table>
+
+  {% if note %}
+    <p class="note">Note: {{ note }}</p>
+  {% endif %}
+
+  <div class="footer">
+    This quote is valid for 7 days. Let us know if you'd like to schedule your clean.<br>
+    Thanks for considering Orca Cleaning — we're here to help!
+  </div>
+
+</body>
+</html>

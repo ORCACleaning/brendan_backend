@@ -7,5 +7,5 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Include the /calculate-quote route
+# Include the /calculate-quote and /generate-pdf routes
 app.include_router(quote.router, prefix="/api")
