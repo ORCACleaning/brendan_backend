@@ -1,11 +1,18 @@
 from fastapi import FastAPI
 from app.services.pdf_generator import generate_quote_pdf
 from app.store_customer import router as store_customer_router
+from app.api.quote import router as quote_router
+from app.brendan_chat import router as brendan_chat_router  # This one is next
 
 app = FastAPI()
 
 # Register the new endpoint
+app.include_router(quote_router)
 app.include_router(store_customer_router)
+app.include_router(brendan_chat_router)  # Plug GPT into the brain
+
+
+
 
 # Optional: keep your test block inside `if __name__ == "__main__"` so it doesn’t run on server
 if __name__ == "__main__":
