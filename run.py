@@ -4,6 +4,12 @@ from app.services.pdf_generator import generate_quote_pdf
 from app.store_customer import router as store_customer_router
 from app.api.quote import router as quote_router
 from app.brendan_chat import router as brendan_chat_router
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
+
 
 app = FastAPI()
 
