@@ -52,4 +52,5 @@ if __name__ == "__main__":
     print(f"✅ PDF successfully generated at: {output_path}")
 
     # ✅ Start Uvicorn for local testing
-    uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=10000, reload=True)
+
