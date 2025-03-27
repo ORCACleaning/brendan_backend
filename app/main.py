@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from app.api import quote
 from fastapi.responses import JSONResponse
+import json
 
 app = FastAPI(
     title="Brendan API",
@@ -14,8 +15,8 @@ app.include_router(quote.router, prefix="/api")
 # Welcome endpoint with corrected emoji encoding
 @app.get("/")
 def read_root():
+    response = {"message": "Welcome to Brendan Backend! 🎉"}
     return JSONResponse(
-        content={"message": "Welcome to Brendan Backend! 🎉"},
-        media_type="application/json",
-        headers={"Content-Type": "application/json; charset=utf-8"}  # Ensure UTF-8 encoding
+        content=json.dumps(response, ensure_ascii=False),  # Ensures emoji stays as-is
+        media_type="application/json; charset=utf-8"
     )
