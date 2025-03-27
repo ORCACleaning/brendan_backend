@@ -6,6 +6,16 @@ from app.brendan_chat import router as brendan_chat_router
 
 app = FastAPI()
 
+# ✅ Default route to prevent 404
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to Brendan Backend! 🎉"}
+
+# ✅ Health check route for testing
+@app.get("/ping")
+def ping():
+    return {"ping": "pong"}
+
 # ✅ Register the new endpoints
 app.include_router(quote_router)
 app.include_router(store_customer_router)
@@ -52,5 +62,4 @@ if __name__ == "__main__":
     print(f"✅ PDF successfully generated at: {output_path}")
 
     # ✅ Start Uvicorn for local testing
-    uvicorn.run("app.main:app", host="0.0.0.0", port=10000, reload=True)
-
+    uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True)
