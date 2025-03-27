@@ -26,7 +26,10 @@ app.include_router(brendan_chat_router)
 if __name__ == "__main__":
     import uvicorn
 
-    # Test data for PDF generation
+    # ✅ Set UTF-8 encoding to fix emoji display
+    logging.basicConfig(encoding="utf-8")
+
+    # ✅ Test data for PDF generation
     data = {
         "quote_id": "VAC-LOGOTEST01",
         "suburb": "Subiaco",
@@ -62,10 +65,5 @@ if __name__ == "__main__":
     output_path = generate_quote_pdf(data)
     print(f"✅ PDF successfully generated at: {output_path}")
 
-    # Set UTF-8 encoding to fix emoji display
-logging.basicConfig(encoding="utf-8")
-
     # ✅ Start Uvicorn for local testing
-    
     uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True, log_config=None, access_log=False)
-
