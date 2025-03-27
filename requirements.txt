@@ -18,5 +18,3 @@ uvicorn
 fastapi
 python-multipart
 python-dotenv
-python-multipart
-python-dotenv
