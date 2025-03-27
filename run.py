@@ -1,3 +1,4 @@
+import logging
 from fastapi import FastAPI
 from app.services.pdf_generator import generate_quote_pdf
 from app.store_customer import router as store_customer_router
@@ -61,5 +62,10 @@ if __name__ == "__main__":
     output_path = generate_quote_pdf(data)
     print(f"✅ PDF successfully generated at: {output_path}")
 
+    # Set UTF-8 encoding to fix emoji display
+logging.basicConfig(encoding="utf-8")
+
     # ✅ Start Uvicorn for local testing
-    uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True)
+    
+    uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True, log_config=None, access_log=False)
+
