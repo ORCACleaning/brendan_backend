@@ -16,5 +16,6 @@ app.include_router(quote.router, prefix="/api")
 def read_root():
     return JSONResponse(
         content={"message": "Welcome to Brendan Backend! 🎉"},
-        media_type="application/json"
+        media_type="application/json",
+        headers={"Content-Type": "application/json; charset=utf-8"}  # Ensure UTF-8 encoding
     )
