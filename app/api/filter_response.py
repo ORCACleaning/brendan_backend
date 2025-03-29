@@ -52,7 +52,8 @@ def extract_properties_from_gpt4(message: str):
                 {"role": "user", "content": message}
             ]
         )
-        result = response["choices"][0]["message"]["content"]
+        result = response.choices[0].message.content
+
 
         # 🔥 Log the raw GPT-4 response
         logging.info(f"GPT-4 Response: {result}")
