@@ -40,15 +40,16 @@ Respond ONLY in this JSON format:
 # ✅ GPT-4 API Call to Process Customer Message
 def extract_properties_from_gpt4(message: str):
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4.0-turbo",
-            messages=[
-                {"role": "system", "content": GPT_PROMPT},
-                {"role": "user", "content": message}
-            ]
-        )
-        result = response.choices[0].message.content
-        return json.loads(result)  # Safely parse JSON result
+    response = openai.ChatCompletion.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": GPT_PROMPT},
+            {"role": "user", "content": message}
+        ]
+    )
+    gpt_result = response.choices[0].message.content
+    return json.loads(gpt_result)
+       
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing message with GPT-4: {str(e)}")
 
