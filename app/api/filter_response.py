@@ -8,14 +8,18 @@ router = APIRouter()
 class UserMessage(BaseModel):
     message: str
 
+class PropertyData(BaseModel):
+    property: str
+    value: str
+
 class FilteredResponse(BaseModel):
-    properties: list
+    properties: list[PropertyData]
 
 # ✅ Property Mapping to Match Customer Input
 PROPERTY_MAP = {
     "suburb": r"suburb|area|location|place",
-    "bedrooms_v2": r"bedroom|bedrooms|room|rooms",
-    "bathrooms_v2": r"bathroom|bathrooms|toilet|washroom",
+    "bedrooms": r"bedroom|bedrooms|room|rooms",
+    "bathrooms": r"bathroom|bathrooms|toilet|washroom",
     "oven_cleaning": r"oven",
     "carpet_cleaning": r"carpet",
     "furnished": r"furnished|unfurnished",
@@ -33,35 +37,42 @@ PROPERTY_MAP = {
 @router.post("/filter-response", response_model=FilteredResponse)
 async def filter_response(user_message: UserMessage):
     message = user_message.message.lower()
-    matched_properties = []
+    extracted_properties = []
 
     for property_name, pattern in PROPERTY_MAP.items():
         if re.search(pattern, message):
             value = extract_value(message, property_name)
             if value:
-                matched_properties.append({"property": property_name, "value": value})
+                extracted_properties.append({"property": property_name, "value": value})
 
-    if not matched_properties:
+    if not extracted_properties:
         raise HTTPException(status_code=400, detail="No relevant data found")
 
-    return {"properties": matched_properties}
+    return {"properties": extracted_properties}
+
 
 # ✅ Extract specific values for each property
 def extract_value(message, property_name):
+    # ✅ Extract window count dynamically
     if property_name == "window_v2":
         match = re.search(r"(\d+)\s*window[s]*", message)
         return match.group(1) if match else "0"
 
-    if property_name in ["bedrooms_v2", "bathrooms_v2"]:
-        match = re.search(r"\d+", message)
-        return match.group() if match else None
+    # ✅ Extract numbers for bedrooms and bathrooms
+    if property_name in ["bedrooms", "bathrooms"]:
+        match = re.search(r"(\d+)", message)
+        return match.group(1) if match else None
 
+    # ✅ Return "Yes" or "No" for boolean properties
     if property_name in ["oven_cleaning", "carpet_cleaning", "furnished", "wall_cleaning",
                          "balcony_cleaning", "window_cleaning", "deep_cleaning", "fridge_cleaning",
                          "range_hood_cleaning", "garage_cleaning"]:
-        if "yes" in message or "checked" in message:
+        if "yes" in message or "check" in message or "include" in message:
             return "Yes"
-        elif "no" in message or "unchecked" in message:
+        elif "no" in message or "unchecked" in message or "exclude" in message:
             return "No"
+        else:
+            return "Yes"  # Default to Yes if mentioned but no negation
 
+    # ✅ Return original message if none of the above
     return message.strip()
