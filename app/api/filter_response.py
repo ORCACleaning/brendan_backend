@@ -65,8 +65,9 @@ async def filter_response(user_message: UserMessage):
 """
 
 # Save the file
-file_path = "/mnt/data/filter_response.py"
-with open(file_path, "w") as file:
+import os
+file_path = os.path.join(os.getcwd(), "app/api/filter_response.py")
+with open(file_path, "r") as file:
     file.write(file_content)
 
 file_path
