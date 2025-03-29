@@ -1,4 +1,3 @@
-# ✅ Create OpenAI client instance correctly
 from openai import OpenAI
 import os
 import json
@@ -7,9 +6,11 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-# ✅ Load API Key securely from .env
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# ✅ Load API Key from environment
+api_key = os.getenv("OPENAI_API_KEY")
 
+# ✅ Initialize OpenAI client using Project Key
+client = OpenAI(api_key=api_key)
 
 # ✅ Define request and response models
 class UserMessage(BaseModel):
@@ -17,7 +18,6 @@ class UserMessage(BaseModel):
 
 class FilteredResponse(BaseModel):
     properties: list[dict]
-
 
 # ✅ Updated GPT-4 Turbo Property Mapping Prompt
 GPT_PROMPT = """
@@ -44,20 +44,18 @@ Always return a JSON response as follows:
 }
 """
 
-
 # ✅ Updated GPT-4 Turbo API Call to Process Customer Message
 def extract_properties_from_gpt4(message: str):
     try:
-        # ✅ Updated API call for openai>=1.0.0
+        # ✅ Updated API call for project key
         response = client.chat.completions.create(
-            model="gpt-4-turbo",
+            model="gpt-4o",  # ✅ Use GPT-4o with project key
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
                 {"role": "user", "content": message}
             ]
         )
 
-        # ✅ Extract and parse the result
         gpt_result = response.choices[0].message.content
         result_json = json.loads(gpt_result)
 
@@ -68,7 +66,6 @@ def extract_properties_from_gpt4(message: str):
         return extracted_properties, follow_up_response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing message with GPT-4: {str(e)}")
-
 
 # ✅ Updated Main Route: Filter Response with Follow-Up Handling
 @router.post("/filter-response", response_model=FilteredResponse)
