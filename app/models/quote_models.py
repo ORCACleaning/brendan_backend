@@ -4,28 +4,28 @@ from typing import Optional
 # ✅ Input Model for Quote Request
 class QuoteRequest(BaseModel):
     suburb: str
-    bedrooms_v2: int
-    bathrooms_v2: int
-    oven_cleaning_v2: bool
-    carpet_cleaning_v2: bool
-    furnished_v2: str
-    special_requests_v2: Optional[str] = None
-    special_request_minutes_min_v2: Optional[int] = None
-    special_request_minutes_max_v2: Optional[int] = None
-    after_hours_v2: bool
-    weekend_cleaning_v2: bool
-    mandurah_property_v2: bool
-    is_property_manager_v2: Optional[bool] = False  # Updated ✅
+    bedrooms_v2: int  # Updated ✅
+    bathrooms_v2: int  # Updated ✅
+    oven_cleaning: bool
+    carpet_cleaning: bool
+    furnished: str
+    special_requests: Optional[str] = None
+    special_request_minutes_min: Optional[int] = None
+    special_request_minutes_max: Optional[int] = None
+    after_hours: bool
+    weekend_cleaning: bool
+    mandurah_property: bool
+    is_property_manager: Optional[bool] = False
 
-    # ✅ Updated Fields with _v2 Suffix for Additional Services
-    wall_cleaning_v2: Optional[bool] = False
-    balcony_cleaning_v2: Optional[bool] = False
-    window_cleaning_v2: Optional[bool] = False
-    window_count_v2: Optional[int] = 0  # Number of windows for window cleaning
-    deep_cleaning_v2: Optional[bool] = False
-    fridge_cleaning_v2: Optional[bool] = False
-    range_hood_cleaning_v2: Optional[bool] = False
-    garage_cleaning_v2: Optional[bool] = False
+    # ✅ Additional Services (No changes here)
+    wall_cleaning: Optional[bool] = False
+    balcony_cleaning: Optional[bool] = False
+    window_cleaning: Optional[bool] = False
+    windows_v2: Optional[int] = 0  # Corrected ✅
+    deep_cleaning: Optional[bool] = False
+    fridge_cleaning: Optional[bool] = False
+    range_hood_cleaning: Optional[bool] = False
+    garage_cleaning: Optional[bool] = False
 
 
 # ✅ Output Model for Quote Response
