@@ -14,6 +14,9 @@ load_dotenv()
 
 app = FastAPI()
 
+# ✅ Register the filter-response endpoint
+app.include_router(filter_response_router)
+
 # ✅ Default route to prevent 404
 @app.get("/")
 def read_root():
