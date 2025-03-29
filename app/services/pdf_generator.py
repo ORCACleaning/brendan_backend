@@ -23,7 +23,27 @@ def generate_quote_pdf(data: dict) -> str:
     # Add logo_base64 into the template data
     data["logo_base64"] = logo_base64
 
-    # Render and export the PDF
+    # ✅ Handle additional services and format them nicely
+    extra_services = []
+    if data.get("wall_cleaning"):
+        extra_services.append("Wall Cleaning")
+    if data.get("balcony_cleaning"):
+        extra_services.append("Balcony Cleaning")
+    if data.get("window_cleaning"):
+        extra_services.append("Window Cleaning")
+    if data.get("deep_cleaning"):
+        extra_services.append("Deep Cleaning")
+    if data.get("fridge_cleaning"):
+        extra_services.append("Fridge Cleaning")
+    if data.get("range_hood_cleaning"):
+        extra_services.append("Range Hood Cleaning")
+    if data.get("garage_cleaning"):
+        extra_services.append("Garage Cleaning")
+
+    # ✅ Add extra services to the data
+    data["extra_services"] = ", ".join(extra_services) if extra_services else "None"
+
+    # ✅ Render and export the PDF
     html_out = template.render(**data)
     HTML(string=html_out, base_url=".").write_pdf(output_path)
 
