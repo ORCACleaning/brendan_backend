@@ -10,6 +10,7 @@ import os
 
 # ✅ Load environment variables
 load_dotenv()
+print("✅ Loaded API Key:", os.getenv("OPENAI_API_KEY"))
 
 app = FastAPI()
 
