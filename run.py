@@ -12,10 +12,10 @@ from openai import OpenAI
 # ✅ Load environment variables
 load_dotenv()
 
-# ✅ Use Project API Key Only
+# ✅ Load Project API Key Correctly
 api_key = os.getenv("OPENAI_API_KEY")
 
-# ✅ Debug API Key Load (partially masked)
+# ✅ Debug API Key Load (partially masked for security)
 if api_key:
     print(f"✅ Loaded API Key: {api_key[:10]}...{api_key[-5:]}")  # Masked for security
 else:
