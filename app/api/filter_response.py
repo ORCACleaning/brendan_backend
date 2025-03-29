@@ -18,6 +18,7 @@ class UserMessage(BaseModel):
 class FilteredResponse(BaseModel):
     properties: list[dict]
 
+
 # ✅ Updated GPT-4 Turbo Property Mapping Prompt
 GPT_PROMPT = """
 You are an intelligent cleaning service assistant named Brendan. Your task is to:
@@ -47,10 +48,6 @@ Always return a JSON response as follows:
 # ✅ Updated GPT-4 Turbo API Call to Process Customer Message
 def extract_properties_from_gpt4(message: str):
     try:
-
-        # ✅ Create OpenAI client instance
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
         # ✅ Updated API call for openai>=1.0.0
         response = client.chat.completions.create(
             model="gpt-4-turbo",
@@ -58,11 +55,12 @@ def extract_properties_from_gpt4(message: str):
                 {"role": "system", "content": GPT_PROMPT},
                 {"role": "user", "content": message}
             ]
-        )    
+        )
 
+        # ✅ Extract and parse the result
         gpt_result = response.choices[0].message.content
         result_json = json.loads(gpt_result)
-        
+
         # ✅ Handle follow-up responses
         extracted_properties = result_json.get("properties", [])
         follow_up_response = result_json.get("response", "")
@@ -85,4 +83,3 @@ async def filter_response(user_message: UserMessage):
         "properties": extracted_properties,
         "response": follow_up_response if follow_up_response else "Got it! I'll update your preferences accordingly."
     }
-
