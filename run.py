@@ -5,6 +5,7 @@ from app.store_customer import router as store_customer_router
 from app.api.quote import router as quote_router
 from app.brendan_chat import router as brendan_chat_router
 from dotenv import load_dotenv
+from app.api.filter_response import router as filter_response_router
 import os
 
 # Load environment variables
