@@ -11,12 +11,37 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     AFTER_HOURS_SURCHARGE = 75
     MANDURAH_SURCHARGE = 50
 
+    # ✅ New extra service times (in minutes)
+    EXTRA_SERVICE_TIMES = {
+        "wall_cleaning": 30,
+        "balcony_cleaning": 20,
+        "deep_cleaning": 60,
+        "fridge_cleaning": 15,
+        "range_hood_cleaning": 15,
+        "garage_cleaning": 40
+    }
+
     # Base time estimation
     base_minutes = (data.bedrooms * 40) + (data.bathrooms * 30)
+
+    # ✅ Add extra time for additional services
+    for service, time in EXTRA_SERVICE_TIMES.items():
+        if getattr(data, service, False):
+            base_minutes += time
+
+    # ✅ Window Cleaning Based on Number of Windows
+    window_minutes = 0
+    if data.window_cleaning and data.window_count > 0:
+        window_minutes = data.window_count * 10
+        base_minutes += window_minutes
+
+    # Oven and carpet cleaning
     if data.oven_cleaning:
         base_minutes += 30
     if data.carpet_cleaning:
         base_minutes += 40
+
+    # Furnished properties require extra time
     if data.furnished.lower() == "yes":
         base_minutes += 60
 
@@ -38,6 +63,18 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     # Base session price
     base_price = calculated_hours * BASE_HOURLY_RATE
+
+    # ✅ Add extra charges based on additional services
+    extra_service_charge = 0
+    for service in EXTRA_SERVICE_TIMES.keys():
+        if getattr(data, service, False):
+            extra_service_charge += (EXTRA_SERVICE_TIMES[service] / 60) * BASE_HOURLY_RATE
+
+    # ✅ Add cost for window cleaning based on the number of windows
+    window_cleaning_charge = (window_minutes / 60) * BASE_HOURLY_RATE
+
+    # Add extra service charge and window charge to base price
+    base_price += extra_service_charge + window_cleaning_charge
 
     # Surcharges
     weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
