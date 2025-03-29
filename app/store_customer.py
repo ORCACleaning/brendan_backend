@@ -25,6 +25,14 @@ class CustomerData(BaseModel):
     customer_name: str
     customer_email: str
     customer_phone: str
+    wall_cleaning: bool = False
+    balcony_cleaning: bool = False
+    window_cleaning: bool = False
+    window_count: int = 0
+    deep_cleaning: bool = False
+    fridge_cleaning: bool = False
+    range_hood_cleaning: bool = False
+    garage_cleaning: bool = False
 
 # --- Helper Functions ---
 def find_airtable_record(quote_id):
@@ -98,16 +106,24 @@ def store_customer(data: CustomerData):
         raise HTTPException(status_code=404, detail="Quote ID not found in Airtable")
 
     # Step 2: Build PDF link and booking URL
-    pdf_link = f"https://your-pdf-storage-link/{data.quote_id}.pdf"
+    pdf_link = f"https://orcacleaning.com.au/quotes/{data.quote_id}.pdf"
     booking_url = f"https://orcacleaning.com.au/schedule?quote_id={data.quote_id}"
 
-    # Step 3: Update Airtable
+    # ✅ Step 3: Update Airtable with new fields
     airtable_data = {
         "fields": {
             "quote_id": data.quote_id,
             "customer_name": data.customer_name,
             "customer_email": data.customer_email,
             "customer_phone": data.customer_phone,
+            "wall_cleaning": "Yes" if data.wall_cleaning else "No",
+            "balcony_cleaning": "Yes" if data.balcony_cleaning else "No",
+            "window_cleaning": "Yes" if data.window_cleaning else "No",
+            "window_count": data.window_count,
+            "deep_cleaning": "Yes" if data.deep_cleaning else "No",
+            "fridge_cleaning": "Yes" if data.fridge_cleaning else "No",
+            "range_hood_cleaning": "Yes" if data.range_hood_cleaning else "No",
+            "garage_cleaning": "Yes" if data.garage_cleaning else "No",
             "status": "Quote Only",
             "pdf_link": pdf_link,
             "booking_url": booking_url,
@@ -128,14 +144,13 @@ def store_customer(data: CustomerData):
     else:
         print(f"✅ Airtable update successful: {response.json()}")
 
-    # Step 4: Send email
+    # ✅ Step 4: Send email
     send_email(data.customer_email, data.customer_name, data.quote_id, pdf_link, booking_url)
 
-    # Step 5: Return success
+    # ✅ Step 5: Return success
     return {
-    "status": "success",
-    "message": f"Quote email sent to {data.customer_email}.",
-    "booking_url": f"https://orcacleaning.com.au/schedule?quote_id={data.quote_id}",
-    "quote_id": data.quote_id
-}
-
+        "status": "success",
+        "message": f"Quote email sent to {data.customer_email}.",
+        "booking_url": booking_url,
+        "quote_id": data.quote_id
+    }
