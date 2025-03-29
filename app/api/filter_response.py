@@ -1,3 +1,4 @@
+# ✅ Create OpenAI client instance correctly
 from openai import OpenAI
 import os
 import json
@@ -6,8 +7,9 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-# ✅ Load API Key from environment
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# ✅ Load API Key securely from .env
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 
 # ✅ Define request and response models
 class UserMessage(BaseModel):
