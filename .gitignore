@@ -1,22 +1,26 @@
-__pycache__/
-*.pyc
-venv/
-brendan-chatbot/
-node_modules/
-.DS_Store
-package-lock.json
-# Ignore Python virtual environment
-venv/
+# Ignore Python cache and compiled files
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
+
+# Ignore virtual environments
+venv/
 env/
+.Python
+
+# Ignore Node.js modules and lock files
+brendan-chatbot/
+node_modules/
+package-lock.json
+
+# Ignore system files
+.DS_Store
+
+# Ignore build and distribution directories
 build/
 dist/
 *.egg-info
 
-.env
-.env
+# Ignore environment variables file
 .env
