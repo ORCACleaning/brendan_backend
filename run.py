@@ -11,15 +11,17 @@ from openai import OpenAI
 
 # ✅ Load environment variables
 load_dotenv()
+
+# ✅ Use Project API Key Only
 api_key = os.getenv("OPENAI_API_KEY")
 
-# ✅ Print API Key for debugging (partially masked for security)
+# ✅ Debug API Key Load (partially masked)
 if api_key:
     print(f"✅ Loaded API Key: {api_key[:10]}...{api_key[-5:]}")  # Masked for security
 else:
     print("❌ ERROR: API Key not loaded. Check .env or Render environment variables!")
 
-# ✅ Initialize OpenAI client
+# ✅ Initialize OpenAI client using Project API Key
 client = OpenAI(api_key=api_key)
 
 app = FastAPI()
@@ -64,7 +66,7 @@ if __name__ == "__main__":
         "carpet_cleaning": False,
         "wall_cleaning": True,
         "balcony_cleaning": False,
-        "window_cleaning": True,  # ✅ Updated to window_cleaning instead of window_tracks
+        "window_cleaning": True,
         "deep_cleaning": True,
         "fridge_cleaning": False,
         "range_hood_cleaning": True,
