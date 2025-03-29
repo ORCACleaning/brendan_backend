@@ -7,10 +7,20 @@ from app.brendan_chat import router as brendan_chat_router
 from app.api.filter_response import router as filter_response_router
 from dotenv import load_dotenv
 import os
+from openai import OpenAI
 
 # ✅ Load environment variables
 load_dotenv()
-print("✅ Loaded API Key:", os.getenv("OPENAI_API_KEY"))
+api_key = os.getenv("OPENAI_API_KEY")
+
+# ✅ Print API Key for debugging
+if api_key:
+    print(f"✅ Loaded API Key: {api_key[:10]}...{api_key[-5:]}")  # Masked for security
+else:
+    print("❌ ERROR: API Key not loaded. Check .env or Render environment variables!")
+
+# ✅ Initialize OpenAI client
+client = OpenAI(api_key=api_key)
 
 app = FastAPI()
 
