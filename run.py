@@ -4,13 +4,12 @@ from app.services.pdf_generator import generate_quote_pdf
 from app.store_customer import router as store_customer_router
 from app.api.quote import router as quote_router
 from app.brendan_chat import router as brendan_chat_router
-from dotenv import load_dotenv
 from app.api.filter_response import router as filter_response_router
+from dotenv import load_dotenv
 import os
 
 # Load environment variables
 load_dotenv()
-
 
 app = FastAPI()
 
@@ -52,6 +51,13 @@ if __name__ == "__main__":
         "furnished": "Yes",
         "oven_cleaning": True,
         "carpet_cleaning": False,
+        "wall_cleaning": True,
+        "balcony_cleaning": False,
+        "window_cleaning": True,  # ✅ Updated to window_cleaning instead of window_tracks
+        "deep_cleaning": True,
+        "fridge_cleaning": False,
+        "range_hood_cleaning": True,
+        "garage_cleaning": False,
         "after_hours": False,
         "weekend_cleaning": True,
         "mandurah_property": False,
