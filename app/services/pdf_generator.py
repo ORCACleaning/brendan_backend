@@ -30,7 +30,13 @@ def generate_quote_pdf(data: dict) -> str:
     if data.get("balcony_cleaning"):
         extra_services.append("Balcony Cleaning")
     if data.get("window_cleaning"):
-        extra_services.append("Window Cleaning")
+        # ✅ Show number of windows dynamically
+        window_count = data.get("window_count", 0)
+        if window_count > 0:
+            extra_services.append(f"Window Cleaning ({window_count} windows)")
+        else:
+            extra_services.append("Window Cleaning")
+
     if data.get("deep_cleaning"):
         extra_services.append("Deep Cleaning")
     if data.get("fridge_cleaning"):
