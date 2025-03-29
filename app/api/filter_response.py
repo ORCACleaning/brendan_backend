@@ -1,5 +1,3 @@
-# Creating the updated filter_response.py file with the given content
-file_content = """
 import openai
 import os
 from fastapi import APIRouter, HTTPException
@@ -18,7 +16,7 @@ class FilteredResponse(BaseModel):
     properties: list[dict]
 
 # ✅ GPT-4 Property Mapping Prompt
-GPT_PROMPT = \"\"\"
+GPT_PROMPT = """
 You are an intelligent cleaning service assistant. Your task is to analyze a customer's message and extract relevant cleaning properties. Return a list of properties with their values in JSON format.
 
 Here are the possible properties:
@@ -35,7 +33,7 @@ Respond ONLY in this JSON format:
         {"property": "window_v2", "value": "5"}
     ]
 }
-\"\"\"
+"""
 
 # ✅ GPT-4 API Call to Process Customer Message
 def extract_properties_from_gpt4(message: str):
@@ -62,12 +60,3 @@ async def filter_response(user_message: UserMessage):
 
     # ✅ Return extracted properties
     return {"properties": gpt_result["properties"]}
-"""
-
-# Save the file
-import os
-file_path = os.path.join(os.getcwd(), "app/api/filter_response.py")
-with open(file_path, "r") as file:
-    
-
-file_path
