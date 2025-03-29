@@ -1,11 +1,8 @@
 import openai
 import os
-import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-
-# ✅ Set up logging to the console for Render
-logging.basicConfig(level=logging.INFO)
+import json
 
 router = APIRouter()
 
@@ -42,25 +39,17 @@ Respond ONLY in this JSON format:
 # ✅ GPT-4 API Call to Process Customer Message
 def extract_properties_from_gpt4(message: str):
     try:
-        # 🔥 Log message before sending it to GPT-4
-        logging.info(f"Processing message: {message}")
-
         response = openai.ChatCompletion.create(
-            model="gpt-4",
+            model="gpt-4.0-turbo",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
                 {"role": "user", "content": message}
             ]
         )
-        result = response.choices[0].message.content
-
-
-        # 🔥 Log the raw GPT-4 response
-        logging.info(f"GPT-4 Response: {result}")
-
-        return eval(result)  # Convert string response to JSON
+        result = response["choices"][0]["message"]["content"]
+        # ✅ Parse the result correctly and return as JSON
+        return json.loads(result)
     except Exception as e:
-        logging.error(f"Error processing message: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing message with GPT-4: {str(e)}")
 
 # ✅ Main Route: Filter Response
@@ -72,5 +61,4 @@ async def filter_response(user_message: UserMessage):
     gpt_result = extract_properties_from_gpt4(message)
 
     # ✅ Return extracted properties
-    logging.info(f"Extracted Properties: {gpt_result['properties']}")
     return {"properties": gpt_result["properties"]}
