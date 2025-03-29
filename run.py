@@ -8,7 +8,7 @@ from app.api.filter_response import router as filter_response_router
 from dotenv import load_dotenv
 import os
 
-# Load environment variables
+# ✅ Load environment variables
 load_dotenv()
 
 app = FastAPI()
