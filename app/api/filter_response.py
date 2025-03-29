@@ -68,6 +68,6 @@ async def filter_response(user_message: UserMessage):
 import os
 file_path = os.path.join(os.getcwd(), "app/api/filter_response.py")
 with open(file_path, "r") as file:
-    file.write(file_content)
+    
 
 file_path
