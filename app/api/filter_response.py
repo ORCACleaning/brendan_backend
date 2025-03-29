@@ -1,78 +1,62 @@
+import openai
+import os
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import re
 
 router = APIRouter()
 
-# ✅ Define request and response schemas
+# ✅ Load API Key from environment
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+# ✅ Define request and response models
 class UserMessage(BaseModel):
     message: str
 
-class PropertyData(BaseModel):
-    property: str
-    value: str
-
 class FilteredResponse(BaseModel):
-    properties: list[PropertyData]
+    properties: list[dict]
 
-# ✅ Property Mapping to Match Customer Input
-PROPERTY_MAP = {
-    "suburb": r"suburb|area|location|place",
-    "bedrooms": r"bedroom|bedrooms|room|rooms",
-    "bathrooms": r"bathroom|bathrooms|toilet|washroom",
-    "oven_cleaning": r"oven",
-    "carpet_cleaning": r"carpet",
-    "furnished": r"furnished|unfurnished",
-    "special_requests": r"special|request|extra",
-    "wall_cleaning": r"wall|walls",
-    "balcony_cleaning": r"balcony",
-    "window_v2": r"(\d+)\s*window[s]*",  # ✅ Extract number of windows dynamically
-    "deep_cleaning": r"deep clean|intense clean",
-    "fridge_cleaning": r"fridge|refrigerator",
-    "range_hood_cleaning": r"range hood|hood",
-    "garage_cleaning": r"garage"
+# ✅ GPT-4 Property Mapping Prompt
+GPT_PROMPT = """
+You are an intelligent cleaning service assistant. Your task is to analyze a customer's message and extract relevant cleaning properties. Return a list of properties with their values in JSON format.
+
+Here are the possible properties:
+- balcony_cleaning (Yes/No)
+- wall_cleaning (Yes/No)
+- oven_cleaning (Yes/No)
+- carpet_cleaning (Yes/No)
+- window_v2 (Number of windows, integer)
+
+Respond ONLY in this JSON format:
+{
+    "properties": [
+        {"property": "balcony_cleaning", "value": "Yes"},
+        {"property": "window_v2", "value": "5"}
+    ]
 }
+"""
 
-# ✅ Extract and clean relevant data from user message
+# ✅ GPT-4 API Call to Process Customer Message
+def extract_properties_from_gpt4(message: str):
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": GPT_PROMPT},
+                {"role": "user", "content": message}
+            ]
+        )
+        result = response["choices"][0]["message"]["content"]
+        return eval(result)  # Convert string response to JSON
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing message with GPT-4: {str(e)}")
+
+# ✅ Main Route: Filter Response
 @router.post("/filter-response", response_model=FilteredResponse)
 async def filter_response(user_message: UserMessage):
-    message = user_message.message.lower()
-    extracted_properties = []
+    message = user_message.message
 
-    for property_name, pattern in PROPERTY_MAP.items():
-        if re.search(pattern, message):
-            value = extract_value(message, property_name)
-            if value:
-                extracted_properties.append({"property": property_name, "value": value})
+    # 🔥 Pass message to GPT-4 to extract properties
+    gpt_result = extract_properties_from_gpt4(message)
 
-    if not extracted_properties:
-        raise HTTPException(status_code=400, detail="No relevant data found")
-
-    return {"properties": extracted_properties}
-
-
-# ✅ Extract specific values for each property
-def extract_value(message, property_name):
-    # ✅ Extract window count dynamically
-    if property_name == "window_v2":
-        match = re.search(r"(\d+)\s*window[s]*", message)
-        return match.group(1) if match else "0"
-
-    # ✅ Extract numbers for bedrooms and bathrooms
-    if property_name in ["bedrooms", "bathrooms"]:
-        match = re.search(r"(\d+)", message)
-        return match.group(1) if match else None
-
-    # ✅ Return "Yes" or "No" for boolean properties
-    if property_name in ["oven_cleaning", "carpet_cleaning", "furnished", "wall_cleaning",
-                         "balcony_cleaning", "window_cleaning", "deep_cleaning", "fridge_cleaning",
-                         "range_hood_cleaning", "garage_cleaning"]:
-        if "yes" in message or "check" in message or "include" in message:
-            return "Yes"
-        elif "no" in message or "unchecked" in message or "exclude" in message:
-            return "No"
-        else:
-            return "Yes"  # Default to Yes if mentioned but no negation
-
-    # ✅ Return original message if none of the above
-    return message.strip()
+    # ✅ Return extracted properties
+    return {"properties": gpt_result["properties"]}
