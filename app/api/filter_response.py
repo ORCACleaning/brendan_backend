@@ -1,4 +1,4 @@
-import openai
+from openai import OpenAI
 import os
 import json
 from fastapi import APIRouter, HTTPException
@@ -45,13 +45,19 @@ Always return a JSON response as follows:
 # ✅ Updated GPT-4 Turbo API Call to Process Customer Message
 def extract_properties_from_gpt4(message: str):
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4-turbo",  # 🔥 Use GPT-4 Turbo for lower cost and faster responses
+
+        # ✅ Create OpenAI client instance
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+        # ✅ Updated API call for openai>=1.0.0
+        response = client.chat.completions.create(
+            model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
                 {"role": "user", "content": message}
             ]
-        )
+        )    
+
         gpt_result = response.choices[0].message.content
         result_json = json.loads(gpt_result)
         
