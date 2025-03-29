@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from typing import Optional
 
+# ✅ Input Model for Quote Request
 class QuoteRequest(BaseModel):
     suburb: str
     bedrooms: int
@@ -14,8 +15,20 @@ class QuoteRequest(BaseModel):
     after_hours: bool
     weekend_cleaning: bool
     mandurah_property: bool
-    is_property_manager: Optional[bool] = False  # New field ✅
+    is_property_manager: Optional[bool] = False  # Already included ✅
 
+    # ✅ New Fields Added for Additional Services
+    wall_cleaning: Optional[bool] = False
+    balcony_cleaning: Optional[bool] = False
+    window_cleaning: Optional[bool] = False
+    window_count: Optional[int] = 0  # Number of windows for window cleaning
+    deep_cleaning: Optional[bool] = False
+    fridge_cleaning: Optional[bool] = False
+    range_hood_cleaning: Optional[bool] = False
+    garage_cleaning: Optional[bool] = False
+
+
+# ✅ Output Model for Quote Response
 class QuoteResponse(BaseModel):
     quote_id: str
     estimated_time_mins: Optional[int] = None
