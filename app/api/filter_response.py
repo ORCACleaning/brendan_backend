@@ -40,7 +40,7 @@ Respond ONLY in this JSON format:
 def extract_properties_from_gpt4(message: str):
     try:
         response = openai.chat.completions.create(
-            model="gpt-4",
+            model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
                 {"role": "user", "content": message}
