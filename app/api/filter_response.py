@@ -1,8 +1,9 @@
+
 import openai
 import os
+import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import json
 
 router = APIRouter()
 
@@ -46,9 +47,8 @@ def extract_properties_from_gpt4(message: str):
                 {"role": "user", "content": message}
             ]
         )
-        result = response["choices"][0]["message"]["content"]
-        # ✅ Parse the result correctly and return as JSON
-        return json.loads(result)
+        result = response.choices[0].message.content
+        return json.loads(result)  # Safely parse JSON result
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing message with GPT-4: {str(e)}")
 
