@@ -1,3 +1,4 @@
+
 import openai
 import os
 import json
@@ -46,7 +47,6 @@ def extract_properties_from_gpt4(message: str):
                 {"role": "user", "content": message}
             ]
         )
-        # ✅ Correct way to parse content
         gpt_result = response.choices[0].message.content
         return json.loads(gpt_result)
     except Exception as e:
