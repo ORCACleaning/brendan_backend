@@ -6,10 +6,10 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-# ✅ Load API Key from environment
+# ✅ Load API Key securely from environment
 api_key = os.getenv("OPENAI_API_KEY")
 
-# ✅ Initialize OpenAI client using Project Key
+# ✅ Initialize OpenAI client using Project API Key
 client = OpenAI(api_key=api_key)
 
 # ✅ Define request and response models
