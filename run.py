@@ -13,7 +13,7 @@ from openai import OpenAI
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 
-# ✅ Print API Key for debugging
+# ✅ Print API Key for debugging (partially masked for security)
 if api_key:
     print(f"✅ Loaded API Key: {api_key[:10]}...{api_key[-5:]}")  # Masked for security
 else:
