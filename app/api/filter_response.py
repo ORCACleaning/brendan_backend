@@ -16,9 +16,11 @@ client = OpenAI(api_key=api_key)
 class UserMessage(BaseModel):
     message: str
 
+
 class FilteredResponse(BaseModel):
     properties: list[dict]
     response: str
+
 
 # ✅ Updated GPT-4 Turbo Property Mapping Prompt
 GPT_PROMPT = """
@@ -70,7 +72,7 @@ Return a JSON with the following structure:
 }
 """
 
-# ✅ Properties required for completing the loop
+# ✅ Required properties for completing the loop
 REQUIRED_PROPERTIES = [
     "suburb",
     "bedrooms_v2",
@@ -81,7 +83,8 @@ REQUIRED_PROPERTIES = [
     "special_requests"
 ]
 
-# ✅ Updated GPT-4 API Call to Process Customer Message
+
+# ✅ GPT-4 API Call to Process Customer Message
 def extract_properties_from_gpt4(message: str):
     try:
         print("🔥 [DEBUG] Received message from customer:", message)
@@ -99,8 +102,7 @@ def extract_properties_from_gpt4(message: str):
         print("🚀 [DEBUG] OpenAI API raw response:", response)
 
         # ✅ Extracting GPT response content
-        gpt_result = response.choices[0].message.content
-        print("🧠 [DEBUG] GPT-4o Response Content:", gpt_result)
+        gpt_result = response.choices[0].message.content.strip()
 
         # ✅ Clean response (remove backticks if present)
         if gpt_result.startswith("```json"):
@@ -136,19 +138,19 @@ def check_properties(properties):
 
     if not missing_properties:
         return "PROPERTY_DATA_COMPLETE", ""
-    
-    # ✅ Generate a follow-up question for missing properties
+
+    # ✅ Generate a follow-up question dynamically
     follow_up_question = generate_followup_question(missing_properties)
     return "ASK_FOLLOWUP", follow_up_question
 
 
-# ✅ Generate a friendly follow-up question
+# ✅ Generate a dynamic follow-up question for missing properties
 def generate_followup_question(missing_properties):
     if len(missing_properties) == 1:
         question = f"Just one more thing! Can you tell me about {missing_properties[0].replace('_v2', '').replace('_', ' ')}?"
     else:
         question = f"We’re almost there! Could you also tell me about {', '.join(missing_properties[:-1])} and {missing_properties[-1]}?"
-    
+
     return question
 
 
