@@ -131,6 +131,31 @@ def extract_properties_from_gpt4(message: str):
         raise HTTPException(status_code=500, detail=f"Error processing message with GPT-4: {str(e)}")
 
 
+# ✅ Detect if the customer is requesting to change any property
+def detect_property_change(message):
+    change_keywords = {
+        "bedrooms": "bedrooms_v2",
+        "bathrooms": "bathrooms_v2",
+        "windows": "windows_v2",
+        "oven": "oven_cleaning",
+        "carpet": "carpet_cleaning",
+        "furnished": "furnished",
+        "balcony": "balcony_cleaning",
+        "walls": "wall_cleaning",
+        "fridge": "fridge_cleaning",
+        "garage": "garage_cleaning",
+        "range hood": "range_hood_cleaning",
+        "window tracks": "window_tracks",
+        "deep clean": "deep_cleaning",
+        "special requests": "special_requests"
+    }
+
+    for keyword, property_name in change_keywords.items():
+        if keyword in message.lower():
+            return property_name
+    return None
+
+
 # ✅ Check if all required properties are collected
 def check_properties(properties):
     collected_properties = {prop["property"] for prop in properties}
@@ -161,6 +186,17 @@ async def filter_response(user_message: UserMessage):
     print("📩 [DEBUG] Incoming request message:", message)
 
     try:
+        # ✅ Check if the user wants to modify any property
+        change_property = detect_property_change(message)
+
+        if change_property:
+            # 🔄 Trigger Loop 1 again with updated property
+            follow_up_response = f"Got it! Let's update {change_property.replace('_v2', '').replace('_', ' ')}. What’s the new value?"
+            return {
+                "properties": [],
+                "response": follow_up_response
+            }
+
         # ✅ Extract properties and check for completeness
         extracted_properties, follow_up_response = extract_properties_from_gpt4(message)
         status, follow_up_question = check_properties(extracted_properties)
