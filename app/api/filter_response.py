@@ -65,8 +65,19 @@ def extract_properties_from_gpt4(message: str):
         gpt_result = response.choices[0].message.content
         print("🧠 [DEBUG] GPT-4o Response Content:", gpt_result)
 
+        # ✅ Remove surrounding backticks and json keyword if present
+        if gpt_result.startswith("```json"):
+            gpt_result = gpt_result[7:-3].strip()
+        elif gpt_result.startswith("```"):
+            gpt_result = gpt_result[3:-3].strip()
+
         # ✅ Parse the JSON result from GPT-4o
-        result_json = json.loads(gpt_result)
+        try:
+            result_json = json.loads(gpt_result)
+            print("✅ [DEBUG] Parsed JSON Successfully:", result_json)
+        except json.JSONDecodeError as e:
+            print("❌ [ERROR] JSON Parsing Failed:", str(e))
+            raise HTTPException(status_code=500, detail=f"Error parsing GPT-4 response: {str(e)}")
 
         # ✅ Handle follow-up responses
         extracted_properties = result_json.get("properties", [])
