@@ -237,10 +237,11 @@ async def filter_response(user_message: UserMessage):
                 "next_actions": next_actions
             }
         else:
-            # ❗️ No next_actions if properties are incomplete
+            # ✅ Include an empty next_actions array if properties are incomplete
             return {
                 "properties": extracted_properties,
-                "response": follow_up_question
+                "response": follow_up_question,
+                "next_actions": []  # ✅ Empty array to avoid validation error
             }
     except Exception as e:
         print("❌ [ERROR] Error processing request:", str(e))
