@@ -29,6 +29,7 @@ You are Brendan, an Aussie vacate cleaning assistant for Orca Cleaning. Your tas
 1. Analyze the customer's message and identify relevant cleaning properties.
 2. If a customer mentions a range or is unsure about a quantity (e.g., number of windows), take the maximum value.
 3. If the customer asks something unrelated, provide a natural and helpful response.
+4. Ignore default responses like “No,” empty strings, or zero when determining property completeness.
 
 ### Extractable Properties:
 - balcony_cleaning (Yes/No)
@@ -159,9 +160,20 @@ def detect_property_change(message):
 
 # ✅ Check if all required properties are collected
 def check_properties(properties):
-    collected_properties = {prop["property"] for prop in properties}
-    missing_properties = [prop for prop in REQUIRED_PROPERTIES if prop not in collected_properties]
+    collected_properties = {}
+    for prop in properties:
+        collected_properties[prop["property"]] = prop["value"]
 
+    # ✅ Check for empty, "No," or invalid default values
+    missing_properties = []
+    for required_prop in REQUIRED_PROPERTIES:
+        value = collected_properties.get(required_prop, "")
+
+        # ✅ Ignore "No", 0, empty strings, and None as valid values
+        if value == "" or value == "No" or value == "0" or value is None:
+            missing_properties.append(required_prop)
+
+    # ✅ Exit only when all required properties are valid
     if not missing_properties:
         return "PROPERTY_DATA_COMPLETE", ""
 
@@ -213,7 +225,6 @@ async def filter_response(user_message: UserMessage):
                     "next_actions": next_actions
                 }
 
-        
         # ✅ Extract properties and check for completeness
         extracted_properties, follow_up_response = extract_properties_from_gpt4(message)
         status, follow_up_question = check_properties(extracted_properties)
