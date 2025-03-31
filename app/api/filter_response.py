@@ -20,6 +20,7 @@ class UserMessage(BaseModel):
 class FilteredResponse(BaseModel):
     properties: list[dict]
     response: str
+    next_actions: list[dict]  # ✅ Add next_actions in response
 
 
 # ✅ Updated GPT-4 Turbo Property Mapping Prompt
@@ -179,6 +180,16 @@ def generate_followup_question(missing_properties):
     return question
 
 
+# ✅ Generate Dynamic Next Actions
+def generate_next_actions():
+    return [
+        {"action": "proceed_booking", "label": "Proceed to Booking"},
+        {"action": "download_pdf", "label": "Download PDF Quote"},
+        {"action": "email_pdf", "label": "Email PDF Quote"},
+        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
+    ]
+
+
 # ✅ Updated Main Route: Filter Response with Follow-Up Handling
 @router.post("/filter-response", response_model=FilteredResponse)
 async def filter_response(user_message: UserMessage):
@@ -189,28 +200,33 @@ async def filter_response(user_message: UserMessage):
         # ✅ Check if the user wants to modify any property
         change_property = detect_property_change(message)
 
-       if change_property:
-          # ✅ Confirmation message after updating property
+        if change_property:
+            # ✅ Confirmation message after updating property
             confirmation_response = f"Got it! I've updated {change_property.replace('_v2', '').replace('_', ' ')}. What else would you like to modify?"
+            next_actions = generate_next_actions()
             return {
                 "properties": [],
-                "response": confirmation_response
+                "response": confirmation_response,
+                "next_actions": next_actions
             }
-
 
         # ✅ Extract properties and check for completeness
         extracted_properties, follow_up_response = extract_properties_from_gpt4(message)
         status, follow_up_question = check_properties(extracted_properties)
 
+        next_actions = generate_next_actions()
+
         if status == "PROPERTY_DATA_COMPLETE":
             return {
                 "properties": extracted_properties,
-                "response": "PROPERTY_DATA_COMPLETE"
+                "response": "PROPERTY_DATA_COMPLETE",
+                "next_actions": next_actions
             }
         else:
             return {
                 "properties": extracted_properties,
-                "response": follow_up_question
+                "response": follow_up_question,
+                "next_actions": next_actions
             }
     except Exception as e:
         print("❌ [ERROR] Error processing request:", str(e))
