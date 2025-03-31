@@ -197,19 +197,23 @@ async def filter_response(user_message: UserMessage):
     print("📩 [DEBUG] Incoming request message:", message)
 
     try:
-        # ✅ Check if the user wants to modify any property
-        change_property = detect_property_change(message)
+        # ✅ Extract properties and check for completeness
+        extracted_properties, follow_up_response = extract_properties_from_gpt4(message)
 
-        if change_property:
-            # ✅ Confirmation message after updating property
-            confirmation_response = f"Got it! I've updated {change_property.replace('_v2', '').replace('_', ' ')}. What else would you like to modify?"
-            next_actions = generate_next_actions()
-            return {
-                "properties": [],
-                "response": confirmation_response,
-                "next_actions": next_actions
-            }
+        # ✅ Only check for property change if no new properties are extracted
+        if not extracted_properties:
+            change_property = detect_property_change(message)
+            if change_property:
+                # ✅ Confirmation message after updating property
+                confirmation_response = f"Got it! I've updated {change_property.replace('_v2', '').replace('_', ' ')}. What else would you like to modify?"
+                next_actions = generate_next_actions()
+                return {
+                    "properties": [],
+                    "response": confirmation_response,
+                    "next_actions": next_actions
+                }
 
+        
         # ✅ Extract properties and check for completeness
         extracted_properties, follow_up_response = extract_properties_from_gpt4(message)
         status, follow_up_question = check_properties(extracted_properties)
