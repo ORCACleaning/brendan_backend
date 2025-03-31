@@ -108,9 +108,9 @@ def extract_properties_from_gpt4(message: str):
 
         # ✅ Clean response (remove backticks if present)
         if gpt_result.startswith("```json"):
-            gpt_result = gpt_result[7:-3].strip()
+            gpt_result = gpt_result.replace("```json", "").replace("```", "").strip()
         elif gpt_result.startswith("```"):
-            gpt_result = gpt_result[3:-3].strip()
+            gpt_result = gpt_result.replace("```", "").strip()
 
         # ✅ Parse JSON from GPT-4
         try:
@@ -225,23 +225,22 @@ async def filter_response(user_message: UserMessage):
                     "next_actions": next_actions
                 }
 
-        # ✅ Extract properties and check for completeness
-        extracted_properties, follow_up_response = extract_properties_from_gpt4(message)
+        # ✅ Check if all required properties are collected
         status, follow_up_question = check_properties(extracted_properties)
 
-        next_actions = generate_next_actions()
-
+        # ✅ Only generate actions after all properties are collected
         if status == "PROPERTY_DATA_COMPLETE":
+            next_actions = generate_next_actions()
             return {
                 "properties": extracted_properties,
                 "response": "PROPERTY_DATA_COMPLETE",
                 "next_actions": next_actions
             }
         else:
+            # ❗️ No next_actions if properties are incomplete
             return {
                 "properties": extracted_properties,
-                "response": follow_up_question,
-                "next_actions": next_actions
+                "response": follow_up_question
             }
     except Exception as e:
         print("❌ [ERROR] Error processing request:", str(e))
