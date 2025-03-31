@@ -189,13 +189,14 @@ async def filter_response(user_message: UserMessage):
         # ✅ Check if the user wants to modify any property
         change_property = detect_property_change(message)
 
-        if change_property:
-            # 🔄 Trigger Loop 1 again with updated property
-            follow_up_response = f"Got it! Let's update {change_property.replace('_v2', '').replace('_', ' ')}. What’s the new value?"
+       if change_property:
+          # ✅ Confirmation message after updating property
+            confirmation_response = f"Got it! I've updated {change_property.replace('_v2', '').replace('_', ' ')}. What else would you like to modify?"
             return {
                 "properties": [],
-                "response": follow_up_response
+                "response": confirmation_response
             }
+
 
         # ✅ Extract properties and check for completeness
         extracted_properties, follow_up_response = extract_properties_from_gpt4(message)
