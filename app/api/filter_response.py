@@ -210,12 +210,18 @@ async def filter_response(user_message: UserMessage):
     print("📩 [DEBUG] Incoming request message:", message)
 
     try:
+        # ✅ Render the message using Jinja2 template
+        template = Template(message)
+        rendered_message = template.render()
+
+        print("🔥 [DEBUG] Rendered message after Jinja2 template processing:", rendered_message)
+
         # ✅ Extract properties and check for completeness
-        extracted_properties, follow_up_response = extract_properties_from_gpt4(message)
+        extracted_properties, follow_up_response = extract_properties_from_gpt4(rendered_message)
 
         # ✅ Only check for property change if no new properties are extracted
         if not extracted_properties:
-            change_property = detect_property_change(message)
+            change_property = detect_property_change(rendered_message)
             if change_property:
                 # ✅ Confirmation message after updating property
                 confirmation_response = f"Got it! I've updated {change_property.replace('_v2', '').replace('_', ' ')}. What else would you like to modify?"
