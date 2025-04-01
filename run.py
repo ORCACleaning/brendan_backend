@@ -1,57 +1,63 @@
 import logging
+import os
 from fastapi import FastAPI
+from dotenv import load_dotenv
+
+# ✅ Load environment variables FIRST
+load_dotenv()
+
 from app.services.pdf_generator import generate_quote_pdf
 from app.store_customer import router as store_customer_router
 from app.api.quote import router as quote_router
 from app.brendan_chat import router as brendan_chat_router
 from app.api.filter_response import router as filter_response_router
-from dotenv import load_dotenv
-import os
 from openai import OpenAI
 
-# ✅ Load environment variables
-load_dotenv()
-
-# ✅ Load Project API Key Correctly
+# ✅ Load API Keys
 api_key = os.getenv("OPENAI_API_KEY")
+airtable_key = os.getenv("AIRTABLE_API_KEY")
+airtable_base = os.getenv("AIRTABLE_BASE_ID")
 
-# ✅ Debug API Key Load (partially masked for security)
+# ✅ Debug loaded keys (partial masking)
 if api_key:
-    print(f"✅ Loaded API Key: {api_key[:10]}...{api_key[-5:]}")  # Masked for security
+    print(f"✅ Loaded OpenAI Key: {api_key[:10]}...{api_key[-5:]}")
 else:
-    print("❌ ERROR: API Key not loaded. Check .env or Render environment variables!")
+    print("❌ ERROR: OPENAI_API_KEY not loaded!")
 
-# ✅ Initialize OpenAI client using Project API Key
+if airtable_key and airtable_base:
+    print(f"✅ Airtable Key and Base ID loaded successfully.")
+else:
+    print("❌ ERROR: Airtable credentials not loaded! Check .env.")
+
+# ✅ Initialize OpenAI client
 client = OpenAI(api_key=api_key)
 
+# ✅ FastAPI app init
 app = FastAPI()
 
-# ✅ Register the filter-response endpoint
+# ✅ Register endpoints
 app.include_router(filter_response_router)
-
-# ✅ Default route to prevent 404
-@app.get("/")
-def read_root():
-    return {"message": "Welcome to Brendan Backend! 🎉"}
-
-# ✅ Health check route for testing
-@app.get("/ping")
-def ping():
-    return {"ping": "pong"}
-
-# ✅ Register the new endpoints
 app.include_router(quote_router)
 app.include_router(store_customer_router)
 app.include_router(brendan_chat_router)
 
-# ✅ Only run locally, not on the server
+# ✅ Root
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to Brendan Backend! 🎉"}
+
+# ✅ Health check
+@app.get("/ping")
+def ping():
+    return {"ping": "pong"}
+
+# ✅ Local only
 if __name__ == "__main__":
     import uvicorn
 
-    # ✅ Set UTF-8 encoding to fix emoji display
     logging.basicConfig(encoding="utf-8")
 
-    # ✅ Test data for PDF generation
+    # ✅ Test PDF data
     data = {
         "quote_id": "VAC-LOGOTEST01",
         "suburb": "Subiaco",
@@ -86,13 +92,10 @@ if __name__ == "__main__":
         "gst_applied": 41.46,
         "total_price": 456.05,
         "note": "Includes 30–60 min for special request",
-        # Embedded logo (read from file)
         "logo_base64": open("app/static/orca_logo.b64.txt", "r").read(),
     }
 
-    # ✅ Generate PDF for testing
     output_path = generate_quote_pdf(data)
-    print(f"✅ PDF successfully generated at: {output_path}")
+    print(f"✅ PDF generated at: {output_path}")
 
-    # ✅ Start Uvicorn for local testing
     uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True, log_config=None, access_log=False)
