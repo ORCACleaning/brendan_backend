@@ -6,13 +6,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-
-# ✅ Load environment variables
+# ✅ Load .env variables
 load_dotenv()
 
 router = APIRouter()
 
-# ✅ OpenAI + Airtable Config
+# ✅ API Keys
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
@@ -20,7 +19,7 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# ✅ GPT Prompt for Brendan (Vacate Quote Assistant)
+# ✅ GPT Prompt
 GPT_PROMPT = """
 You are Brendan, an Aussie vacate cleaning assistant for Orca Cleaning. Your job is to:
 1. Extract useful cleaning-related properties from the customer's message.
@@ -52,15 +51,13 @@ Respond using this JSON format:
   "properties": [
     {"property": "suburb", "value": "Perth"},
     {"property": "bedrooms_v2", "value": "3"},
-    {"property": "oven_cleaning", "value": "Yes"},
-    {"property": "special_requests", "value": "Clean behind the fridge"},
-    {"property": "user_message", "value": "We’ve got 3 beds, 1 bathroom and a big balcony."}
+    {"property": "oven_cleaning", "value": "Yes"}
   ],
-  "response": "Got it mate, sounds like a pretty standard 3x1 with a bit of balcony action — I’ll pop that in!"
+  "response": "Got it mate, sounds like a standard 3x1 — I’ll pop that in!"
 }
 """
 
-# ✅ Request/Response Models
+# ✅ Request models
 class TidioPayload(BaseModel):
     message: str
     quote_id: str
@@ -70,15 +67,11 @@ class FilteredResponse(BaseModel):
     response: str
     next_actions: list[dict]
 
-# ✅ Airtable Fetch Helper
+# ✅ Airtable utilities
 def get_quote_record(quote_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}"
-    }
-    params = {
-        "filterByFormula": f"{{quote_id}}='{quote_id}'"
-    }
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    params = {"filterByFormula": f"{{quote_id}}='{quote_id}'"}
 
     res = requests.get(url, headers=headers, params=params)
     data = res.json()
@@ -88,23 +81,20 @@ def get_quote_record(quote_id):
         return {
             "record_id": record["id"],
             "fields": record["fields"],
-            "stage": record["fields"].get("quote_stage", "Gathering Info"),
+            "stage": record["fields"].get("quote_stage", "Gathering Info")
         }
     return None
 
-# ✅ Update Quote Record in Airtable
 def update_quote_record(record_id, fields):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
-    data = {
-        "fields": fields
-    }
+    data = {"fields": fields}
     requests.patch(url, headers=headers, json=data)
 
-# ✅ Extract cleaning properties via GPT-4
+# ✅ GPT-4 Extraction
 def extract_properties_from_gpt4(message: str):
     response = client.chat.completions.create(
         model="gpt-4o",
@@ -115,19 +105,60 @@ def extract_properties_from_gpt4(message: str):
         max_tokens=300
     )
     content = response.choices[0].message.content.strip()
-
-    # Clean & Parse
-    if content.startswith("```json"):
-        content = content.replace("```json", "").replace("```", "").strip()
-    elif content.startswith("```"):
-        content = content.replace("```", "").strip()
-
+    content = content.replace("```json", "").replace("```", "").strip()
     result_json = json.loads(content)
-    properties = result_json.get("properties", [])
-    follow_up = result_json.get("response", "")
-    return properties, follow_up
+    return result_json.get("properties", []), result_json.get("response", "")
 
-# ✅ Dynamic Actions List
+# ✅ PDF + Quote trigger
+def generate_quote_and_pdf(fields: dict, quote_id: str, record_id: str):
+    try:
+        payload = {
+            "suburb": fields.get("suburb", ""),
+            "bedrooms_v2": int(fields.get("bedrooms_v2", 0)),
+            "bathrooms_v2": int(fields.get("bathrooms_v2", 0)),
+            "oven_cleaning": fields.get("oven_cleaning") == "Yes",
+            "carpet_cleaning": fields.get("carpet_cleaning") == "Yes",
+            "furnished": fields.get("furnished", ""),
+            "special_requests": fields.get("special_requests", ""),
+            "special_request_minutes_min": None,
+            "special_request_minutes_max": None,
+            "after_hours": False,
+            "weekend_cleaning": False,
+            "mandurah_property": False,
+            "is_property_manager": False,
+            "wall_cleaning": fields.get("wall_cleaning") == "Yes",
+            "balcony_cleaning": fields.get("balcony_cleaning") == "Yes",
+            "window_cleaning": False,
+            "windows_v2": int(fields.get("windows_v2", 0)),
+            "deep_cleaning": fields.get("deep_cleaning") == "Yes",
+            "fridge_cleaning": fields.get("fridge_cleaning") == "Yes",
+            "range_hood_cleaning": fields.get("range_hood_cleaning") == "Yes",
+            "garage_cleaning": fields.get("garage_cleaning") == "Yes"
+        }
+
+        quote_response = requests.post("http://localhost:10000/calculate-quote", json=payload)
+        quote_data = quote_response.json()
+        quote_data["quote_id"] = quote_id
+
+        requests.post("http://localhost:10000/generate-pdf", json=quote_data)
+
+        pdf_path = f"/static/quotes/{quote_id}.pdf"
+        booking_url = f"https://orcacleaning.com.au/schedule?quote_id={quote_id}"
+
+        update_quote_record(record_id, {
+            "pdf_link": pdf_path,
+            "booking_url": booking_url,
+            "quote_stage": "Quote Calculated",
+            "status": "quote_ready"
+        })
+
+        return pdf_path, booking_url
+
+    except Exception as e:
+        print("❌ [ERROR] Quote/PDF Generation Failed:", str(e))
+        return None, None
+
+# ✅ Dynamic Tidio buttons
 def generate_next_actions():
     return [
         {"action": "proceed_booking", "label": "Proceed to Booking"},
@@ -136,7 +167,7 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
-# ✅ Main Filter Endpoint
+# ✅ MAIN CHAT ENDPOINT
 @router.post("/filter-response", response_model=FilteredResponse)
 async def filter_response(payload: TidioPayload):
     message = payload.message
@@ -146,55 +177,55 @@ async def filter_response(payload: TidioPayload):
     if not quote_data:
         raise HTTPException(status_code=404, detail="Quote ID not found.")
 
-    stage = quote_data["stage"]
     record_id = quote_data["record_id"]
-    existing_fields = quote_data["fields"]
+    fields = quote_data["fields"]
+    stage = quote_data["stage"]
 
-    # ✅ Stage 1: Gathering Info
+    # ✅ STAGE: Gathering Info
     if stage == "Gathering Info":
-        props, follow_up = extract_properties_from_gpt4(message)
+        props, reply = extract_properties_from_gpt4(message)
+        updates = {p["property"]: p["value"] for p in props}
+        updates["quote_stage"] = "Gathering Info"
+        update_quote_record(record_id, updates)
 
-        # Update Airtable fields with extracted properties
-        update_fields = {prop["property"]: prop["value"] for prop in props}
-        update_fields["quote_stage"] = "Gathering Info"  # Remain until all required
-        update_quote_record(record_id, update_fields)
-
-        # Check if all key properties are now present
         required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
-        if all(field in {**existing_fields, **update_fields} for field in required):
+        if all(field in {**fields, **updates} for field in required):
             update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "quote_ready"})
+            pdf_link, booking_url = generate_quote_and_pdf({**fields, **updates}, quote_id, record_id)
             return {
                 "properties": props,
-                "response": "Thanks! I’ve got everything I need to calculate your quote. One sec…",
-                "next_actions": []
+                "response": f"All set! Your quote’s ready 👉 [View PDF]({pdf_link}) or [Book Now]({booking_url})",
+                "next_actions": generate_next_actions()
             }
 
         return {
             "properties": props,
-            "response": follow_up or "Got that! Anything else you'd like us to know?",
+            "response": reply or "Got that! Anything else you'd like us to know?",
             "next_actions": []
         }
 
-    # ✅ Stage 2: Quote Calculated
+    # ✅ STAGE: Quote Ready
     elif stage == "Quote Calculated":
+        pdf = fields.get("pdf_link", "#")
+        booking = fields.get("booking_url", "#")
         return {
             "properties": [],
-            "response": "Your quote is ready! Want me to send it to your email or book a time?",
+            "response": f"Your quote is ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
             "next_actions": generate_next_actions()
         }
 
-    # ✅ Stage 3: Gathering Personal Info
+    # ✅ STAGE: Gathering Personal Info
     elif stage == "Gathering Personal Info":
         return {
             "properties": [],
-            "response": "Thanks! Just need your name, email and phone number to send this through.",
+            "response": "Just need your name, email, and phone to send that through. 😊",
             "next_actions": []
         }
 
-    # ✅ Stage 4+: All done
+    # ✅ STAGE: All Done
     else:
         return {
             "properties": [],
-            "response": "All sorted! Let me know if you'd like to make any changes.",
+            "response": "All done and dusted! Let me know if you'd like to tweak anything.",
             "next_actions": generate_next_actions()
         }
