@@ -2,8 +2,8 @@ from openai import OpenAI
 import os
 import json
 import requests
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 # ✅ Load .env variables
@@ -56,16 +56,6 @@ Respond using this JSON format:
   "response": "Got it mate, sounds like a standard 3x1 — I’ll pop that in!"
 }
 """
-
-# ✅ Request models
-class TidioPayload(BaseModel):
-    message: str
-    quote_id: str
-
-class FilteredResponse(BaseModel):
-    properties: list[dict]
-    response: str
-    next_actions: list[dict]
 
 # ✅ Airtable utilities
 def get_quote_record(quote_id):
@@ -167,65 +157,80 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
-# ✅ MAIN CHAT ENDPOINT
-@router.post("/filter-response", response_model=FilteredResponse)
-async def filter_response(payload: TidioPayload):
-    message = payload.message
-    quote_id = payload.quote_id
+# ✅ MAIN CHAT ENDPOINT (now accepts plain text only)
+@router.post("/filter-response")
+async def filter_response_raw_text(request: Request):
+    try:
+        message = await request.body()
+        message = message.decode("utf-8")
+        print(f"📩 Incoming raw message: {message}")
 
-    quote_data = get_quote_record(quote_id)
-    if not quote_data:
-        raise HTTPException(status_code=404, detail="Quote ID not found.")
+        # You can optionally handle quote_id via query param or skip for now
+        # For now we fake a test quote_id to prevent crash
+        quote_id = "TEST-QUOTE-ID"
 
-    record_id = quote_data["record_id"]
-    fields = quote_data["fields"]
-    stage = quote_data["stage"]
+        quote_data = get_quote_record(quote_id)
+        if not quote_data:
+            raise HTTPException(status_code=404, detail="Quote ID not found.")
 
-    # ✅ STAGE: Gathering Info
-    if stage == "Gathering Info":
-        props, reply = extract_properties_from_gpt4(message)
-        updates = {p["property"]: p["value"] for p in props}
-        updates["quote_stage"] = "Gathering Info"
-        update_quote_record(record_id, updates)
+        record_id = quote_data["record_id"]
+        fields = quote_data["fields"]
+        stage = quote_data["stage"]
 
-        required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
-        if all(field in {**fields, **updates} for field in required):
-            update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "quote_ready"})
-            pdf_link, booking_url = generate_quote_and_pdf({**fields, **updates}, quote_id, record_id)
-            return {
-                "properties": props,
-                "response": f"All set! Your quote’s ready 👉 [View PDF]({pdf_link}) or [Book Now]({booking_url})",
-                "next_actions": generate_next_actions()
-            }
+        if stage == "Gathering Info":
+            props, reply = extract_properties_from_gpt4(message)
+            updates = {p["property"]: p["value"] for p in props}
+            updates["quote_stage"] = "Gathering Info"
+            update_quote_record(record_id, updates)
 
-        return {
-            "properties": props,
-            "response": reply or "Got that! Anything else you'd like us to know?",
-            "next_actions": []
-        }
+            required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
+            if all(field in {**fields, **updates} for field in required):
+                update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "quote_ready"})
+                pdf_link, booking_url = generate_quote_and_pdf({**fields, **updates}, quote_id, record_id)
+                return JSONResponse(
+                    content={
+                        "properties": props,
+                        "response": f"All set! Your quote’s ready 👉 [View PDF]({pdf_link}) or [Book Now]({booking_url})",
+                        "next_actions": generate_next_actions()
+                    }
+                )
 
-    # ✅ STAGE: Quote Ready
-    elif stage == "Quote Calculated":
-        pdf = fields.get("pdf_link", "#")
-        booking = fields.get("booking_url", "#")
-        return {
-            "properties": [],
-            "response": f"Your quote is ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
-            "next_actions": generate_next_actions()
-        }
+            return JSONResponse(
+                content={
+                    "properties": props,
+                    "response": reply or "Got that! Anything else you'd like us to know?",
+                    "next_actions": []
+                }
+            )
 
-    # ✅ STAGE: Gathering Personal Info
-    elif stage == "Gathering Personal Info":
-        return {
-            "properties": [],
-            "response": "Just need your name, email, and phone to send that through. 😊",
-            "next_actions": []
-        }
+        elif stage == "Quote Calculated":
+            pdf = fields.get("pdf_link", "#")
+            booking = fields.get("booking_url", "#")
+            return JSONResponse(
+                content={
+                    "properties": [],
+                    "response": f"Your quote is ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
+                    "next_actions": generate_next_actions()
+                }
+            )
 
-    # ✅ STAGE: All Done
-    else:
-        return {
-            "properties": [],
-            "response": "All done and dusted! Let me know if you'd like to tweak anything.",
-            "next_actions": generate_next_actions()
-        }
+        elif stage == "Gathering Personal Info":
+            return JSONResponse(
+                content={
+                    "properties": [],
+                    "response": "Just need your name, email, and phone to send that through. 😊",
+                    "next_actions": []
+                }
+            )
+
+        else:
+            return JSONResponse(
+                content={
+                    "properties": [],
+                    "response": "All done and dusted! Let me know if you'd like to tweak anything.",
+                    "next_actions": generate_next_actions()
+                }
+            )
+
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
