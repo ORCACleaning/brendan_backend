@@ -27,7 +27,7 @@ You are Brendan, an Aussie vacate cleaning assistant for Orca Cleaning. Your job
 2. If the customer mentions a range (e.g., "3–4 bedrooms"), use the higher value.
 3. If they say something vague (like "a few windows"), default to the closest reasonable number.
 4. If they mention any special requests (e.g. "clean behind fridge", "extra deep shower scrub"), include it as special_requests.
-5. Reply in a casual, friendly Aussie tone if there's anything unusual or unclear.
+5. Reply in a casual, friendly Aussie tone — without repeating greetings every time.
 
 Extract the following properties **only if they are mentioned**:
 - suburb (Text)
@@ -97,18 +97,26 @@ def update_quote_record(record_id, fields):
     requests.patch(url, headers=headers, json=data)
 
 def extract_properties_from_gpt4(message: str):
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": GPT_PROMPT},
-            {"role": "user", "content": message}
-        ],
-        max_tokens=300
-    )
-    content = response.choices[0].message.content.strip()
-    content = content.replace("```json", "").replace("```", "").strip()
-    result_json = json.loads(content)
-    return result_json.get("properties", []), result_json.get("response", "")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": GPT_PROMPT},
+                {"role": "user", "content": message}
+            ],
+            max_tokens=300
+        )
+        content = response.choices[0].message.content.strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        result_json = json.loads(content)
+        properties = result_json.get("properties", [])
+        reply = result_json.get("response", "")
+        if not reply:
+            reply = "Got it, just let me know a few more details when you’re ready."
+        return properties, reply
+    except Exception as e:
+        print(f"❌ GPT extraction failed: {e}")
+        return [], "All good — just need a bit more info to get your quote started!"
 
 def generate_next_actions():
     return [
@@ -122,11 +130,21 @@ def generate_next_actions():
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
-        message = body.get("message", "")
+        message = body.get("message", "").strip()
         session_id = body.get("session_id")
 
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
+
+        # 🧠 Handle vague or off-topic input gracefully
+        if message.lower() in ["why?", "what?", "i don’t know", "idk", "maybe later", "who are you?", "???"]:
+            return JSONResponse(
+                content={
+                    "properties": [],
+                    "response": "Fair question! I'm Brendan — your quote assistant. Just let me know how many rooms or what sort of cleaning you're after and we’ll take it from there. 👍",
+                    "next_actions": []
+                }
+            )
 
         quote_data = get_quote_by_session(session_id)
 
@@ -160,7 +178,7 @@ async def filter_response_entry(request: Request):
             return JSONResponse(
                 content={
                     "properties": props,
-                    "response": reply or "Got that! Anything else you'd like us to know?",
+                    "response": reply,
                     "next_actions": []
                 }
             )
