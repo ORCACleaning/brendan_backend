@@ -2,6 +2,7 @@ import logging
 import os
 from fastapi import FastAPI
 from dotenv import load_dotenv
+from fastapi.middleware.cors import CORSMiddleware  # Import CORSMiddleware
 
 # ✅ Load environment variables FIRST
 load_dotenv()
@@ -34,6 +35,15 @@ client = OpenAI(api_key=api_key)
 
 # ✅ FastAPI app init
 app = FastAPI()
+
+# ✅ CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins or specify your website URL for security
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all headers
+)
 
 # ✅ Register endpoints
 app.include_router(filter_response_router)
