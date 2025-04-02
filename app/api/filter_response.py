@@ -80,15 +80,28 @@ def create_new_quote(session_id):
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
-    data = {"fields": {
-        "session_id": session_id,
-        "quote_id": quote_id,
-        "quote_stage": "Gathering Info",
-        "message_log": ""
-    }}
+    data = {
+        "fields": {
+            "session_id": session_id,
+            "quote_id": quote_id,
+            "quote_stage": "Gathering Info",
+            "message_log": ""
+        }
+    }
+
     res = requests.post(url, headers=headers, json=data)
-    record = res.json().get("id")
-    return quote_id, record
+
+    try:
+        res.raise_for_status()
+        record = res.json().get("id")
+        print(f"✅ Airtable row created: {quote_id} / {record}")
+        return quote_id, record
+    except Exception as e:
+        print("❌ Airtable row creation failed:")
+        print(f"Status Code: {res.status_code}")
+        print(f"Response: {res.text}")
+        raise e
+
 
 def update_quote_record(record_id, fields):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
