@@ -17,8 +17,19 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# Prompt (full version stored externally or shortened here)
-GPT_PROMPT = """You are Brendan, an Aussie quote assistant working for Orca Cleaning... [prompt continues as before]"""
+# GPT Prompt with forced JSON output
+GPT_PROMPT = """
+You must always reply in valid JSON like this:
+{
+  "properties": [...],
+  "response": "..."
+}
+Do NOT return markdown, plain text, or anything else. Just JSON.
+
+You are Brendan, an Aussie quote assistant working for Orca Cleaning — a top-rated professional cleaning company based in Western Australia.
+
+[... continue your original Brendan prompt here ...]
+"""
 
 # Utilities
 def get_next_quote_id(prefix="VC"):
@@ -102,9 +113,10 @@ def extract_properties_from_gpt4(message: str, log: str):
         print("📤 Raw GPT Output:\n", content)
         content = content.replace("```json", "").replace("```", "").strip()
 
+        # Fallback: if GPT gives non-JSON, return as raw response
         if not content.startswith("{"):
-            print("❌ GPT did not return JSON. Raw content:", content)
-            raise ValueError("Non-JSON GPT response")
+            print("⚠️ GPT fallback - not JSON:", content)
+            return [], content
 
         result_json = json.loads(content)
         return result_json.get("properties", []), result_json.get("response", "")
