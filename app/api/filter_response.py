@@ -152,11 +152,18 @@ async def filter_response_entry(request: Request):
             fields = quote_data["fields"]
             stage = quote_data["stage"]
 
+        # ✅ Handle first-time visit with automatic Brendan welcome
+        if message.lower() in ["hi", "hello"] and not fields.get("suburb") and not fields.get("bedrooms_v2"):
+            return JSONResponse(
+                content={
+                    "properties": [],
+                    "response": "Hey there! I’m Brendan, Orca Cleaning’s vacate cleaning assistant 🎼🐳. I’ll sort your quote in under 2 minutes — no sign-up needed. We’ve even got a cheeky seasonal discount on right now 😉\n\nJust start by telling me your **suburb**, how many **bedrooms and bathrooms**, and whether it’s **furnished or empty** — then we’ll go from there!",
+                    "next_actions": []
+                }
+            )
+
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message)
-
-            if not fields.get("suburb") and not fields.get("bedrooms_v2"):
-                reply = "Hey there! I’m Brendan, Orca Cleaning’s vacate cleaning assistant 🎼🐳. I’ll sort your quote in under 2 minutes — no sign-up needed. We’ve even got a cheeky seasonal discount on right now 😉\n\nJust start by telling me your **suburb**, how many **bedrooms and bathrooms**, and whether it’s **furnished or empty** — then we’ll go from there!"
 
             updates = {p["property"]: p["value"] for p in props}
             updates["quote_stage"] = "Gathering Info"
