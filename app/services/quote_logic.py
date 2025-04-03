@@ -29,24 +29,23 @@ def get_next_quote_id(prefix="VC"):
         next_id = 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
-# ✅ Optional: Helper to calculate the individual cost of one service
+# ✅ Optional: Service-level calculator
 def get_individual_service_cost(service_name: str, quantity: int = 1) -> float:
     BASE_HOURLY_RATE = 75
     SERVICE_MINUTES = {
         "oven_cleaning": 30,
         "carpet_cleaning": 40,
         "furnished": 60,
-        "window_cleaning": 10,  # per window
+        "window_cleaning": 10,           # per window
         "wall_cleaning": 30,
         "balcony_cleaning": 20,
         "deep_cleaning": 60,
-        "fridge_cleaning": 15,
-        "range_hood_cleaning": 15,
+        "fridge_cleaning": 30,           # ✅ Updated
+        "range_hood_cleaning": 20,       # ✅ Updated
         "garage_cleaning": 40,
-        "blind_cleaning": 25,  # average
-        "upholstery_cleaning": 45,  # average
+        "blind_cleaning": 10,            # ✅ Added: per blind
+        "upholstery_cleaning": 45        # estimate
     }
-
     minutes = SERVICE_MINUTES.get(service_name, 0) * quantity
     return round((minutes / 60) * BASE_HOURLY_RATE, 2)
 
@@ -63,8 +62,8 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         "wall_cleaning": 30,
         "balcony_cleaning": 20,
         "deep_cleaning": 60,
-        "fridge_cleaning": 15,
-        "range_hood_cleaning": 15,
+        "fridge_cleaning": 30,            # ✅ Updated
+        "range_hood_cleaning": 20,        # ✅ Updated
         "garage_cleaning": 40
     }
 
@@ -81,6 +80,11 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         window_minutes = count * 10
         base_minutes += window_minutes
 
+        # ✅ Blind cleaning (assume 1 blind per window)
+        if data.blind_cleaning:
+            blind_minutes = count * 10
+            base_minutes += blind_minutes
+
     if data.oven_cleaning:
         base_minutes += 30
     if data.carpet_cleaning:
@@ -88,8 +92,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     if data.furnished.lower() == "yes":
         base_minutes += 60
 
-    # ✅ Upholstery skipped if unfurnished (handled upstream in Brendan)
-    # ✅ Special Requests
+    # ✅ Special Request
     is_range = data.special_request_minutes_min is not None and data.special_request_minutes_max is not None
     min_total_mins = base_minutes
     max_total_mins = base_minutes
@@ -103,11 +106,8 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
-    # ✅ Handle Weekend Cleaning + After-Hours Logic
+    # ✅ Weekend and after-hours logic
     weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
-
-    # Cleaners work Mon–Fri: 8 AM–8 PM, Sat–Sun: 9 AM–5 PM
-    # After-hours only applies weekdays
     after_hours_fee = 0
     if data.after_hours and not data.weekend_cleaning:
         after_hours_fee = AFTER_HOURS_SURCHARGE
@@ -116,7 +116,6 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
-    # ✅ Apply Discounts
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
     if data.is_property_manager:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
