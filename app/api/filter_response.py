@@ -7,30 +7,35 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
+# ✅ Load .env variables
 load_dotenv()
 
 router = APIRouter()
 
-# ✅ API keys and client
+# ✅ API Keys
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
+
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# ✅ Prompt template (no G’day on every reply!)
+# ✅ Required fields to complete quote
+REQUIRED_FIELDS = [
+    "suburb", "bedrooms_v2", "bathrooms_v2",
+    "furnished", "oven_cleaning", "carpet_cleaning"
+]
+
+# ✅ GPT Prompt
 GPT_PROMPT = """
-You are Brendan, a friendly Aussie quote assistant for Orca Cleaning.
+You are Brendan, an Aussie vacate cleaning assistant for Orca Cleaning. Your job is to:
+1. Extract useful cleaning-related properties from the customer's message.
+2. If the customer mentions a range (e.g., "3–4 bedrooms"), use the higher value.
+3. If they say something vague (like "a few windows"), default to the closest reasonable number.
+4. If they mention any special requests (e.g. "clean behind fridge", "extra deep shower scrub"), include it as special_requests.
+5. Reply in a casual, friendly Aussie tone that continues the conversation without repeating greetings like "G'day" every time.
 
-Your job is to:
-1. Extract cleaning-related info from the conversation history.
-2. Understand tone, sarcasm, confusion, and adjust accordingly.
-3. Only ask for what’s missing (e.g., bedrooms, bathrooms, oven etc).
-4. Detect special requests like "clean behind fridge" or "deep shower scrub".
-5. Never repeat yourself. Don’t say G’day every time.
-6. Sound casual, clear, and human.
-
-Extract any mentioned properties:
+Extract the following properties **only if they are mentioned**:
 - suburb (Text)
 - bedrooms_v2 (Integer)
 - bathrooms_v2 (Integer)
@@ -48,14 +53,18 @@ Extract any mentioned properties:
 - special_requests (Text)
 - user_message (Text)
 
-Respond in this JSON format:
+Respond using this JSON format:
 {
-  "properties": [ ... ],
-  "response": "Alright legend, let’s get cracking!"
+  "properties": [
+    {"property": "suburb", "value": "Perth"},
+    {"property": "bedrooms_v2", "value": "3"},
+    {"property": "oven_cleaning", "value": "Yes"}
+  ],
+  "response": "Got it mate, sounds like a standard 3x1 — I’ll pop that in!"
 }
 """
 
-# ✅ Airtable helpers
+# ✅ Airtable utilities
 def get_quote_by_session(session_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -68,8 +77,7 @@ def get_quote_by_session(session_id):
             "record_id": record["id"],
             "fields": record["fields"],
             "stage": record["fields"].get("quote_stage", "Gathering Info"),
-            "quote_id": record["fields"].get("quote_id"),
-            "message_log": record["fields"].get("message_log", "")
+            "quote_id": record["fields"].get("quote_id")
         }
     return None
 
@@ -83,25 +91,12 @@ def create_new_quote(session_id):
     data = {
         "fields": {
             "session_id": session_id,
-            "quote_id": quote_id,
-            "quote_stage": "Gathering Info",
-            "message_log": ""
+            "quote_id": quote_id
         }
     }
-
     res = requests.post(url, headers=headers, json=data)
-
-    try:
-        res.raise_for_status()
-        record = res.json().get("id")
-        print(f"✅ Airtable row created: {quote_id} / {record}")
-        return quote_id, record
-    except Exception as e:
-        print("❌ Airtable row creation failed:")
-        print(f"Status Code: {res.status_code}")
-        print(f"Response: {res.text}")
-        raise e
-
+    record = res.json().get("id")
+    return quote_id, record
 
 def update_quote_record(record_id, fields):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -112,13 +107,12 @@ def update_quote_record(record_id, fields):
     data = {"fields": fields}
     requests.patch(url, headers=headers, json=data)
 
-# ✅ GPT property extraction
-def extract_properties_from_gpt4(chat_history: str):
+def extract_properties_from_gpt4(message: str):
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
             {"role": "system", "content": GPT_PROMPT},
-            {"role": "user", "content": chat_history}
+            {"role": "user", "content": message}
         ],
         max_tokens=300
     )
@@ -135,7 +129,6 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
-# ✅ Main logic
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -146,79 +139,45 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # 🧠 Lookup or create quote
         quote_data = get_quote_by_session(session_id)
 
         if not quote_data:
             quote_id, record_id = create_new_quote(session_id)
             fields = {}
             stage = "Gathering Info"
-            message_log = f"Customer: {message}"
         else:
             quote_id = quote_data["quote_id"]
             record_id = quote_data["record_id"]
             fields = quote_data["fields"]
             stage = quote_data["stage"]
-            message_log = quote_data["message_log"] + f"\nCustomer: {message}"
 
-        # 🧠 Stage 1: Gathering Info
-        if stage == "Gathering Info":
-            props, reply = extract_properties_from_gpt4(message_log)
-            updates = {p["property"]: p["value"] for p in props}
-            updates["quote_stage"] = "Gathering Info"
-            updates["message_log"] = message_log + f"\nBrendan: {reply}"
-            update_quote_record(record_id, updates)
+        props, reply = extract_properties_from_gpt4(message)
+        updates = {p["property"]: p["value"] for p in props}
 
-            required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
-            if all(field in {**fields, **updates} for field in required):
-                update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "quote_ready"})
-                return JSONResponse(
-                    content={
-                        "properties": props,
-                        "response": "Thanks mate! I’ve got everything I need to whip up your quote. Hang tight…",
-                        "next_actions": []
-                    }
-                )
+        # Avoid updating restricted select fields like 'quote_stage' if values are not in list
+        update_quote_record(record_id, updates)
 
+        # Merge known fields with new ones for validation
+        combined = {**fields, **updates}
+        missing = [field for field in REQUIRED_FIELDS if field not in combined]
+
+        if not missing:
+            update_quote_record(record_id, {"quote_stage": "step_5_quote_summary", "status": "quote_ready"})
             return JSONResponse(
                 content={
                     "properties": props,
-                    "response": reply or "Got that! Anything else you'd like us to know?",
+                    "response": "Thanks heaps! I’ve got what I need to whip up your quote — one sec…",
                     "next_actions": []
                 }
             )
 
-        # 🧠 Stage 2: Quote Calculated
-        elif stage == "Quote Calculated":
-            pdf = fields.get("pdf_link", "#")
-            booking = fields.get("booking_url", "#")
-            return JSONResponse(
-                content={
-                    "properties": [],
-                    "response": f"Your quote is ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
-                    "next_actions": generate_next_actions()
-                }
-            )
-
-        # 🧠 Stage 3: Personal Info Collection
-        elif stage == "Gathering Personal Info":
-            return JSONResponse(
-                content={
-                    "properties": [],
-                    "response": "Just need your name, email, and phone to send that through. 😊",
-                    "next_actions": []
-                }
-            )
-
-        # ✅ Final fallback
-        else:
-            return JSONResponse(
-                content={
-                    "properties": [],
-                    "response": "All done and dusted! Let me know if you'd like to tweak anything.",
-                    "next_actions": generate_next_actions()
-                }
-            )
+        return JSONResponse(
+            content={
+                "properties": props,
+                "response": reply or "Got that! Anything else you’d like us to know?",
+                "next_actions": []
+            }
+        )
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
