@@ -1,12 +1,11 @@
-# 🚀 Fully Updated filter_response.py
 from openai import OpenAI
 import os
 import json
 import requests
-import random
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+import random
 
 load_dotenv()
 router = APIRouter()
@@ -19,43 +18,58 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# ✅ List of suburb aliases
-SUBURB_ALIASES = {
-    "subi": "Subiaco",
-    "freo": "Fremantle",
-    "vic park": "Victoria Park",
-    "south freo": "South Fremantle"
-}
-
-# ✅ 25 Warm Brendan Intros
+# ✅ Prewritten Brendan Intro Messages
 BRENDAN_INTROS = [
-    "Hey there! I’m Brendan, your Aussie mate from Orca Cleaning 🐳 I’ll sort your vacate cleaning quote — no sign-up, no spam, no worries. Just tell me your suburb, how many bedrooms & bathrooms, and if it’s furnished.",
-    "G’day! Brendan here from Orca Cleaning 🌟 Promise this ain’t a sales trap. We don’t cold call or anything shady. Just shoot through your suburb, bed/bath count and let’s quote this clean!",
-    "You’ve reached Brendan — Orca Cleaning’s quote machine 🤖🐳. I’ll get your vacate quote done in 2 minutes flat. No logins. No phone spam. Just start with suburb + rooms. Easy as."
-    # Add 22 more... (to be filled in)
+    "Hey there! I’m Brendan, your Aussie mate from Orca Cleaning 🐳\n\nI’ll sort your vacate cleaning quote — no sign-up, no spam, no worries. Just tell me your **suburb**, how many **bedrooms & bathrooms**, and if it’s **furnished or empty**.\n\nYou can check our privacy promise here: https://orcacleaning.com.au/privacy-policy/",
+    "G'day! Brendan here 🎧 I’ll get your vacate clean quote sorted quick as — just need your **suburb**, number of **bedrooms/bathrooms**, and whether the place is **furnished or empty**.\n\nNo salesy stuff, promise. Full privacy policy at: https://orcacleaning.com.au/privacy-policy/",
+    "Oi legend! Brendan here from Orca Cleaning 🐳\n\nI’m your go-to vacate clean quote assistant. I don’t need your email or phone upfront — just tell me your **suburb**, how many **bedrooms & bathrooms**, and if it’s **furnished or not**.\n\nFor privacy info, visit: https://orcacleaning.com.au/privacy-policy/",
+    # Add 22 more intros as needed...
 ]
 
-# ✅ Main GPT Prompt
+# ✅ GPT Prompt
 GPT_PROMPT = """
+You must always reply in **valid JSON** like this:
+{
+  "properties": [...],
+  "response": "..."
+}
+Do NOT return markdown, plain text, or anything else. Just JSON.
+
 You are Brendan, an Aussie quote assistant working for Orca Cleaning — a top-rated professional cleaning company based in Western Australia.
 
-Your job is to continue the conversation after the customer has already been greeted.
-Never start with "Hi", "Hey", or "G’day" again — you’ve already said that.
+The customer has already been greeted — NEVER greet them again.
 
-You should:
-- Ask for **two clearly worded details max** per message (like: How many bedrooms? Is it furnished?)
-- Assume the customer is inquiring about a **vacate clean**.
-- If the suburb they mention is outside Perth metro or Mandurah, ask politely for clarification.
-- If they use slang (like Freo), assume it’s Fremantle and proceed.
+You only handle Vacate Cleaning quotes. If asked about anything else (like Office Cleaning), redirect to orcacleaning.com.au.
 
-Always return this format:
-{
-  "properties": [{"property": "suburb", "value": "Fremantle"}, ...],
-  "response": "Thanks legend! Just need to know if the place is furnished and whether you need oven cleaning."
-}
+You will:
+- Ask for MAXIMUM of two details per message
+- Write in a polite, friendly Aussie tone
+- Help the customer complete their property info step-by-step
+- Update quote info after each message
+
+Make sure the **suburb is in WA (Perth Metro or Mandurah)**. If not, politely say it's out of service area.
+If it's a nickname (e.g. "Freo"), use your Aussie brain to decode it (e.g. Fremantle).
+
+You must extract any of the following if they appear:
+- suburb (Text)
+- bedrooms_v2 (Integer)
+- bathrooms_v2 (Integer)
+- furnished (Yes/No)
+- oven_cleaning (Yes/No)
+- carpet_cleaning (Yes/No)
+- deep_cleaning (Yes/No)
+- wall_cleaning (Yes/No)
+- fridge_cleaning (Yes/No)
+- garage_cleaning (Yes/No)
+- window_tracks (Yes/No)
+- windows_v2 (Integer)
+- balcony_cleaning (Yes/No)
+- range_hood_cleaning (Yes/No)
+- special_requests (Text)
+- user_message (Text)
 """
 
-# ✅ Utilities
+# Airtable Utilities
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -87,6 +101,11 @@ def get_quote_by_session(session_id):
         }
     return None
 
+def get_quote_by_record_id(record_id):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    return requests.get(url, headers=headers).json()
+
 def create_new_quote(session_id):
     quote_id = get_next_quote_id("VC")
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
@@ -117,11 +136,6 @@ def append_message_log(record_id, new_message, sender):
     updated = f"{current}\n{sender.upper()}: {new_message}".strip()[-5000:]
     update_quote_record(record_id, {"message_log": updated})
 
-def get_quote_by_record_id(record_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    return requests.get(url, headers=headers).json()
-
 def extract_properties_from_gpt4(message: str, log: str):
     try:
         response = client.chat.completions.create(
@@ -135,13 +149,26 @@ def extract_properties_from_gpt4(message: str, log: str):
         )
         content = response.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()
-        parsed = json.loads(content)
-        return parsed.get("properties", []), parsed.get("response", "")
+
+        if not content.startswith("{"):
+            raise ValueError("GPT did not return valid JSON")
+
+        result_json = json.loads(content)
+        return result_json.get("properties", []), result_json.get("response", "")
+
     except Exception as e:
         print("❌ GPT parsing error:", e)
-        return [], "Sorry, I couldn’t get that. Mind rephrasing it for me?"
+        return [], "Sorry, I couldn’t quite get that. Could you rephrase it for me?"
 
-# ✅ Main Route
+def generate_next_actions():
+    return [
+        {"action": "proceed_booking", "label": "Proceed to Booking"},
+        {"action": "download_pdf", "label": "Download PDF Quote"},
+        {"action": "email_pdf", "label": "Email PDF Quote"},
+        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
+    ]
+
+# ✅ Main Chat Endpoint
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -163,53 +190,47 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # Init Message from front-end
-        if message == "__init__":
+        # Intro message trigger (handled WITHOUT GPT)
+        if message == "SYSTEM_TRIGGER_INTRO":
             intro = random.choice(BRENDAN_INTROS)
             append_message_log(record_id, intro, "brendan")
-            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
+            return JSONResponse(content={
+                "properties": [],
+                "response": intro,
+                "next_actions": []
+            })
 
         append_message_log(record_id, message, "user")
 
-        if stage == "Gathering Info":
-            # Suburb check
-            lowered = message.lower()
-            for slang, real in SUBURB_ALIASES.items():
-                if slang in lowered:
-                    message = message.replace(slang, real)
+        # 🔍 Keyword shortcuts (fallback triggers)
+        lowered = message.lower()
+        if "your name" in lowered:
+            return JSONResponse(content={"response": "I’m Brendan — your quote wingman at Orca Cleaning! 😊", "properties": [], "next_actions": []})
+        elif "price" in lowered:
+            return JSONResponse(content={"response": "Once I’ve got all the details, I’ll sort your full quote — not long now!", "properties": [], "next_actions": []})
 
-            props, reply = extract_properties_from_gpt4(message, log)
-            updates = {p["property"]: p["value"] for p in props}
-            updates["quote_stage"] = "Gathering Info"
-            update_quote_record(record_id, updates)
-            append_message_log(record_id, reply, "brendan")
+        # GPT message processing
+        props, reply = extract_properties_from_gpt4(message, log)
+        updates = {p["property"]: p["value"] for p in props}
+        updates["quote_stage"] = stage  # Only overwrite if needed
+        update_quote_record(record_id, updates)
+        append_message_log(record_id, reply, "brendan")
 
-            required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
-            if all(field in {**fields, **updates} for field in required):
-                update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "Quote Calculated"})
-                return JSONResponse(content={
-                    "properties": props,
-                    "response": "Thanks mate! I’ve got everything I need to whip up your quote. Hang tight…",
-                    "next_actions": []
-                })
-
-            return JSONResponse(content={"properties": props, "response": reply, "next_actions": []})
-
-        elif stage == "Quote Calculated":
-            pdf = fields.get("pdf_link", "#")
-            booking = fields.get("booking_url", "#")
+        required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
+        if all(field in {**fields, **updates} for field in required):
+            update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "Quote Calculated"})
             return JSONResponse(content={
-                "properties": [],
-                "response": f"Your quote’s ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
-                "next_actions": generate_next_actions()
+                "properties": props,
+                "response": "Thanks mate! I’ve got everything I need to whip up your quote. Hang tight…",
+                "next_actions": []
             })
 
         return JSONResponse(content={
-            "properties": [],
-            "response": "Let me know if there’s anything else you’d like to adjust!",
-            "next_actions": generate_next_actions()
+            "properties": props,
+            "response": reply or "Got that! Anything else you'd like us to know?",
+            "next_actions": []
         })
 
     except Exception as e:
         print("🔥 Unexpected error:", e)
-        return JSONResponse(status_code=500, content={"error": "Something went wrong on our end."})
+        return JSONResponse(status_code=500, content={"error": "Server error — try again shortly."})
