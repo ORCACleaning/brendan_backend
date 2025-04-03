@@ -4,35 +4,50 @@ from typing import Optional
 # ✅ Input Model for Quote Request
 class QuoteRequest(BaseModel):
     suburb: str
-    bedrooms_v2: int  # Updated ✅
-    bathrooms_v2: int  # Updated ✅
+    bedrooms_v2: int
+    bathrooms_v2: int
+    furnished: str  # "Yes" / "No"
     oven_cleaning: bool
     carpet_cleaning: bool
-    furnished: str
-    special_requests: Optional[str] = None
-    special_request_minutes_min: Optional[int] = None
-    special_request_minutes_max: Optional[int] = None
-    after_hours: bool
-    weekend_cleaning: bool
-    mandurah_property: bool
-    is_property_manager: Optional[bool] = False
+    window_cleaning: bool
+    windows_v2: Optional[int] = 0
 
-    # ✅ Additional Services (No changes here)
+    # ✅ Optional extras
     wall_cleaning: Optional[bool] = False
     balcony_cleaning: Optional[bool] = False
-    window_cleaning: Optional[bool] = False
-    windows_v2: Optional[int] = 0  # Corrected ✅
     deep_cleaning: Optional[bool] = False
     fridge_cleaning: Optional[bool] = False
     range_hood_cleaning: Optional[bool] = False
     garage_cleaning: Optional[bool] = False
 
+    # ✅ Property conditions
+    after_hours: Optional[bool] = False
+    weekend_cleaning: Optional[bool] = False
+    mandurah_property: Optional[bool] = False
+    is_property_manager: Optional[bool] = False
+    real_estate_agency: Optional[str] = None
+
+    # ✅ Special request (AI handled)
+    special_requests: Optional[str] = None
+    special_request_minutes_min: Optional[int] = None
+    special_request_minutes_max: Optional[int] = None
+
+    # ✅ Personal Info (collected later)
+    customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
+    customer_phone: Optional[str] = None
+
+    # ✅ System Fields
+    quote_stage: Optional[str] = "Gathering Info"
+    quote_status: Optional[str] = "Pending"
+    quote_id: Optional[str] = None
+    quote_pdf_link: Optional[str] = None
+    booking_url: Optional[str] = None
+
 
 # ✅ Output Model for Quote Response
 class QuoteResponse(BaseModel):
     quote_id: str
-    estimated_time_mins: Optional[int] = None
-    minimum_time_mins: Optional[int] = None
     calculated_hours: float
     base_hourly_rate: float
     discount_applied: float
@@ -43,4 +58,6 @@ class QuoteResponse(BaseModel):
     price_per_session: float
     total_price: float
     is_range: bool
+    estimated_time_mins: Optional[int] = None
+    minimum_time_mins: Optional[int] = None
     note: Optional[str] = None
