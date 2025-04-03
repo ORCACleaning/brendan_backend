@@ -20,12 +20,6 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# ✅ Required fields to complete quote
-REQUIRED_FIELDS = [
-    "suburb", "bedrooms_v2", "bathrooms_v2",
-    "furnished", "oven_cleaning", "carpet_cleaning"
-]
-
 # ✅ GPT Prompt
 GPT_PROMPT = """
 You are Brendan, an Aussie vacate cleaning assistant for Orca Cleaning. Your job is to:
@@ -33,7 +27,7 @@ You are Brendan, an Aussie vacate cleaning assistant for Orca Cleaning. Your job
 2. If the customer mentions a range (e.g., "3–4 bedrooms"), use the higher value.
 3. If they say something vague (like "a few windows"), default to the closest reasonable number.
 4. If they mention any special requests (e.g. "clean behind fridge", "extra deep shower scrub"), include it as special_requests.
-5. Reply in a casual, friendly Aussie tone that continues the conversation without repeating greetings like "G'day" every time.
+5. Reply in a casual, friendly Aussie tone if there's anything unusual or unclear.
 
 Extract the following properties **only if they are mentioned**:
 - suburb (Text)
@@ -91,7 +85,8 @@ def create_new_quote(session_id):
     data = {
         "fields": {
             "session_id": session_id,
-            "quote_id": quote_id
+            "quote_id": quote_id,
+            "quote_stage": "Gathering Info"
         }
     }
     res = requests.post(url, headers=headers, json=data)
@@ -151,33 +146,59 @@ async def filter_response_entry(request: Request):
             fields = quote_data["fields"]
             stage = quote_data["stage"]
 
-        props, reply = extract_properties_from_gpt4(message)
-        updates = {p["property"]: p["value"] for p in props}
+        if stage == "Gathering Info":
+            props, reply = extract_properties_from_gpt4(message)
+            updates = {p["property"]: p["value"] for p in props}
+            updates["quote_stage"] = "Gathering Info"
+            update_quote_record(record_id, updates)
 
-        # Avoid updating restricted select fields like 'quote_stage' if values are not in list
-        update_quote_record(record_id, updates)
+            required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
+            if all(field in {**fields, **updates} for field in required):
+                update_quote_record(record_id, {"quote_stage": "Quote Calculated"})
+                return JSONResponse(
+                    content={
+                        "properties": props,
+                        "response": "Thanks mate! I’ve got everything I need to whip up your quote. Hang tight…",
+                        "next_actions": []
+                    }
+                )
 
-        # Merge known fields with new ones for validation
-        combined = {**fields, **updates}
-        missing = [field for field in REQUIRED_FIELDS if field not in combined]
-
-        if not missing:
-            update_quote_record(record_id, {"quote_stage": "step_5_quote_summary", "status": "quote_ready"})
             return JSONResponse(
                 content={
                     "properties": props,
-                    "response": "Thanks heaps! I’ve got what I need to whip up your quote — one sec…",
+                    "response": reply or "Got that! Anything else you'd like us to know?",
                     "next_actions": []
                 }
             )
 
-        return JSONResponse(
-            content={
-                "properties": props,
-                "response": reply or "Got that! Anything else you’d like us to know?",
-                "next_actions": []
-            }
-        )
+        elif stage == "Quote Calculated":
+            pdf = fields.get("pdf_link", "#")
+            booking = fields.get("booking_url", "#")
+            return JSONResponse(
+                content={
+                    "properties": [],
+                    "response": f"Your quote is ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
+                    "next_actions": generate_next_actions()
+                }
+            )
+
+        elif stage == "Gathering Personal Info":
+            return JSONResponse(
+                content={
+                    "properties": [],
+                    "response": "Just need your name, email, and phone to send that through. 😊",
+                    "next_actions": []
+                }
+            )
+
+        else:
+            return JSONResponse(
+                content={
+                    "properties": [],
+                    "response": "All done and dusted! Let me know if you'd like to tweak anything.",
+                    "next_actions": generate_next_actions()
+                }
+            )
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
