@@ -138,9 +138,9 @@ def extract_properties_from_gpt4(message: str, log: str):
             ],
             max_tokens=500
         )
-        print("\U0001f4e5 Raw OpenAI Response:", response)
+        print("📥 Raw OpenAI Response:", response)
         content = response.choices[0].message.content.strip()
-        print("\U0001f4e4 Raw GPT Output:", content)
+        print("📤 Raw GPT Output:", content)
         content = content.replace("```json", "").replace("```", "").strip()
 
         if not content.startswith("{"):
@@ -175,11 +175,8 @@ async def filter_response_entry(request: Request):
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
         if message == "__init__":
-            intros = [
-                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? No sign-up, no spam, just help."
-            ]
-            import random
-            return JSONResponse(content={"response": random.choice(intros), "properties": [], "next_actions": []})
+            intro = "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? No sign-up, no spam, just help."
+            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
 
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
