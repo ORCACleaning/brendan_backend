@@ -105,18 +105,22 @@ def update_quote_record(record_id, fields):
     requests.patch(url, headers=headers, json=data)
 
 def extract_properties_from_gpt4(message: str):
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": GPT_PROMPT},
-            {"role": "user", "content": message}
-        ],
-        max_tokens=300
-    )
-    content = response.choices[0].message.content.strip()
-    content = content.replace("```json", "").replace("```", "").strip()
-    result_json = json.loads(content)
-    return result_json.get("properties", []), result_json.get("response", "")
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": GPT_PROMPT},
+                {"role": "user", "content": message}
+            ],
+            max_tokens=300
+        )
+        content = response.choices[0].message.content.strip()
+        content = content.replace("```json", "").replace("```", "").strip()
+        result_json = json.loads(content)
+        return result_json.get("properties", []), result_json.get("response", "")
+    except Exception as e:
+        print("❌ GPT parsing error:", e)
+        return [], "Sorry, I couldn’t quite get that. Could you rephrase it?"
 
 def generate_next_actions():
     return [
@@ -151,7 +155,6 @@ async def filter_response_entry(request: Request):
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message)
 
-            # Show intro only if it's the very first message (suburb and bedrooms not yet entered)
             if not fields.get("suburb") and not fields.get("bedrooms_v2"):
                 reply = "Hey there! I’m Brendan, Orca Cleaning’s vacate cleaning assistant 🎼🐳. I’ll sort your quote in under 2 minutes — no sign-up needed. We’ve even got a cheeky seasonal discount on right now 😉\n\nJust start by telling me your **suburb**, how many **bedrooms and bathrooms**, and whether it’s **furnished or empty** — then we’ll go from there!"
 
