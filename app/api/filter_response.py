@@ -46,7 +46,39 @@ Here’s what you need to do:
 - Always give a helpful, human-like response.
 """
 
-# Utilities
+# --- Utilities ---
+
+def get_next_quote_id(prefix="VC"):
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
+    headers = {"Authorization": f"Bearer {airtable_api_key}"}
+    params = {
+        "filterByFormula": f"STARTS_WITH(quote_id, '{prefix}-')",
+        "fields[]": "quote_id",
+        "sort[0][field]": "quote_id",
+        "sort[0][direction]": "desc",
+        "pageSize": 1
+    }
+    response = requests.get(url, headers=headers, params=params)
+    records = response.json().get("records", [])
+    next_id = int(records[0]["fields"]["quote_id"].split("-")[1]) + 1 if records else 1
+    return f"{prefix}-{str(next_id).zfill(6)}"
+
+def create_new_quote(session_id):
+    quote_id = get_next_quote_id("VC")
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
+    headers = {
+        "Authorization": f"Bearer {airtable_api_key}",
+        "Content-Type": "application/json"
+    }
+    data = {
+        "fields": {
+            "session_id": session_id,
+            "quote_id": quote_id,
+            "quote_stage": "Gathering Info"
+        }
+    }
+    res = requests.post(url, headers=headers, json=data)
+    return quote_id, res.json().get("id")
 
 def get_quote_by_session(session_id):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
@@ -63,6 +95,24 @@ def get_quote_by_session(session_id):
             "quote_id": record["fields"].get("quote_id")
         }
     return None
+
+def update_quote_record(record_id, fields):
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
+    headers = {
+        "Authorization": f"Bearer {airtable_api_key}",
+        "Content-Type": "application/json"
+    }
+    requests.patch(url, headers=headers, json={"fields": fields})
+
+def append_message_log(record_id, new_message, sender):
+    current = get_quote_by_record_id(record_id)["fields"].get("message_log", "")
+    updated = f"{current}\n{sender.upper()}: {new_message}".strip()[-5000:]
+    update_quote_record(record_id, {"message_log": updated})
+
+def get_quote_by_record_id(record_id):
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
+    headers = {"Authorization": f"Bearer {airtable_api_key}"}
+    return requests.get(url, headers=headers).json()
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
@@ -90,6 +140,16 @@ def extract_properties_from_gpt4(message: str, log: str):
     except Exception as e:
         print("❌ GPT parsing error:", e)
         return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
+
+def generate_next_actions():
+    return [
+        {"action": "proceed_booking", "label": "Proceed to Booking"},
+        {"action": "download_pdf", "label": "Download PDF Quote"},
+        {"action": "email_pdf", "label": "Email PDF Quote"},
+        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
+    ]
+
+# --- Route ---
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
