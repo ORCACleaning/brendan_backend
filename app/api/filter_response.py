@@ -46,7 +46,23 @@ Here’s what you need to do:
 - Always give a helpful, human-like response.
 """
 
-# Utilities omitted here for brevity (same as previous code)
+# Utilities
+
+def get_quote_by_session(session_id):
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
+    headers = {"Authorization": f"Bearer {airtable_api_key}"}
+    params = {"filterByFormula": f"{{session_id}}='{session_id}'"}
+    res = requests.get(url, headers=headers, params=params)
+    data = res.json()
+    if data.get("records"):
+        record = data["records"][0]
+        return {
+            "record_id": record["id"],
+            "fields": record["fields"],
+            "stage": record["fields"].get("quote_stage", "Gathering Info"),
+            "quote_id": record["fields"].get("quote_id")
+        }
+    return None
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
