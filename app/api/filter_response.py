@@ -2,10 +2,10 @@ from openai import OpenAI
 import os
 import json
 import requests
+import inflect
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
-import inflect
 
 load_dotenv()
 router = APIRouter()
@@ -18,7 +18,9 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# GPT Prompt
+inflect_engine = inflect.engine()
+
+# GPT Prompt Template
 GPT_PROMPT = """
 You must always reply in valid JSON like this:
 {
@@ -27,17 +29,18 @@ You must always reply in valid JSON like this:
 }
 Do NOT return markdown, plain text, or anything else. Just JSON.
 
-You are Brendan, an Aussie quote assistant working for Orca Cleaning — a top-rated professional cleaning company based in Western Australia.
-Be warm, friendly, and use Aussie slang naturally. The customer has already been greeted, so don't say hi again.
+You are Brendan, a friendly Aussie quote assistant working for Orca Cleaning, a top-tier vacate cleaning company in WA. The user has already been welcomed, so don’t say hi again.
 
-Only ask for **two fields at a time**.
-Before replying, always check:
-- Does the suburb exist in Perth Metro or Mandurah?
-- Can I convert written numbers (like "four") to digits?
-- Is the property furnished?
-- Are any extras like oven cleaning, carpet cleaning, etc. mentioned?
+Make sure to:
+- Validate suburbs: Only WA metro and Mandurah suburbs are accepted.
+- Recognise informal suburb names (e.g. "Freo" = "Fremantle", "Subi" = "Subiaco").
+- If user enters a **postcode**, ask for the suburb instead.
+- Ask a max of two questions at a time.
+- Speak in a warm, helpful tone.
+- Collect: suburb, bedrooms, bathrooms, oven_cleaning, carpet_cleaning, furnished, and other extras.
+- After all info is gathered, confirm the quote will be calculated.
 
-Ensure every reply is JSON only. No markdown.
+Privacy note: We never spam or share info. Privacy policy at https://orcacleaning.com.au/privacy-policy/
 """
 
 # Utilities
@@ -103,24 +106,10 @@ def update_quote_record(record_id, fields):
     requests.patch(url, headers=headers, json={"fields": fields})
 
 def append_message_log(record_id, new_message, sender):
-    current = get_quote_by_record_id(record_id)["fields"].get("message_log", "")
+    fields = get_quote_by_record_id(record_id).get("fields", {})
+    current = fields.get("message_log", "")
     updated = f"{current}\n{sender.upper()}: {new_message}".strip()[-5000:]
     update_quote_record(record_id, {"message_log": updated})
-
-def normalize_numeric_values(props):
-    p = inflect.engine()
-    for item in props:
-        key = item.get("property")
-        value = item.get("value")
-        if isinstance(value, str):
-            words = value.lower().strip()
-            try:
-                num = p.number_to_words(words).split()[0]  # just get leading number
-                item["value"] = int(p.number_to_words(num))
-            except:
-                if words.isdigit():
-                    item["value"] = int(words)
-    return props
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
@@ -134,13 +123,13 @@ def extract_properties_from_gpt4(message: str, log: str):
             max_tokens=400
         )
         content = response.choices[0].message.content.strip()
+        print("\U0001F4E4 Raw GPT Output:\n", content)
         content = content.replace("```json", "").replace("```", "").strip()
 
-        if not content.startswith("{"):
-            print("⚠️ GPT fallback - not JSON:", content)
-            return [], content
-
         result_json = json.loads(content)
+        if not isinstance(result_json, dict):
+            raise ValueError("Expected JSON object")
+
         return result_json.get("properties", []), result_json.get("response", "")
 
     except Exception as e:
@@ -178,27 +167,22 @@ async def filter_response_entry(request: Request):
 
         append_message_log(record_id, message, "user")
 
-        lowered = message.lower()
-        if lowered in ["__init__", "system_trigger_intro"]:
-            return JSONResponse(content={
-                "response": "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? And no worries — no sign-up, no spam, just help.",
-                "properties": [],
-                "next_actions": []
-            })
-
-        if "not finished" in lowered:
-            return JSONResponse(content={"response": "No worries! What else should I add to your quote? 😊", "properties": [], "next_actions": []})
-        elif "your name" in lowered:
-            return JSONResponse(content={"response": "I’m Brendan — your quote wingman at Orca Cleaning! 😊", "properties": [], "next_actions": []})
-        elif "price" in lowered:
-            return JSONResponse(content={"response": "I’ll whip up the full price once I’ve got all the info — nearly there!", "properties": [], "next_actions": []})
-        elif "office cleaning" in lowered:
-            return JSONResponse(content={"response": "I focus on vacate cleans, but you can grab an office quote at orcacleaning.com.au.", "properties": [], "next_actions": []})
+        if message == "__init__":
+            intro = "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? And no worries — no sign-up, no spam, just help."
+            followup = "Could ya let me know the suburb you’re in and if the property is furnished or not? This’ll help in providing an accurate quote."
+            append_message_log(record_id, intro, "brendan")
+            append_message_log(record_id, followup, "brendan")
+            return JSONResponse(content={"response": intro + "\n\n" + followup, "properties": [], "next_actions": []})
 
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
-            props = normalize_numeric_values(props)
-            updates = {p["property"]: p["value"] for p in props}
+            updates = {}
+            for p in props:
+                key, val = p.get("property"), p.get("value")
+                if key and val is not None:
+                    if isinstance(val, str) and val.isalpha():
+                        val = inflect_engine.number_to_words(val.lower()) or val
+                    updates[key] = val
             updates["quote_stage"] = "Gathering Info"
             update_quote_record(record_id, updates)
             append_message_log(record_id, reply, "brendan")
