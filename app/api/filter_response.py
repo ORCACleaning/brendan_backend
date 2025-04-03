@@ -48,6 +48,33 @@ Here’s what you need to do:
 
 # Utilities omitted here for brevity (same as previous code)
 
+def extract_properties_from_gpt4(message: str, log: str):
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": GPT_PROMPT},
+                {"role": "system", "content": f"Conversation so far:\n{log}"},
+                {"role": "user", "content": message}
+            ],
+            max_tokens=500
+        )
+        print("📥 Raw OpenAI Response:", response)  # DEBUG
+        content = response.choices[0].message.content.strip()
+        print("📤 Raw GPT Output:", content)  # DEBUG
+        content = content.replace("```json", "").replace("```", "").strip()
+
+        if not content.startswith("{"):
+            print("⚠️ GPT fallback - not JSON:", content)
+            return [], "Oops, I wasn’t sure how to respond to that. Could you rephrase or give me more detail?"
+
+        result_json = json.loads(content)
+        return result_json.get("properties", []), result_json.get("response", "")
+
+    except Exception as e:
+        print("❌ GPT parsing error:", e)
+        return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
+
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
