@@ -14,39 +14,42 @@ router = APIRouter()
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-TABLE_NAME = "Vacate Quotes"
+airtable_api_key = os.getenv("AIRTABLE_API_KEY")
+airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
+table_name = "Vacate Quotes"
 
-inflect_engine = inflect.engine()
+inflector = inflect.engine()
 
-# GPT Prompt Template
+# GPT Prompt
 GPT_PROMPT = """
-You must always reply in valid JSON like this:
+You must ALWAYS reply in valid JSON like this:
 {
   "properties": [...],
   "response": "..."
 }
-Do NOT return markdown, plain text, or anything else. Just JSON.
 
-You are Brendan, a friendly Aussie quote assistant working for Orca Cleaning, a top-tier vacate cleaning company in WA. The user has already been welcomed, so don’t say hi again.
+You are Brendan, an Aussie quote assistant working for Orca Cleaning — a professional cleaning company in Western Australia.
+You’ve already greeted the customer, so jump straight into the conversation.
+Never say "Hi" or "G’day" again after the intro.
 
-Make sure to:
-- Validate suburbs: Only WA metro and Mandurah suburbs are accepted.
-- Recognise informal suburb names (e.g. "Freo" = "Fremantle", "Subi" = "Subiaco").
-- If user enters a **postcode**, ask for the suburb instead.
-- Ask a max of two questions at a time.
-- Speak in a warm, helpful tone.
-- Collect: suburb, bedrooms, bathrooms, oven_cleaning, carpet_cleaning, furnished, and other extras.
-- After all info is gathered, confirm the quote will be calculated.
-
-Privacy note: We never spam or share info. Privacy policy at https://orcacleaning.com.au/privacy-policy/
+Here’s what you need to do:
+- You are collecting info for a vacate cleaning quote.
+- First step is confirming the **suburb** — must be within WA metro (Perth or Mandurah).
+- If it’s not in WA, politely let them know we can’t help.
+- If the suburb isn’t recognised (or they use nicknames like "Freo"), ask for clarification.
+- After suburb, ask for max TWO property details at a time (e.g., bedrooms and bathrooms, or furnished and oven cleaning).
+- Always confirm and repeat what customer says to show you understood.
+- Be super friendly, Aussie tone, casual but clear.
+- Do not collect personal info (like name, email, etc). That happens later.
+- Your goal is to complete the property info so a quote can be calculated.
+- You can handle odd questions, slang, or incomplete info.
+- Always give a helpful, human-like response.
 """
 
 # Utilities
 def get_next_quote_id(prefix="VC"):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
+    headers = {"Authorization": f"Bearer {airtable_api_key}"}
     params = {
         "filterByFormula": f"STARTS_WITH(quote_id, '{prefix}-')",
         "fields[]": "quote_id",
@@ -60,8 +63,8 @@ def get_next_quote_id(prefix="VC"):
     return f"{prefix}-{str(next_id).zfill(6)}"
 
 def get_quote_by_session(session_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
+    headers = {"Authorization": f"Bearer {airtable_api_key}"}
     params = {"filterByFormula": f"{{session_id}}='{session_id}'"}
     res = requests.get(url, headers=headers, params=params)
     data = res.json()
@@ -76,15 +79,15 @@ def get_quote_by_session(session_id):
     return None
 
 def get_quote_by_record_id(record_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
+    headers = {"Authorization": f"Bearer {airtable_api_key}"}
     return requests.get(url, headers=headers).json()
 
 def create_new_quote(session_id):
     quote_id = get_next_quote_id("VC")
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Authorization": f"Bearer {airtable_api_key}",
         "Content-Type": "application/json"
     }
     data = {
@@ -98,16 +101,15 @@ def create_new_quote(session_id):
     return quote_id, res.json().get("id")
 
 def update_quote_record(record_id, fields):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
     headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Authorization": f"Bearer {airtable_api_key}",
         "Content-Type": "application/json"
     }
     requests.patch(url, headers=headers, json={"fields": fields})
 
 def append_message_log(record_id, new_message, sender):
-    fields = get_quote_by_record_id(record_id).get("fields", {})
-    current = fields.get("message_log", "")
+    current = get_quote_by_record_id(record_id)["fields"].get("message_log", "")
     updated = f"{current}\n{sender.upper()}: {new_message}".strip()[-5000:]
     update_quote_record(record_id, {"message_log": updated})
 
@@ -120,16 +122,17 @@ def extract_properties_from_gpt4(message: str, log: str):
                 {"role": "system", "content": f"Conversation so far:\n{log}"},
                 {"role": "user", "content": message}
             ],
-            max_tokens=400
+            max_tokens=500
         )
         content = response.choices[0].message.content.strip()
-        print("\U0001F4E4 Raw GPT Output:\n", content)
+        print("📤 Raw GPT Output:\n", content)
         content = content.replace("```json", "").replace("```", "").strip()
 
-        result_json = json.loads(content)
-        if not isinstance(result_json, dict):
-            raise ValueError("Expected JSON object")
+        if not content.startswith("{"):
+            print("⚠️ GPT fallback - not JSON:", content)
+            return [], "Oops, I wasn’t sure how to respond to that. Could you rephrase or give me more detail?"
 
+        result_json = json.loads(content)
         return result_json.get("properties", []), result_json.get("response", "")
 
     except Exception as e:
@@ -154,6 +157,15 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
+        if message == "__init__":
+            intros = [
+                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? And no worries — no sign-up, no spam, just help.",
+                "G’day! Brendan here from Orca Cleaning. I’ll whip up your vacate cleaning quote — just tell me which WA suburb the property’s in.",
+                "Hiya! Brendan from Orca Cleaning here — no pressure, just quotes. First thing, what suburb are we working with?"
+            ]
+            import random
+            return JSONResponse(content={"response": random.choice(intros), "properties": [], "next_actions": []})
+
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             quote_id, record_id = create_new_quote(session_id)
@@ -167,22 +179,13 @@ async def filter_response_entry(request: Request):
 
         append_message_log(record_id, message, "user")
 
-        if message == "__init__":
-            intro = "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? And no worries — no sign-up, no spam, just help."
-            followup = "Could ya let me know the suburb you’re in and if the property is furnished or not? This’ll help in providing an accurate quote."
-            append_message_log(record_id, intro, "brendan")
-            append_message_log(record_id, followup, "brendan")
-            return JSONResponse(content={"response": intro + "\n\n" + followup, "properties": [], "next_actions": []})
-
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {}
             for p in props:
-                key, val = p.get("property"), p.get("value")
-                if key and val is not None:
-                    if isinstance(val, str) and val.isalpha():
-                        val = inflect_engine.number_to_words(val.lower()) or val
-                    updates[key] = val
+                if isinstance(p, dict) and "property" in p and "value" in p:
+                    updates[p["property"]] = p["value"]
+
             updates["quote_stage"] = "Gathering Info"
             update_quote_record(record_id, updates)
             append_message_log(record_id, reply, "brendan")
@@ -192,13 +195,13 @@ async def filter_response_entry(request: Request):
                 update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "Quote Calculated"})
                 return JSONResponse(content={
                     "properties": props,
-                    "response": "Thanks mate! I’ve got everything I need to whip up your quote. Hang tight…",
+                    "response": "Thanks legend! I’ve got what I need to whip up your quote. Hang tight…",
                     "next_actions": []
                 })
 
             return JSONResponse(content={
                 "properties": props,
-                "response": reply or "Got that! Anything else you'd like us to know?",
+                "response": reply or "Got that. Anything else I should know?",
                 "next_actions": []
             })
 
