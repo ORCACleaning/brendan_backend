@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ✅ Secure Airtable Config
+# ✅ Airtable Secure Config
 airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
 airtable_api_key = os.getenv("AIRTABLE_API_KEY")
 airtable_table = "Vacate Quotes"
@@ -29,6 +29,27 @@ def get_next_quote_id(prefix="VC"):
         next_id = 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
+# ✅ Optional: Helper to calculate the individual cost of one service
+def get_individual_service_cost(service_name: str, quantity: int = 1) -> float:
+    BASE_HOURLY_RATE = 75
+    SERVICE_MINUTES = {
+        "oven_cleaning": 30,
+        "carpet_cleaning": 40,
+        "furnished": 60,
+        "window_cleaning": 10,  # per window
+        "wall_cleaning": 30,
+        "balcony_cleaning": 20,
+        "deep_cleaning": 60,
+        "fridge_cleaning": 15,
+        "range_hood_cleaning": 15,
+        "garage_cleaning": 40,
+        "blind_cleaning": 25,  # average
+        "upholstery_cleaning": 45,  # average
+    }
+
+    minutes = SERVICE_MINUTES.get(service_name, 0) * quantity
+    return round((minutes / 60) * BASE_HOURLY_RATE, 2)
+
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75
     SEASONAL_DISCOUNT_PERCENT = 10
@@ -49,7 +70,6 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
 
-    # ✅ Add time for extra services
     for service, time in EXTRA_SERVICE_TIMES.items():
         if getattr(data, service, False):
             base_minutes += time
@@ -68,7 +88,8 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     if data.furnished.lower() == "yes":
         base_minutes += 60
 
-    # ✅ Special requests
+    # ✅ Upholstery skipped if unfurnished (handled upstream in Brendan)
+    # ✅ Special Requests
     is_range = data.special_request_minutes_min is not None and data.special_request_minutes_max is not None
     min_total_mins = base_minutes
     max_total_mins = base_minutes
@@ -82,14 +103,20 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
-    # ✅ Surcharges
+    # ✅ Handle Weekend Cleaning + After-Hours Logic
     weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
-    after_hours_fee = AFTER_HOURS_SURCHARGE if data.after_hours else 0
+
+    # Cleaners work Mon–Fri: 8 AM–8 PM, Sat–Sun: 9 AM–5 PM
+    # After-hours only applies weekdays
+    after_hours_fee = 0
+    if data.after_hours and not data.weekend_cleaning:
+        after_hours_fee = AFTER_HOURS_SURCHARGE
+
     mandurah_fee = MANDURAH_SURCHARGE if data.mandurah_property else 0
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
-    # ✅ Discounts
+    # ✅ Apply Discounts
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
     if data.is_property_manager:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
