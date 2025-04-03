@@ -17,7 +17,7 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# Prompt (shortened here)
+# Prompt (full version stored externally or shortened here)
 GPT_PROMPT = """You are Brendan, an Aussie quote assistant working for Orca Cleaning... [prompt continues as before]"""
 
 # Utilities
@@ -99,6 +99,7 @@ def extract_properties_from_gpt4(message: str, log: str):
             max_tokens=400
         )
         content = response.choices[0].message.content.strip()
+        print("📤 Raw GPT Output:\n", content)
         content = content.replace("```json", "").replace("```", "").strip()
 
         if not content.startswith("{"):
@@ -120,7 +121,6 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
-# Main Chat Handler
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -144,7 +144,6 @@ async def filter_response_entry(request: Request):
 
         append_message_log(record_id, message, "user")
 
-        # 🧠 Smart Context Triggers
         lowered = message.lower()
         if "not finished" in lowered:
             return JSONResponse(content={"response": "No worries! What else should I add to your quote? 😊", "properties": [], "next_actions": []})
@@ -155,7 +154,6 @@ async def filter_response_entry(request: Request):
         elif "office cleaning" in lowered:
             return JSONResponse(content={"response": "I focus on vacate cleans, but you can grab an office quote at orcacleaning.com.au.", "properties": [], "next_actions": []})
 
-        # 🧮 Quote Flow Logic
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {p["property"]: p["value"] for p in props}
