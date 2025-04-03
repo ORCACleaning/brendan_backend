@@ -29,21 +29,34 @@ You must ALWAYS reply in valid JSON like this:
 }
 
 You are Brendan, an Aussie quote assistant working for Orca Cleaning — a professional cleaning company in Western Australia.
-You’ve already greeted the customer, so jump straight into the conversation.
-Never say "Hi" or "G’day" again after the intro.
 
-Here’s what you need to do:
-- You are collecting info for a vacate cleaning quote.
-- First step is confirming the **suburb** — must be within WA metro (Perth or Mandurah).
-- If it’s not in WA, politely let them know we can’t help.
-- If the suburb isn’t recognised (or they use nicknames like "Freo"), ask for clarification.
-- After suburb, ask for max TWO property details at a time (e.g., bedrooms and bathrooms, or furnished and oven cleaning).
-- Always confirm and repeat what customer says to show you understood.
-- Be super friendly, Aussie tone, casual but clear.
-- Do not collect personal info (like name, email, etc). That happens later.
-- Your goal is to complete the property info so a quote can be calculated.
-- You can handle odd questions, slang, or incomplete info.
-- Always give a helpful, human-like response.
+Your goal is to COLLECT EVERY SINGLE REQUIRED FIELD to generate a proper quote. You must collect them ONE AT A TIME.
+
+RULES:
+- DO NOT ask for more than one field at a time.
+- Confirm what the customer says clearly before moving on.
+- Use a friendly, Aussie, casual tone.
+- Suburb must be in Perth or Mandurah (WA metro only).
+- If suburb is unrecognised or a nickname, ask for clarification.
+
+Here is the required field order:
+1. suburb
+2. bedrooms_v2
+3. bathrooms_v2
+4. furnished
+5. oven_cleaning
+6. window_cleaning
+    - if yes → ask for window_count
+7. carpet_cleaning
+8. blind_cleaning
+9. garage_cleaning
+10. balcony_cleaning
+11. upholstery_cleaning
+12. after_hours_cleaning
+13. is_property_manager
+    - if yes → ask for real_estate_name
+
+Once all are filled, confirm with a summary and say the quote is being calculated.
 """
 
 # --- Utilities ---
@@ -125,9 +138,9 @@ def extract_properties_from_gpt4(message: str, log: str):
             ],
             max_tokens=500
         )
-        print("📥 Raw OpenAI Response:", response)  # DEBUG
+        print("\U0001f4e5 Raw OpenAI Response:", response)
         content = response.choices[0].message.content.strip()
-        print("📤 Raw GPT Output:", content)  # DEBUG
+        print("\U0001f4e4 Raw GPT Output:", content)
         content = content.replace("```json", "").replace("```", "").strip()
 
         if not content.startswith("{"):
@@ -161,17 +174,13 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # Intro message (first load)
         if message == "__init__":
             intros = [
-                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? And no worries — no sign-up, no spam, just help.",
-                "G’day! Brendan here from Orca Cleaning. I’ll whip up your vacate cleaning quote — just tell me which WA suburb the property’s in.",
-                "Hiya! Brendan from Orca Cleaning here — no pressure, just quotes. First thing, what suburb are we working with?"
+                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? No sign-up, no spam, just help."
             ]
             import random
             return JSONResponse(content={"response": random.choice(intros), "properties": [], "next_actions": []})
 
-        # Retrieve or create quote
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             quote_id, record_id = create_new_quote(session_id)
@@ -195,9 +204,13 @@ async def filter_response_entry(request: Request):
             update_quote_record(record_id, updates)
             append_message_log(record_id, reply, "brendan")
 
-            # Merge old + new for completeness check
             combined_fields = {**fields, **updates}
-            required_fields = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
+            required_fields = [
+                "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
+                "window_cleaning", "window_count", "carpet_cleaning", "blind_cleaning",
+                "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
+                "after_hours_cleaning", "is_property_manager", "real_estate_name"
+            ]
 
             if all(field in combined_fields for field in required_fields):
                 update_quote_record(record_id, {
