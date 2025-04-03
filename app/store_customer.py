@@ -25,6 +25,14 @@ class CustomerData(BaseModel):
     customer_name: str
     customer_email: str
     customer_phone: str
+    after_hours: bool = False
+    weekend_cleaning: bool = False
+    is_property_manager: bool = False
+    real_estate_company_name: str = ""
+    special_requests: str = ""
+    special_request_minutes_min: int = 0
+    special_request_minutes_max: int = 0
+    mandurah_property: bool = False
     wall_cleaning: bool = False
     balcony_cleaning: bool = False
     window_cleaning: bool = False
@@ -58,6 +66,8 @@ def send_email(to_email: str, customer_name: str, quote_id: str, pdf_link: str, 
     You can also **Schedule Now** using the link below:
     {booking_url}
 
+    If you're a property manager, we’ve already applied your discount — just confirm your real estate company in the form!
+
     Need help? Just reply to this email or text us on WhatsApp. Cheers!
 
     The Orca Cleaning Team
@@ -71,13 +81,11 @@ def send_email(to_email: str, customer_name: str, quote_id: str, pdf_link: str, 
     msg.attach(MIMEApplication(body, 'plain'))
 
     try:
-        # Download the PDF from the URL
         response = requests.get(pdf_link)
         if response.status_code != 200:
             print(f"🔴 Error downloading PDF: {response.status_code}")
             raise HTTPException(status_code=500, detail="Error downloading PDF")
 
-        # Attach the PDF
         pdf_data = BytesIO(response.content)
         msg.attach(MIMEApplication(pdf_data.read(), Name=f"Quote_{quote_id}.pdf", _subtype="pdf"))
         print("✅ PDF attached successfully.")
@@ -86,7 +94,6 @@ def send_email(to_email: str, customer_name: str, quote_id: str, pdf_link: str, 
         raise HTTPException(status_code=500, detail="Error attaching PDF")
 
     try:
-        # Send the email
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
@@ -99,23 +106,29 @@ def send_email(to_email: str, customer_name: str, quote_id: str, pdf_link: str, 
 # --- Endpoint ---
 @router.post("/store-customer")
 def store_customer(data: CustomerData):
-    # Step 1: Find the record in Airtable
     record = find_airtable_record(data.quote_id)
     if not record:
         print(f"🔴 Quote ID {data.quote_id} not found in Airtable.")
         raise HTTPException(status_code=404, detail="Quote ID not found in Airtable")
 
-    # Step 2: Build PDF link and booking URL
     pdf_link = f"https://orcacleaning.com.au/quotes/{data.quote_id}.pdf"
     booking_url = f"https://orcacleaning.com.au/schedule?quote_id={data.quote_id}"
 
-    # ✅ Step 3: Update Airtable with new fields
+    # ✅ Update Airtable
     airtable_data = {
         "fields": {
             "quote_id": data.quote_id,
             "customer_name": data.customer_name,
             "customer_email": data.customer_email,
             "customer_phone": data.customer_phone,
+            "after_hours": "Yes" if data.after_hours else "No",
+            "weekend_cleaning": "Yes" if data.weekend_cleaning else "No",
+            "is_property_manager": "Yes" if data.is_property_manager else "No",
+            "real_estate_company_name": data.real_estate_company_name.strip() or "N/A",
+            "special_requests": data.special_requests or "None",
+            "special_request_minutes_min": data.special_request_minutes_min,
+            "special_request_minutes_max": data.special_request_minutes_max,
+            "mandurah_property": "Yes" if data.mandurah_property else "No",
             "wall_cleaning": "Yes" if data.wall_cleaning else "No",
             "balcony_cleaning": "Yes" if data.balcony_cleaning else "No",
             "window_cleaning": "Yes" if data.window_cleaning else "No",
@@ -144,10 +157,8 @@ def store_customer(data: CustomerData):
     else:
         print(f"✅ Airtable update successful: {response.json()}")
 
-    # ✅ Step 4: Send email
     send_email(data.customer_email, data.customer_name, data.quote_id, pdf_link, booking_url)
 
-    # ✅ Step 5: Return success
     return {
         "status": "success",
         "message": f"Quote email sent to {data.customer_email}.",
