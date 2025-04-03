@@ -11,6 +11,7 @@ class QuoteRequest(BaseModel):
     carpet_cleaning: bool
     window_cleaning: bool
     windows_v2: Optional[int] = 0
+    window_count: Optional[int] = 0  # Alias for consistency
 
     # ✅ Optional extras
     wall_cleaning: Optional[bool] = False
@@ -19,13 +20,15 @@ class QuoteRequest(BaseModel):
     fridge_cleaning: Optional[bool] = False
     range_hood_cleaning: Optional[bool] = False
     garage_cleaning: Optional[bool] = False
+    blind_cleaning: Optional[bool] = False
+    upholstery_cleaning: Optional[bool] = False
 
     # ✅ Property conditions
     after_hours: Optional[bool] = False
     weekend_cleaning: Optional[bool] = False
     mandurah_property: Optional[bool] = False
     is_property_manager: Optional[bool] = False
-    real_estate_agency: Optional[str] = None
+    real_estate_name: Optional[str] = None  # Used in Airtable & frontend
 
     # ✅ Special request (AI handled)
     special_requests: Optional[str] = None
