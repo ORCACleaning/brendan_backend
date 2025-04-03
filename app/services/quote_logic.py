@@ -1,18 +1,18 @@
+import os
 import requests
 from app.models.quote_models import QuoteRequest, QuoteResponse
+from dotenv import load_dotenv
 
-# ✅ Generate Sequential Quote ID from Airtable
+load_dotenv()
+
+# ✅ Secure Airtable Config
+airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
+airtable_api_key = os.getenv("AIRTABLE_API_KEY")
+airtable_table = "Vacate Quotes"
 
 def get_next_quote_id(prefix="VC"):
-    # Airtable config
-    airtable_base_id = "your_base_id"  # ⬅️ Replace this
-    airtable_table = "Vacate Quotes"
-    airtable_api_key = "your_airtable_api_key"  # ⬅️ Replace this
-
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{airtable_table}"
-    headers = {
-        "Authorization": f"Bearer {airtable_api_key}"
-    }
+    headers = {"Authorization": f"Bearer {airtable_api_key}"}
     params = {
         "filterByFormula": f'STARTS_WITH(quote_id, "{prefix}-")',
         "fields[]": "quote_id",
@@ -20,18 +20,14 @@ def get_next_quote_id(prefix="VC"):
         "sort[0][direction]": "desc",
         "pageSize": 1
     }
-
     response = requests.get(url, headers=headers, params=params)
     records = response.json().get("records", [])
-
     if records:
         last_id = records[0]["fields"]["quote_id"].split("-")[1]
-        next_id_num = int(last_id) + 1
+        next_id = int(last_id) + 1
     else:
-        next_id_num = 1
-
-    padded = str(next_id_num).zfill(6)
-    return f"{prefix}-{padded}"
+        next_id = 1
+    return f"{prefix}-{str(next_id).zfill(6)}"
 
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75
@@ -53,52 +49,47 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
 
+    # ✅ Add time for extra services
     for service, time in EXTRA_SERVICE_TIMES.items():
         if getattr(data, service, False):
             base_minutes += time
 
+    # ✅ Window cleaning
     window_minutes = 0
-    if data.window_cleaning and data.windows_v2 > 0:
-        window_minutes = data.windows_v2 * 10
+    if data.window_cleaning:
+        count = data.windows_v2 if data.windows_v2 else 0
+        window_minutes = count * 10
         base_minutes += window_minutes
 
     if data.oven_cleaning:
         base_minutes += 30
     if data.carpet_cleaning:
         base_minutes += 40
-
     if data.furnished.lower() == "yes":
         base_minutes += 60
 
+    # ✅ Special requests
     is_range = data.special_request_minutes_min is not None and data.special_request_minutes_max is not None
     min_total_mins = base_minutes
     max_total_mins = base_minutes
-
     note = None
+
     if is_range:
         min_total_mins += data.special_request_minutes_min
         max_total_mins += data.special_request_minutes_max
         note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
-    else:
-        max_total_mins = base_minutes
 
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
-    extra_service_charge = 0
-    for service in EXTRA_SERVICE_TIMES:
-        if getattr(data, service, False):
-            extra_service_charge += (EXTRA_SERVICE_TIMES[service] / 60) * BASE_HOURLY_RATE
-
-    window_cleaning_charge = (window_minutes / 60) * BASE_HOURLY_RATE
-    base_price += extra_service_charge + window_cleaning_charge
-
+    # ✅ Surcharges
     weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
     after_hours_fee = AFTER_HOURS_SURCHARGE if data.after_hours else 0
     mandurah_fee = MANDURAH_SURCHARGE if data.mandurah_property else 0
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
+    # ✅ Discounts
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
     if data.is_property_manager:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
