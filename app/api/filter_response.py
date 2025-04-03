@@ -184,8 +184,14 @@ async def filter_response_entry(request: Request):
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
         if message == "__init__":
-            intro = "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? No sign-up, no spam, just help."
-            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
+          intro = (
+            "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
+            "No sign-up, no spam, just help. We also respect your privacy — you can read our policy here: "
+            "https://orcacleaning.com.au/privacy-policy\n\n"
+            "First up — what suburb’s the property in?"
+          )
+          return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
+
 
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
