@@ -20,8 +20,7 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# ✅ Updated extract_properties_from_gpt4 + first-message logic inside filter_response.py
-
+# ✅ GPT Prompt
 GPT_PROMPT = """
 You are Brendan, an Aussie vacate cleaning assistant working for Orca Cleaning.
 You help customers get quotes fast by:
@@ -30,7 +29,7 @@ You help customers get quotes fast by:
 3. Introducing yourself naturally in the first message only.
 
 If it's the first customer message, respond with:
-"Hey there! I’m Brendan, Orca Cleaning’s vacate cleaning assistant \ud83e\udfbc\ud83d\udc33. I’ll sort your quote in under 2 minutes — no sign-up needed. We’ve even got a cheeky seasonal discount on right now 😉\n\nJust start by telling me your **suburb**, how many **bedrooms and bathrooms**, and whether it’s **furnished or empty** — then we’ll go from there!"
+"Hey there! I’m Brendan, Orca Cleaning’s vacate cleaning assistant 🎼🐳. I’ll sort your quote in under 2 minutes — no sign-up needed. We’ve even got a cheeky seasonal discount on right now 😉\n\nJust start by telling me your **suburb**, how many **bedrooms and bathrooms**, and whether it’s **furnished or empty** — then we’ll go from there!"
 
 Otherwise, respond in a casual Aussie tone.
 Only extract the following properties if they’re mentioned:
@@ -60,39 +59,6 @@ Respond using this JSON format:
   "response": "Awesome, noted! Just need a few more details to finalise your quote."
 }
 """
-
-# ✅ In filter_response_entry() inside /filter-response
-# Replace the starting block:
-
-if stage == "Gathering Info":
-    props, reply = extract_properties_from_gpt4(message)
-
-    # If it's the first message ever
-    if not fields.get("suburb") and not fields.get("bedrooms_v2"):
-        reply = "Hey there! I’m Brendan, Orca Cleaning’s vacate cleaning assistant \ud83e\udfbc\ud83d\udc33. I’ll sort your quote in under 2 minutes — no sign-up needed. We’ve even got a cheeky seasonal discount on right now 😉\n\nJust start by telling me your **suburb**, how many **bedrooms and bathrooms**, and whether it’s **furnished or empty** — then we’ll go from there!"
-
-    updates = {p["property"]: p["value"] for p in props}
-    updates["quote_stage"] = "Gathering Info"
-    update_quote_record(record_id, updates)
-
-    required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
-    if all(field in {**fields, **updates} for field in required):
-        update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "Quote Calculated"})
-        return JSONResponse(
-            content={
-                "properties": props,
-                "response": "Thanks mate! I’ve got everything I need to whip up your quote. Hang tight…",
-                "next_actions": []
-            }
-        )
-
-    return JSONResponse(
-        content={
-            "properties": props,
-            "response": reply or "Got that! Anything else you'd like us to know?",
-            "next_actions": []
-        }
-    )
 
 # ✅ Airtable utilities
 def get_quote_by_session(session_id):
@@ -184,13 +150,18 @@ async def filter_response_entry(request: Request):
 
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message)
+
+            # Show intro only if it's the very first message (suburb and bedrooms not yet entered)
+            if not fields.get("suburb") and not fields.get("bedrooms_v2"):
+                reply = "Hey there! I’m Brendan, Orca Cleaning’s vacate cleaning assistant 🎼🐳. I’ll sort your quote in under 2 minutes — no sign-up needed. We’ve even got a cheeky seasonal discount on right now 😉\n\nJust start by telling me your **suburb**, how many **bedrooms and bathrooms**, and whether it’s **furnished or empty** — then we’ll go from there!"
+
             updates = {p["property"]: p["value"] for p in props}
             updates["quote_stage"] = "Gathering Info"
             update_quote_record(record_id, updates)
 
             required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
             if all(field in {**fields, **updates} for field in required):
-                update_quote_record(record_id, {"quote_stage": "Quote Calculated"})
+                update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "Quote Calculated"})
                 return JSONResponse(
                     content={
                         "properties": props,
