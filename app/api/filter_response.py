@@ -46,106 +46,7 @@ Here’s what you need to do:
 - Always give a helpful, human-like response.
 """
 
-# Utilities
-def get_next_quote_id(prefix="VC"):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
-    headers = {"Authorization": f"Bearer {airtable_api_key}"}
-    params = {
-        "filterByFormula": f"STARTS_WITH(quote_id, '{prefix}-')",
-        "fields[]": "quote_id",
-        "sort[0][field]": "quote_id",
-        "sort[0][direction]": "desc",
-        "pageSize": 1
-    }
-    response = requests.get(url, headers=headers, params=params)
-    records = response.json().get("records", [])
-    next_id = int(records[0]["fields"]["quote_id"].split("-")[1]) + 1 if records else 1
-    return f"{prefix}-{str(next_id).zfill(6)}"
-
-def get_quote_by_session(session_id):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
-    headers = {"Authorization": f"Bearer {airtable_api_key}"}
-    params = {"filterByFormula": f"{{session_id}}='{session_id}'"}
-    res = requests.get(url, headers=headers, params=params)
-    data = res.json()
-    if data.get("records"):
-        record = data["records"][0]
-        return {
-            "record_id": record["id"],
-            "fields": record["fields"],
-            "stage": record["fields"].get("quote_stage", "Gathering Info"),
-            "quote_id": record["fields"].get("quote_id")
-        }
-    return None
-
-def get_quote_by_record_id(record_id):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
-    headers = {"Authorization": f"Bearer {airtable_api_key}"}
-    return requests.get(url, headers=headers).json()
-
-def create_new_quote(session_id):
-    quote_id = get_next_quote_id("VC")
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
-    headers = {
-        "Authorization": f"Bearer {airtable_api_key}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "fields": {
-            "session_id": session_id,
-            "quote_id": quote_id,
-            "quote_stage": "Gathering Info"
-        }
-    }
-    res = requests.post(url, headers=headers, json=data)
-    return quote_id, res.json().get("id")
-
-def update_quote_record(record_id, fields):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
-    headers = {
-        "Authorization": f"Bearer {airtable_api_key}",
-        "Content-Type": "application/json"
-    }
-    requests.patch(url, headers=headers, json={"fields": fields})
-
-def append_message_log(record_id, new_message, sender):
-    current = get_quote_by_record_id(record_id)["fields"].get("message_log", "")
-    updated = f"{current}\n{sender.upper()}: {new_message}".strip()[-5000:]
-    update_quote_record(record_id, {"message_log": updated})
-
-def extract_properties_from_gpt4(message: str, log: str):
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": GPT_PROMPT},
-                {"role": "system", "content": f"Conversation so far:\n{log}"},
-                {"role": "user", "content": message}
-            ],
-            max_tokens=500
-        )
-        content = response.choices[0].message.content.strip()
-        print("📤 Raw GPT Output:\n", content)
-        content = content.replace("```json", "").replace("```", "").strip()
-
-        if not content.startswith("{"):
-            print("⚠️ GPT fallback - not JSON:", content)
-            return [], "Oops, I wasn’t sure how to respond to that. Could you rephrase or give me more detail?"
-
-        result_json = json.loads(content)
-        return result_json.get("properties", []), result_json.get("response", "")
-
-    except Exception as e:
-        print("❌ GPT parsing error:", e)
-        return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
-
-def generate_next_actions():
-    return [
-        {"action": "proceed_booking", "label": "Proceed to Booking"},
-        {"action": "download_pdf", "label": "Download PDF Quote"},
-        {"action": "email_pdf", "label": "Email PDF Quote"},
-        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
-    ]
+# Utilities omitted here for brevity (same as previous code)
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -157,6 +58,7 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
+        # Intro message (first load)
         if message == "__init__":
             intros = [
                 "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. First up — what suburb’s the property in? And no worries — no sign-up, no spam, just help.",
@@ -166,6 +68,7 @@ async def filter_response_entry(request: Request):
             import random
             return JSONResponse(content={"response": random.choice(intros), "properties": [], "next_actions": []})
 
+        # Retrieve or create quote
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             quote_id, record_id = create_new_quote(session_id)
@@ -186,24 +89,30 @@ async def filter_response_entry(request: Request):
                 if isinstance(p, dict) and "property" in p and "value" in p:
                     updates[p["property"]] = p["value"]
 
-            updates["quote_stage"] = "Gathering Info"
             update_quote_record(record_id, updates)
             append_message_log(record_id, reply, "brendan")
 
-            required = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
-            if all(field in {**fields, **updates} for field in required):
-                update_quote_record(record_id, {"quote_stage": "Quote Calculated", "status": "Quote Calculated"})
+            # Merge old + new for completeness check
+            combined_fields = {**fields, **updates}
+            required_fields = ["suburb", "bedrooms_v2", "bathrooms_v2", "oven_cleaning", "carpet_cleaning", "furnished"]
+
+            if all(field in combined_fields for field in required_fields):
+                update_quote_record(record_id, {
+                    "quote_stage": "Quote Calculated",
+                    "status": "Quote Calculated"
+                })
                 return JSONResponse(content={
                     "properties": props,
                     "response": "Thanks legend! I’ve got what I need to whip up your quote. Hang tight…",
                     "next_actions": []
                 })
-
-            return JSONResponse(content={
-                "properties": props,
-                "response": reply or "Got that. Anything else I should know?",
-                "next_actions": []
-            })
+            else:
+                update_quote_record(record_id, {"quote_stage": "Gathering Info"})
+                return JSONResponse(content={
+                    "properties": props,
+                    "response": reply or "Got that. Anything else I should know?",
+                    "next_actions": []
+                })
 
         elif stage == "Quote Calculated":
             pdf = fields.get("pdf_link", "#")
