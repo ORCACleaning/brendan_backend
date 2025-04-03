@@ -2,7 +2,6 @@ from openai import OpenAI
 import os
 import json
 import requests
-import uuid
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
@@ -83,6 +82,30 @@ Respond using this JSON format:
 """
 
 # ✅ Airtable utilities
+def get_next_quote_id(prefix="VC"):
+    # Get the latest quote ID and increment
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    params = {
+        "filterByFormula": f"STARTS_WITH(quote_id, '{prefix}-')",
+        "fields[]": "quote_id",
+        "sort[0][field]": "quote_id",
+        "sort[0][direction]": "desc",
+        "pageSize": 1
+    }
+
+    response = requests.get(url, headers=headers, params=params)
+    records = response.json().get("records", [])
+
+    if records:
+        last_id = records[0]["fields"]["quote_id"].split("-")[1]
+        next_id_num = int(last_id) + 1
+    else:
+        next_id_num = 1
+
+    return f"{prefix}-{str(next_id_num).zfill(6)}"
+
+
 def get_quote_by_session(session_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -106,7 +129,7 @@ def get_quote_by_record_id(record_id):
     return res.json()
 
 def create_new_quote(session_id):
-    quote_id = f"VAC-{uuid.uuid4().hex[:8]}"
+    quote_id = get_next_quote_id("VC")
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
