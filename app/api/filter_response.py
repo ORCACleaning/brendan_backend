@@ -6,12 +6,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
-# ✅ Load .env variables
 load_dotenv()
-
 router = APIRouter()
 
-# ✅ API Keys
+# API Keys and Config
 api_key = os.getenv("OPENAI_API_KEY")
 client = OpenAI(api_key=api_key)
 
@@ -19,13 +17,10 @@ AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 TABLE_NAME = "Vacate Quotes"
 
-# ✅ GPT Prompt
-GPT_PROMPT = """
-You are Brendan, an Aussie quote assistant working for Orca Cleaning — a top-rated professional cleaning company based in Western Australia.
+# Prompt (shortened here)
+GPT_PROMPT = """You are Brendan, an Aussie quote assistant working for Orca Cleaning... [prompt continues as before]"""
 
-[... shortened for brevity in this view - same as before ...]
-"""
-
+# Utilities
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -38,8 +33,8 @@ def get_next_quote_id(prefix="VC"):
     }
     response = requests.get(url, headers=headers, params=params)
     records = response.json().get("records", [])
-    next_id_num = int(records[0]["fields"]["quote_id"].split("-")[1]) + 1 if records else 1
-    return f"{prefix}-{str(next_id_num).zfill(6)}"
+    next_id = int(records[0]["fields"]["quote_id"].split("-")[1]) + 1 if records else 1
+    return f"{prefix}-{str(next_id).zfill(6)}"
 
 def get_quote_by_session(session_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
@@ -60,8 +55,7 @@ def get_quote_by_session(session_id):
 def get_quote_by_record_id(record_id):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    res = requests.get(url, headers=headers)
-    return res.json()
+    return requests.get(url, headers=headers).json()
 
 def create_new_quote(session_id):
     quote_id = get_next_quote_id("VC")
@@ -106,11 +100,17 @@ def extract_properties_from_gpt4(message: str, log: str):
         )
         content = response.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()
+
+        if not content.startswith("{"):
+            print("❌ GPT did not return JSON. Raw content:", content)
+            raise ValueError("Non-JSON GPT response")
+
         result_json = json.loads(content)
         return result_json.get("properties", []), result_json.get("response", "")
+
     except Exception as e:
         print("❌ GPT parsing error:", e)
-        return [], "Sorry, I couldn’t quite get that. Could you rephrase it?"
+        return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
 
 def generate_next_actions():
     return [
@@ -120,6 +120,7 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
+# Main Chat Handler
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -143,17 +144,18 @@ async def filter_response_entry(request: Request):
 
         append_message_log(record_id, message, "user")
 
-        # Context-aware responses
+        # 🧠 Smart Context Triggers
         lowered = message.lower()
         if "not finished" in lowered:
-            return JSONResponse(content={"response": "All good! What else should I add to your quote? 😊", "properties": [], "next_actions": []})
-        elif "what's your name" in lowered or "your name" in lowered:
-            return JSONResponse(content={"response": "I’m Brendan, your quote assistant here at Orca Cleaning. 😊", "properties": [], "next_actions": []})
+            return JSONResponse(content={"response": "No worries! What else should I add to your quote? 😊", "properties": [], "next_actions": []})
+        elif "your name" in lowered:
+            return JSONResponse(content={"response": "I’m Brendan — your quote wingman at Orca Cleaning! 😊", "properties": [], "next_actions": []})
         elif "price" in lowered:
-            return JSONResponse(content={"response": "The price depends on a few things like room size and extras. I’ll calculate it for you in just a sec!", "properties": [], "next_actions": []})
+            return JSONResponse(content={"response": "I’ll whip up the full price once I’ve got all the info — nearly there!", "properties": [], "next_actions": []})
         elif "office cleaning" in lowered:
-            return JSONResponse(content={"response": "I focus on vacate cleans, but you can grab a quote for office cleaning at orcacleaning.com.au. ", "properties": [], "next_actions": []})
+            return JSONResponse(content={"response": "I focus on vacate cleans, but you can grab an office quote at orcacleaning.com.au.", "properties": [], "next_actions": []})
 
+        # 🧮 Quote Flow Logic
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {p["property"]: p["value"] for p in props}
@@ -181,7 +183,7 @@ async def filter_response_entry(request: Request):
             booking = fields.get("booking_url", "#")
             return JSONResponse(content={
                 "properties": [],
-                "response": f"Your quote is ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking}). Let me know if you need changes.",
+                "response": f"Your quote’s ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
                 "next_actions": generate_next_actions()
             })
 
@@ -199,4 +201,5 @@ async def filter_response_entry(request: Request):
         })
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        print("🔥 Unexpected error:", e)
+        return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
