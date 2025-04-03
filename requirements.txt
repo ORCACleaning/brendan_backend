@@ -19,4 +19,5 @@ fastapi
 python-multipart
 python-dotenv
 requests
+inflect
 httpx==0.27.0  # ✅ PINNED VERSION
