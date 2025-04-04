@@ -46,6 +46,7 @@ class QuoteRequest(BaseModel):
     quote_id: Optional[str] = None
     quote_pdf_link: Optional[str] = None
     booking_url: Optional[str] = None
+    privacy_acknowledged: Optional[str] = None  # ✅ New field to prevent repeating privacy policy
 
 
 # ✅ Output Model for Quote Response
