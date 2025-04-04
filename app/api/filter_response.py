@@ -111,11 +111,6 @@ Once all fields are complete, say:
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
 
-# Rest of your code remains the same
-# (unchanged from your latest working version)
-
-# If you're ready, I can now also help you apply the chat-ban detection logic, log Brendan’s warnings, and update quote_stage to "Chat Banned" where needed. ✅
-
 # --- Utilities ---
 
 def get_next_quote_id(prefix="VC"):
