@@ -358,7 +358,6 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # ✅ ABUSE FILTER
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
@@ -391,7 +390,6 @@ async def filter_response_entry(request: Request):
                     "next_actions": []
                 })
 
-        # ✅ Chat already banned
         if stage == "Chat Banned":
             return JSONResponse(content={
                 "response": (
@@ -402,7 +400,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # ✅ Init message
         if message == "__init__":
             intro = (
                 "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
@@ -413,44 +410,48 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, "Brendan started a new quote", "SYSTEM")
             return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
 
-        # ✅ Log user message
         append_message_log(record_id, message, "user")
 
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {}
 
-            for p in props:
-                if isinstance(p, dict) and "property" in p and "value" in p:
-                    prop = p["property"]
-                    val = p["value"]
-                    if prop in ["special_request_minutes_min", "special_request_minutes_max"]:
-                        try:
-                            updates[prop] = int(val)
-                        except:
-                            continue
-                    else:
-                        updates[prop] = val
-
-            # ✅ Only set window_cleaning from window_count if not explicitly set
-            if "window_count" in updates and "window_cleaning" not in updates:
-                try:
-                    count = int(updates["window_count"])
-                    updates["window_cleaning"] = count > 0
-                except:
-                    pass
-
-            # ✅ Normalize checkbox values to boolean
             checkbox_fields = {
                 "oven_cleaning", "window_cleaning", "carpet_cleaning", "blind_cleaning",
                 "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
                 "after_hours_cleaning", "weekend_cleaning", "is_property_manager"
             }
 
-            for field in checkbox_fields:
-                if field in updates:
-                    val = str(updates[field]).strip().lower()
-                    updates[field] = val in ["yes", "true", "1"]
+            for p in props:
+                if isinstance(p, dict) and "property" in p and "value" in p:
+                    prop = p["property"]
+                    val = p["value"]
+
+                    if prop in ["special_request_minutes_min", "special_request_minutes_max"]:
+                        try:
+                            updates[prop] = int(val)
+                        except:
+                            continue
+                    elif prop == "furnished":
+                        val = str(val).strip().lower()
+                        if val in ["yes", "furnished", "true", "1"]:
+                            updates[prop] = "Furnished"
+                        elif val in ["no", "unfurnished", "false", "0"]:
+                            updates[prop] = "Unfurnished"
+                        else:
+                            continue
+                    elif prop in checkbox_fields:
+                        val = str(val).strip().lower()
+                        updates[prop] = val in ["yes", "true", "1"]
+                    else:
+                        updates[prop] = val
+
+            if "window_count" in updates and "window_cleaning" not in updates:
+                try:
+                    count = int(updates["window_count"])
+                    updates["window_cleaning"] = count > 0
+                except:
+                    pass
 
             if updates:
                 update_quote_record(record_id, updates)
