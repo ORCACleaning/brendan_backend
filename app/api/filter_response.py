@@ -126,19 +126,15 @@ Once all fields are complete, say:
 
 
 #---Utilities---
-
 import uuid
 import json
 import requests
 import re
-
-# 🔐 Injected environment config assumed
 import os
-import json
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# ✅ Load .env variables
+# ✅ Load environment variables
 load_dotenv()
 
 # ✅ Airtable & OpenAI setup
@@ -148,19 +144,7 @@ table_name = "Vacate Quotes"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ✅ Brendan's GPT Prompt
-GPT_PROMPT = """🚨 You must ALWAYS reply in **valid JSON only** — no exceptions.
-
-Example:
-{
-  "properties": [
-    {"property": "suburb", "value": "Mandurah"},
-    {"property": "bedrooms_v2", "value": 2},
-    {"property": "bathrooms_v2", "value": 1}
-  ],
-  "response": "Got it, you're in Mandurah with a 2-bedroom, 1-bathroom place and 5 windows. Just to confirm, is it furnished or unfurnished?"
-}
-... [prompt continues unchanged] ..."""
-
+GPT_PROMPT = """<paste your prompt here>"""
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
@@ -194,7 +178,6 @@ def get_next_quote_id(prefix="VC"):
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
-
 def create_new_quote(session_id):
     session_id = session_id or str(uuid.uuid4())
     quote_id = get_next_quote_id("VC")
@@ -216,7 +199,6 @@ def create_new_quote(session_id):
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
     return quote_id, record_id
 
-
 def get_quote_by_session(session_id):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
@@ -233,7 +215,6 @@ def get_quote_by_session(session_id):
         }
     return None
 
-
 def update_quote_record(record_id, fields):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
     headers = {
@@ -248,7 +229,6 @@ def update_quote_record(record_id, fields):
     else:
         print("✅ Airtable updated:", json.dumps(res.json(), indent=2))
 
-
 def append_message_log(record_id, new_message, sender):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
@@ -258,7 +238,6 @@ def append_message_log(record_id, new_message, sender):
     new_log = f"{current_log}\n{sender.upper()}: {new_message}".strip()[-5000:]
 
     update_quote_record(record_id, {"message_log": new_log})
-
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
@@ -272,8 +251,7 @@ def extract_properties_from_gpt4(message: str, log: str):
                 {"role": "user", "content": message}
             ],
             max_tokens=700,
-            temperature=0.4,
-            response_format="json"
+            temperature=0.4
         )
 
         raw = response.choices[0].message.content.strip()
@@ -351,14 +329,12 @@ def extract_properties_from_gpt4(message: str, log: str):
         print("🔥 Unexpected GPT extraction error:", e)
         return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
 
-
 def extract_suburb_from_text(text):
     words = text.split()
     for i in range(len(words)):
         if words[i][0].isupper() and words[i].isalpha():
             return words[i]
     return "Unknown"
-
 
 def generate_next_actions():
     return [
@@ -367,6 +343,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 #---route---
 
