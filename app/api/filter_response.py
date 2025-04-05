@@ -113,16 +113,17 @@ Once all fields are complete, say:
 
 # --- Utilities ---
 
-import uuid  # ✅ Ensure this is at the top of your file
+import uuid  # ✅ Ensure this is at the top
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
     params = {
-        "filterByFormula": f"STARTS_WITH(quote_id, '{prefix}-')",
+        "filterByFormula": f"FIND('{prefix}-', quote_id) = 1",
         "fields[]": ["quote_id"],
         "pageSize": 100
     }
+
     records = []
     offset = None
     while True:
@@ -142,6 +143,7 @@ def get_next_quote_id(prefix="VC"):
             numbers.append(num)
         except:
             continue
+
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
@@ -225,6 +227,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 
 # --- Route ---
