@@ -291,85 +291,6 @@ def generate_next_actions():
 
 #---route---
 
-@router.post("/filter-response")
-async def filter_response_entry(request: Request):
-    try:
-        body = await request.json()
-        message = body.get("message", "").strip()
-        session_id = body.get("session_id")
-
-        if not session_id:
-            raise HTTPException(status_code=400, detail="Session ID is required.")
-
-        quote_data = get_quote_by_session(session_id)
-        if not quote_data:
-            quote_id, record_id = create_new_quote(session_id)
-            fields, stage, log = {}, "Gathering Info", ""
-        else:
-            quote_id = quote_data["quote_id"]
-            record_id = quote_data["record_id"]
-            fields = quote_data["fields"]
-            stage = quote_data["stage"]
-            log = fields.get("message_log", "")
-
-        # ✅ ABUSE FILTER
-        banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
-        if any(word in message.lower() for word in banned_words):
-            abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
-            append_message_log(record_id, message, "user")
-
-            if abuse_warned:
-                bot_reply = (
-                    "We’ve had to close this chat due to repeated inappropriate language. "
-                    "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
-                )
-                update_quote_record(record_id, {
-                    "quote_stage": "Chat Banned",
-                    "abuse_warning_issued": "True"
-                })
-                append_message_log(record_id, bot_reply, "brendan")
-                return JSONResponse(content={
-                    "response": bot_reply,
-                    "properties": [],
-                    "next_actions": []
-                })
-            else:
-                bot_reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
-                update_quote_record(record_id, {
-                    "abuse_warning_issued": "True"
-                })
-                append_message_log(record_id, bot_reply, "brendan")
-                return JSONResponse(content={
-                    "response": bot_reply,
-                    "properties": [],
-                    "next_actions": []
-                })
-
-        # ✅ Block chat if already banned
-        if stage == "Chat Banned":
-            return JSONResponse(content={
-                "response": (
-                    "This chat’s been closed due to inappropriate messages. "
-                    "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388."
-                ),
-                "properties": [],
-                "next_actions": []
-            })
-
-        # ✅ Init message
-        if message == "__init__":
-            intro = (
-                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
-                "No sign-up, no spam, just help. We also respect your privacy — you can read our policy here: "
-                "https://orcacleaning.com.au/privacy-policy\n\n"
-                "First up — what suburb’s the property in?"
-            )
-            append_message_log(record_id, "Brendan started a new quote", "SYSTEM")
-            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
-
-        # ✅ Log user message
-        append_message_log(record_id, message, "user")
-
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {}
@@ -388,37 +309,20 @@ async def filter_response_entry(request: Request):
             if "window_count" in updates:
                 updates["window_cleaning"] = "Yes" if updates["window_count"] > 0 else "No"
 
-            # ✅ Convert checkbox-style fields to booleans
-            checkbox_fields = [
-                "oven_cleaning", "window_cleaning", "carpet_cleaning",
-                "blind_cleaning", "garage_cleaning", "balcony_cleaning",
-                "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning",
-                "is_property_manager"
-            ]
+            # ✅ Normalize checkbox values to booleans
+            checkbox_fields = {
+                "oven_cleaning", "window_cleaning", "carpet_cleaning", "blind_cleaning",
+                "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
+                "after_hours_cleaning", "weekend_cleaning", "is_property_manager"
+            }
+
             for field in checkbox_fields:
                 if field in updates:
                     val = str(updates[field]).strip().lower()
                     updates[field] = val in ["yes", "true", "1"]
 
-            checkbox_fields = {
-                "oven_cleaning",
-                "balcony_cleaning",
-                "window_cleaning",
-                "carpet_cleaning",
-                "garage_cleaning",
-                "blind_cleaning",
-                "upholstery_cleaning",
-                "after_hours_cleaning",
-                "weekend_cleaning",
-            }
-
-            for k, v in updates.items():
-                if k in checkbox_fields:
-                    updates[k] = bool(v)
-
             if updates:
                 update_quote_record(record_id, updates)
-
 
             append_message_log(record_id, reply, "brendan")
 
@@ -445,29 +349,3 @@ async def filter_response_entry(request: Request):
                     "response": reply or "Got that. Anything else I should know?",
                     "next_actions": []
                 })
-
-        elif stage == "Quote Calculated":
-            pdf = fields.get("pdf_link", "#")
-            booking = fields.get("booking_url", "#")
-            return JSONResponse(content={
-                "properties": [],
-                "response": f"Your quote’s ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
-                "next_actions": generate_next_actions()
-            })
-
-        elif stage == "Gathering Personal Info":
-            return JSONResponse(content={
-                "properties": [],
-                "response": "Just need your name, email, and phone to send that through. 😊",
-                "next_actions": []
-            })
-
-        return JSONResponse(content={
-            "properties": [],
-            "response": "All done and dusted! Let me know if you'd like to tweak anything.",
-            "next_actions": generate_next_actions()
-        })
-
-    except Exception as e:
-        print("🔥 Unexpected error:", e)
-        return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
