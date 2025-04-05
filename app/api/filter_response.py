@@ -119,13 +119,18 @@ def get_next_quote_id(prefix="VC"):
     params = {
         "filterByFormula": f"STARTS_WITH(quote_id, '{prefix}-')",
         "fields[]": "quote_id",
-        "sort[0][field]": "quote_id",
-        "sort[0][direction]": "desc",
-        "pageSize": 1
+        "pageSize": 100
     }
     response = requests.get(url, headers=headers, params=params)
     records = response.json().get("records", [])
-    next_id = int(records[0]["fields"]["quote_id"].split("-")[1]) + 1 if records else 1
+    numbers = []
+    for r in records:
+        try:
+            num = int(r["fields"]["quote_id"].split("-")[1])
+            numbers.append(num)
+        except:
+            continue
+    next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
 def create_new_quote(session_id):
@@ -220,6 +225,27 @@ async def filter_response_entry(request: Request):
     try:
         body = await request.json()
         message = body.get("message", "").strip()
+        banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
+        if any(word in message.lower() for word in banned_words):
+            if quote_data:
+                if fields.get("abuse_warning_issued"):
+                    update_quote_record(record_id, {"quote_stage": "Chat Banned"})
+                    return JSONResponse(content={
+                        "response": (
+                            "We’ve had to close this chat due to repeated inappropriate language. "
+                            "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
+                        ),
+                        "properties": [],
+                        "next_actions": []
+                    })
+                else:
+                    update_quote_record(record_id, {"abuse_warning_issued": True})
+                    return JSONResponse(content={
+                        "response": "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat.",
+                        "properties": [],
+                        "next_actions": []
+                    })
+
         session_id = body.get("session_id")
 
         if not session_id:
@@ -245,6 +271,17 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
+        if quote_data and quote_data["stage"] == "Chat Banned":
+          return JSONResponse(content={
+                "response": (
+                    "This chat’s been closed due to inappropriate messages. "
+                    "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388."
+                ),
+                "properties": [],
+                "next_actions": []
+          })
+
+
         append_message_log(record_id, message, "user")
 
         if stage == "Gathering Info":
@@ -254,7 +291,15 @@ async def filter_response_entry(request: Request):
                 if isinstance(p, dict) and "property" in p and "value" in p:
                     updates[p["property"]] = p["value"]
 
-            update_quote_record(record_id, updates)
+            # Derive window_cleaning from window_count
+            if "window_count" in updates:
+                updates["window_cleaning"] = "Yes" if updates["window_count"] > 0 else "No"
+
+
+            if updates:
+                print(f"📝 Updating Airtable Record {record_id} with: {json.dumps(updates)}")
+                update_quote_record(record_id, updates)
+
             append_message_log(record_id, reply, "brendan")
 
             combined_fields = {**fields, **updates}
