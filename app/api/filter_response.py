@@ -369,6 +369,18 @@ async def filter_response_entry(request: Request):
             if "window_count" in updates:
                 updates["window_cleaning"] = "Yes" if updates["window_count"] > 0 else "No"
 
+            # ✅ Convert checkbox-style fields to booleans
+            checkbox_fields = [
+                "oven_cleaning", "window_cleaning", "carpet_cleaning",
+                "blind_cleaning", "garage_cleaning", "balcony_cleaning",
+                "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning",
+                "is_property_manager"
+            ]
+            for field in checkbox_fields:
+                if field in updates:
+                    val = str(updates[field]).strip().lower()
+                    updates[field] = val in ["yes", "true", "1"]
+
             if updates:
                 update_quote_record(record_id, updates)
 
