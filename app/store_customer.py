@@ -25,6 +25,7 @@ class CustomerData(BaseModel):
     customer_name: str
     customer_email: str
     customer_phone: str
+
     after_hours: bool = False
     weekend_cleaning: bool = False
     is_property_manager: bool = False
@@ -33,6 +34,7 @@ class CustomerData(BaseModel):
     special_request_minutes_min: int = 0
     special_request_minutes_max: int = 0
     mandurah_property: bool = False
+
     wall_cleaning: bool = False
     balcony_cleaning: bool = False
     window_cleaning: bool = False
@@ -41,6 +43,10 @@ class CustomerData(BaseModel):
     fridge_cleaning: bool = False
     range_hood_cleaning: bool = False
     garage_cleaning: bool = False
+
+    # ✅ New fields for carpeted areas
+    carpet_bedroom_count: int = 0
+    carpet_mainroom_count: int = 0
 
 # --- Helper Functions ---
 def find_airtable_record(quote_id):
@@ -137,6 +143,11 @@ def store_customer(data: CustomerData):
             "fridge_cleaning": "Yes" if data.fridge_cleaning else "No",
             "range_hood_cleaning": "Yes" if data.range_hood_cleaning else "No",
             "garage_cleaning": "Yes" if data.garage_cleaning else "No",
+
+            # ✅ New carpet fields
+            "carpet_bedroom_count": data.carpet_bedroom_count,
+            "carpet_mainroom_count": data.carpet_mainroom_count,
+
             "status": "Quote Only",
             "pdf_link": pdf_link,
             "booking_url": booking_url,
