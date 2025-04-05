@@ -119,13 +119,6 @@ import uuid
 import json
 import requests
 
-# 🔐 These must be defined/imported somewhere securely in your project
-# airtable_api_key = ...
-# airtable_base_id = ...
-# table_name = ...
-# GPT_PROMPT = ...
-# client = openai.Client() or similar
-
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
@@ -253,7 +246,16 @@ def extract_properties_from_gpt4(message: str, log: str):
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        # ✅ Fallback mapping for booleans (e.g. checkbox detection)
+        # ✅ Normalize 'furnished' values to match Airtable single-select
+        for prop in props:
+            if prop["property"] == "furnished":
+                value = str(prop["value"]).strip().lower()
+                if value in ["yes", "furnished", "true", "1"]:
+                    prop["value"] = "Furnished"
+                elif value in ["no", "unfurnished", "false", "0"]:
+                    prop["value"] = "Unfurnished"
+
+        # ✅ Fallback mapping for booleans
         checkbox_keywords = {
             "oven_cleaning": ["oven"],
             "balcony_cleaning": ["balcony"],
@@ -318,7 +320,6 @@ def extract_properties_from_gpt4(message: str, log: str):
 
 
 def extract_suburb_from_text(text):
-    # 🧠 Placeholder suburb extractor: grabs first capitalized word
     words = text.split()
     for i in range(len(words)):
         if words[i][0].isupper() and words[i].isalpha():
@@ -333,6 +334,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 
 #---route---
