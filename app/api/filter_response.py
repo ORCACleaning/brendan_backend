@@ -121,8 +121,18 @@ def get_next_quote_id(prefix="VC"):
         "fields[]": "quote_id",
         "pageSize": 100
     }
-    response = requests.get(url, headers=headers, params=params)
-    records = response.json().get("records", [])
+    records = []
+    offset = None
+    while True:
+        if offset:
+            params["offset"] = offset
+        response = requests.get(url, headers=headers, params=params)
+        data = response.json()
+        records.extend(data.get("records", []))
+        offset = data.get("offset")
+        if not offset:
+            break
+
     numbers = []
     for r in records:
         try:
