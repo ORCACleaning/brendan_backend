@@ -127,6 +127,10 @@ Once all fields are complete, say:
 import uuid
 import json
 import requests
+import re
+
+# 🔐 Injected environment config assumed
+from app.services.env import airtable_api_key, airtable_base_id, table_name, client, GPT_PROMPT
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
@@ -245,77 +249,71 @@ def extract_properties_from_gpt4(message: str, log: str):
         print("📝 RAW GPT RESPONSE:\n", raw)
 
         raw = raw.replace("```json", "").replace("```", "").strip()
-
         if not raw.startswith("{"):
             print("❌ Response didn't start with JSON. Returning fallback.")
             return [], "Oops, I wasn’t sure how to respond to that. Could you rephrase or give me more detail?"
 
         parsed = json.loads(raw)
-
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        # ✅ Normalize 'furnished' values to match Airtable single-select
+        # Normalize 'furnished' value
         for prop in props:
             if prop["property"] == "furnished":
-                value = str(prop["value"]).strip().lower()
-                if value in ["yes", "furnished", "true", "1", "furnished"]:
-                    prop["value"] = "Furnished"
-                elif value in ["no", "unfurnished", "false", "0"]:
-                    prop["value"] = "Unfurnished"
+                val = str(prop["value"]).strip().lower()
+                prop["value"] = "Furnished" if val in ["yes", "furnished", "true", "1"] else "Unfurnished"
 
-        # ✅ Fallback mapping for booleans
-        checkbox_keywords = {
+        # Fallbacks
+        message_lower = message.lower()
+        fallback_props = []
+        existing = [p["property"] for p in props]
+
+        # 🧼 Carpet cleaning fallback (bedroom + main room)
+        if "carpet_bedroom_count" not in existing:
+            match = re.search(r"(\d+)\s*(bedrooms?|rooms?)\s*.*carpet", message_lower)
+            if match:
+                fallback_props.append({"property": "carpet_bedroom_count", "value": int(match.group(1))})
+
+        if "carpet_mainroom_count" not in existing:
+            match = re.search(r"(\d+)\s*(living|main).*carpet", message_lower)
+            if match:
+                fallback_props.append({"property": "carpet_mainroom_count", "value": int(match.group(1))})
+
+        # Basic keywords
+        keyword_booleans = {
             "oven_cleaning": ["oven"],
             "balcony_cleaning": ["balcony"],
             "window_cleaning": ["window"],
             "weekend_cleaning": ["weekend"],
             "garage_cleaning": ["garage"],
-            "carpet_cleaning": ["carpet"],
             "upholstery_cleaning": ["upholstery", "couch", "sofa"],
             "blind_cleaning": ["blind", "curtain"]
         }
 
-        message_lower = message.lower()
-        fallback_props = []
-        existing_fields = [p["property"] for p in props if "property" in p]
-
-        for field, keywords in checkbox_keywords.items():
-            if field not in existing_fields and any(k in message_lower for k in keywords):
+        for field, words in keyword_booleans.items():
+            if field not in existing and any(w in message_lower for w in words):
                 fallback_props.append({"property": field, "value": True})
 
-        # ✅ Add numeric parsing fallback
-        if "bedrooms_v2" not in existing_fields:
-            if "1 bed" in message_lower or "1bed" in message_lower:
-                fallback_props.append({"property": "bedrooms_v2", "value": 1})
-            elif "2 bed" in message_lower:
-                fallback_props.append({"property": "bedrooms_v2", "value": 2})
-            elif "3 bed" in message_lower:
-                fallback_props.append({"property": "bedrooms_v2", "value": 3})
-            elif "4 bed" in message_lower:
-                fallback_props.append({"property": "bedrooms_v2", "value": 4})
-            elif "5 bed" in message_lower:
-                fallback_props.append({"property": "bedrooms_v2", "value": 5})
+        # Rooms
+        if "bedrooms_v2" not in existing:
+            bed_match = re.search(r"(\d+)\s*bed", message_lower)
+            if bed_match:
+                fallback_props.append({"property": "bedrooms_v2", "value": int(bed_match.group(1))})
 
-        if "bathrooms_v2" not in existing_fields:
-            if "1 bath" in message_lower:
-                fallback_props.append({"property": "bathrooms_v2", "value": 1})
-            elif "2 bath" in message_lower:
-                fallback_props.append({"property": "bathrooms_v2", "value": 2})
-            elif "3 bath" in message_lower:
-                fallback_props.append({"property": "bathrooms_v2", "value": 3})
+        if "bathrooms_v2" not in existing:
+            bath_match = re.search(r"(\d+)\s*bath", message_lower)
+            if bath_match:
+                fallback_props.append({"property": "bathrooms_v2", "value": int(bath_match.group(1))})
 
-        if "window_count" not in existing_fields:
-            import re
-            match = re.search(r"(\d+)\s*windows?", message_lower)
-            if match:
-                fallback_props.append({"property": "window_count", "value": int(match.group(1))})
+        if "window_count" not in existing:
+            window_match = re.search(r"(\d+)\s*windows?", message_lower)
+            if window_match:
+                fallback_props.append({"property": "window_count", "value": int(window_match.group(1))})
 
-        if "suburb" not in existing_fields:
+        if "suburb" not in existing:
             fallback_props.append({"property": "suburb", "value": extract_suburb_from_text(message)})
 
         all_props = props + fallback_props
-
         print("✅ Parsed + Fallback Props:", json.dumps(all_props, indent=2))
         return all_props, reply or "All good! Let me know if there's anything extra you'd like added."
 
@@ -343,7 +341,6 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
-
 
 
 #---route---
@@ -428,7 +425,7 @@ async def filter_response_entry(request: Request):
             updates = {}
 
             checkbox_fields = {
-                "oven_cleaning", "window_cleaning", "carpet_cleaning", "blind_cleaning",
+                "oven_cleaning", "window_cleaning", "blind_cleaning",
                 "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
                 "after_hours_cleaning", "weekend_cleaning", "is_property_manager"
             }
@@ -464,6 +461,12 @@ async def filter_response_entry(request: Request):
                 except:
                     pass
 
+            # Set carpet_bedroom_count or carpet_mainroom_count to 0 if one is provided but not the other
+            if "carpet_bedroom_count" in updates and "carpet_mainroom_count" not in updates:
+                updates["carpet_mainroom_count"] = 0
+            elif "carpet_mainroom_count" in updates and "carpet_bedroom_count" not in updates:
+                updates["carpet_bedroom_count"] = 0
+
             if updates:
                 update_quote_record(record_id, updates)
 
@@ -472,8 +475,8 @@ async def filter_response_entry(request: Request):
             combined_fields = {**fields, **updates}
             required_fields = [
                 "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
-                "window_cleaning", "window_count", "carpet_cleaning", "blind_cleaning",
-                "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
+                "window_cleaning", "window_count", "carpet_bedroom_count", "carpet_mainroom_count",
+                "blind_cleaning", "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
                 "after_hours_cleaning", "weekend_cleaning", "is_property_manager", "real_estate_name"
             ]
 
