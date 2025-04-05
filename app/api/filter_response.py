@@ -389,12 +389,14 @@ async def filter_response_entry(request: Request):
                         updates[prop] = val
 
             # ✅ Convert window count into window_cleaning boolean
-            if "window_count" in updates:
+            # ✅ Set window_cleaning from window_count IF not already explicitly set
+            if "window_count" in updates and "window_cleaning" not in updates:
                 try:
                     count = int(updates["window_count"])
                     updates["window_cleaning"] = count > 0
                 except:
                     pass
+
 
             # ✅ Normalize checkboxes (string → boolean)
             checkbox_fields = {
