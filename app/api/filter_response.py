@@ -130,7 +130,23 @@ import requests
 import re
 
 # 🔐 Injected environment config assumed
-from app.services.env import airtable_api_key, airtable_base_id, table_name, client, GPT_PROMPT
+import os
+import json
+from dotenv import load_dotenv
+from openai import OpenAI
+
+# ✅ Load .env variables
+load_dotenv()
+
+# ✅ Airtable & OpenAI setup
+airtable_api_key = os.getenv("AIRTABLE_API_KEY")
+airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
+table_name = "Vacate Quotes"
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+# ✅ Brendan's GPT Prompt
+GPT_PROMPT = """<paste your prompt here>"""
+
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
