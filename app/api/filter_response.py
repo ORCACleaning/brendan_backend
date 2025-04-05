@@ -193,7 +193,6 @@ def create_new_quote(session_id):
     }
     res = requests.post(url, headers=headers, json=data)
     record_id = res.json().get("id")
-
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
     return quote_id, record_id
 
@@ -219,9 +218,7 @@ def update_quote_record(record_id, fields):
         "Authorization": f"Bearer {airtable_api_key}",
         "Content-Type": "application/json"
     }
-
     res = requests.patch(url, headers=headers, json={"fields": fields})
-
     if not res.ok:
         print("❌ Airtable update failed:", res.status_code, res.text)
     else:
@@ -231,16 +228,13 @@ def append_message_log(record_id, new_message, sender):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
     res = requests.get(url, headers=headers).json()
-
     current_log = res.get("fields", {}).get("message_log", "")
     new_log = f"{current_log}\n{sender.upper()}: {new_message}".strip()[-5000:]
-
     update_quote_record(record_id, {"message_log": new_log})
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
         print("🧠 Calling GPT-4 to extract properties...")
-
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -254,7 +248,6 @@ def extract_properties_from_gpt4(message: str, log: str):
 
         raw = response.choices[0].message.content.strip()
         print("📝 RAW GPT RESPONSE:\n", raw)
-
         raw = raw.replace("```json", "").replace("```", "").strip()
         if not raw.startswith("{"):
             print("❌ Response didn't start with JSON. Returning fallback.")
@@ -263,7 +256,6 @@ def extract_properties_from_gpt4(message: str, log: str):
         parsed = json.loads(raw)
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
-
         for prop in props:
             if prop["property"] == "furnished":
                 val = str(prop["value"]).strip().lower()
@@ -273,15 +265,20 @@ def extract_properties_from_gpt4(message: str, log: str):
         fallback_props = []
         existing = [p["property"] for p in props]
 
-        if "carpet_bedroom_count" not in existing:
-            match = re.search(r"(\d+)\s*(bedrooms?|rooms?)\s*.*carpet", message_lower)
-            if match:
-                fallback_props.append({"property": "carpet_bedroom_count", "value": int(match.group(1))})
+        carpet_keywords = {
+            "carpet_bedroom_count": r"(\d+)\s*(bed(room)?s?)\s*.*carpet",
+            "carpet_mainroom_count": r"(\d+)\s*(living|main).*carpet",
+            "carpet_study_count": r"(\d+)\s*stud(y|ies).*carpet",
+            "carpet_halway_count": r"(\d+)\s*hall(way)?s?.*carpet",
+            "carpet_stairs_count": r"(\d+)\s*stairs?.*carpet",
+            "carpet_other_count": r"(\d+)\s*(other|misc).*carpet"
+        }
 
-        if "carpet_mainroom_count" not in existing:
-            match = re.search(r"(\d+)\s*(living|main).*carpet", message_lower)
-            if match:
-                fallback_props.append({"property": "carpet_mainroom_count", "value": int(match.group(1))})
+        for field, pattern in carpet_keywords.items():
+            if field not in existing:
+                match = re.search(pattern, message_lower)
+                if match:
+                    fallback_props.append({"property": field, "value": int(match.group(1))})
 
         keyword_booleans = {
             "oven_cleaning": ["oven"],
