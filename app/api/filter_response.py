@@ -111,10 +111,12 @@ Once all fields are complete, say:
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
 
-#---Utilities---
+# --- Utilities ---
+
 import uuid
 import json
 import requests
+
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
@@ -166,10 +168,8 @@ def create_new_quote(session_id):
     }
     res = requests.post(url, headers=headers, json=data)
     record_id = res.json().get("id")
-    
-    # Initialize message log
-    append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
+    append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
     return quote_id, record_id
 
 
@@ -210,12 +210,6 @@ def append_message_log(record_id, new_message, sender):
     update_quote_record(record_id, {"message_log": new_log})
 
 
-def get_quote_by_record_id(record_id):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
-    headers = {"Authorization": f"Bearer {airtable_api_key}"}
-    return requests.get(url, headers=headers).json()
-
-
 def extract_properties_from_gpt4(message: str, log: str):
     try:
         response = client.chat.completions.create(
@@ -245,6 +239,12 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
+
+# ✅ Abuse logic cleanup for route only:
+# On first offense → set abuse_warning_issued = True
+# On second offense → set quote_stage = "Chat Banned" (leave it as "Gathering Info" before that)
+
 #---Route---
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -267,11 +267,12 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # ✅ Abuse Filter Logic
+        # ✅ ABUSE FILTER
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
-            append_message_log(record_id, message, "user")
+
+            append_message_log(record_id, message, "user")  # Always log the user's message
 
             if abuse_warned:
                 bot_reply = (
@@ -281,26 +282,28 @@ async def filter_response_entry(request: Request):
                 update_quote_record(record_id, {
                     "quote_stage": "Chat Banned",
                     "status": "Chat Banned",
-                    "abuse_warning_issued": True
+                    "abuse_warning_issued": "True"  # ✅ Mark as issued (even if previously was)
                 })
                 append_message_log(record_id, bot_reply, "brendan")
-
                 return JSONResponse(content={
                     "response": bot_reply,
                     "properties": [],
                     "next_actions": []
                 })
+
             else:
                 bot_reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
-                update_quote_record(record_id, {"abuse_warning_issued": True})
+                update_quote_record(record_id, {
+                    "abuse_warning_issued": "True"  # ✅ ✅ THIS is what was missing
+                })
                 append_message_log(record_id, bot_reply, "brendan")
-
                 return JSONResponse(content={
                     "response": bot_reply,
                     "properties": [],
                     "next_actions": []
                 })
 
+        # ✅ Block chat if banned
         if stage == "Chat Banned":
             return JSONResponse(content={
                 "response": (
@@ -311,6 +314,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
+        # ✅ Init response
         if message == "__init__":
             intro = (
                 "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
@@ -342,7 +346,6 @@ async def filter_response_entry(request: Request):
                 updates["window_cleaning"] = "Yes" if updates["window_count"] > 0 else "No"
 
             if updates:
-                print(f"📝 Updating Airtable Record {record_id} with: {json.dumps(updates)}")
                 update_quote_record(record_id, updates)
 
             append_message_log(record_id, reply, "brendan")
@@ -366,7 +369,6 @@ async def filter_response_entry(request: Request):
                     "next_actions": []
                 })
             else:
-                update_quote_record(record_id, {"quote_stage": "Gathering Info"})
                 return JSONResponse(content={
                     "properties": props,
                     "response": reply or "Got that. Anything else I should know?",
