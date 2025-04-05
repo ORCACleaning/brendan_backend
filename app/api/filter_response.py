@@ -238,7 +238,7 @@ async def filter_response_entry(request: Request):
         # ✅ FIXED Abuse Filter Logic
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
-            abuse_warned = fields.get("abuse_warning_issued", False)
+            abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
             if isinstance(abuse_warned, str):  # interpret string "True" safely
                 abuse_warned = abuse_warned.lower() == "true"
 
