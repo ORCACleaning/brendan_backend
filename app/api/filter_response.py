@@ -166,7 +166,12 @@ def create_new_quote(session_id):
         }
     }
     res = requests.post(url, headers=headers, json=data)
-    return quote_id, res.json().get("id")
+    record_id = res.json().get("id")
+    
+    # ✅ Force-initialize message log so it's ready
+    append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
+
+    return quote_id, record_id
 
 
 def get_quote_by_session(session_id):
@@ -265,13 +270,10 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # ✅ FIXED Abuse Filter Logic
+        # ✅ Abuse Filter Logic
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
-            if isinstance(abuse_warned, str):  # interpret string "True" safely
-                abuse_warned = abuse_warned.lower() == "true"
-
             if abuse_warned:
                 update_quote_record(record_id, {"quote_stage": "Chat Banned"})
                 return JSONResponse(content={
