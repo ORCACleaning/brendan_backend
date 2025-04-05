@@ -21,7 +21,9 @@ table_name = "Vacate Quotes"
 inflector = inflect.engine()
 
 GPT_PROMPT = """
-You must ALWAYS reply in valid JSON like this:
+🚨 You must ALWAYS reply in **valid JSON only** — no exceptions.
+
+Example:
 {
   "properties": [
     {"property": "suburb", "value": "Mandurah"},
