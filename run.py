@@ -79,7 +79,8 @@ if __name__ == "__main__":
         "bathrooms": 2,
         "furnished": "Yes",
         "oven_cleaning": True,
-        "carpet_cleaning": False,
+        "carpet_bedroom_count": 2,  # ✅ Updated
+        "carpet_mainroom_count": 1,  # ✅ Updated
         "wall_cleaning": True,
         "balcony_cleaning": False,
         "window_cleaning": True,
@@ -104,6 +105,7 @@ if __name__ == "__main__":
         "note": "Includes 30–60 min for special request",
         "logo_base64": open("app/static/orca_logo.b64.txt", "r").read(),
     }
+
 
     output_path = generate_quote_pdf(data)
     print(f"✅ PDF generated at: {output_path}")
