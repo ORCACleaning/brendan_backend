@@ -274,23 +274,28 @@ async def filter_response_entry(request: Request):
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
+    
+            # Log the user's abusive message
+            append_message_log(record_id, message, "user")
+
             if abuse_warned:
+                bot_reply = (
+                    "We’ve had to close this chat due to repeated inappropriate language. "
+                    "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
+                )
                 update_quote_record(record_id, {"quote_stage": "Chat Banned"})
-                return JSONResponse(content={
-                    "response": (
-                        "We’ve had to close this chat due to repeated inappropriate language. "
-                        "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
-                    ),
-                    "properties": [],
-                    "next_actions": []
-                })
             else:
+                bot_reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
                 update_quote_record(record_id, {"abuse_warning_issued": True})
-                return JSONResponse(content={
-                    "response": "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat.",
-                    "properties": [],
-                    "next_actions": []
-                })
+
+            append_message_log(record_id, bot_reply, "brendan")
+
+            return JSONResponse(content={
+                "response": bot_reply,
+                "properties": [],
+                "next_actions": []
+            })
+
 
         if stage == "Chat Banned":
             return JSONResponse(content={
