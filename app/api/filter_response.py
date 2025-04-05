@@ -345,7 +345,7 @@ async def filter_response_entry(request: Request):
                     "next_actions": []
                 })
 
-        # ✅ Block banned chats
+        # ✅ Chat already banned
         if stage == "Chat Banned":
             return JSONResponse(content={
                 "response": (
@@ -370,7 +370,6 @@ async def filter_response_entry(request: Request):
         # ✅ Log user message
         append_message_log(record_id, message, "user")
 
-        # ✅ Gather Quote Info
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {}
@@ -379,7 +378,6 @@ async def filter_response_entry(request: Request):
                 if isinstance(p, dict) and "property" in p and "value" in p:
                     prop = p["property"]
                     val = p["value"]
-
                     if prop in ["special_request_minutes_min", "special_request_minutes_max"]:
                         try:
                             updates[prop] = int(val)
@@ -388,8 +386,7 @@ async def filter_response_entry(request: Request):
                     else:
                         updates[prop] = val
 
-            # ✅ Convert window count into window_cleaning boolean
-            # ✅ Set window_cleaning from window_count IF not already explicitly set
+            # ✅ Only set window_cleaning from window_count if not explicitly set
             if "window_count" in updates and "window_cleaning" not in updates:
                 try:
                     count = int(updates["window_count"])
@@ -397,28 +394,23 @@ async def filter_response_entry(request: Request):
                 except:
                     pass
 
-
-            # ✅ Normalize checkboxes (string → boolean)
+            # ✅ Normalize checkbox values to boolean
             checkbox_fields = {
                 "oven_cleaning", "window_cleaning", "carpet_cleaning", "blind_cleaning",
                 "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
                 "after_hours_cleaning", "weekend_cleaning", "is_property_manager"
             }
+
             for field in checkbox_fields:
                 if field in updates:
-                    val = updates[field]
-                    if isinstance(val, str):
-                        updates[field] = val.strip().lower() in ["yes", "true", "1"]
-                    else:
-                        updates[field] = bool(val)
+                    val = str(updates[field]).strip().lower()
+                    updates[field] = val in ["yes", "true", "1"]
 
-            # ✅ Save updates
             if updates:
                 update_quote_record(record_id, updates)
 
             append_message_log(record_id, reply, "brendan")
 
-            # ✅ Check for completeness
             combined_fields = {**fields, **updates}
             required_fields = [
                 "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
@@ -443,7 +435,6 @@ async def filter_response_entry(request: Request):
                     "next_actions": []
                 })
 
-        # ✅ Quote Calculated Stage
         elif stage == "Quote Calculated":
             pdf = fields.get("pdf_link", "#")
             booking = fields.get("booking_url", "#")
@@ -453,7 +444,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": generate_next_actions()
             })
 
-        # ✅ Personal Info Stage
         elif stage == "Gathering Personal Info":
             return JSONResponse(content={
                 "properties": [],
@@ -461,7 +451,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # ✅ Final fallback
         return JSONResponse(content={
             "properties": [],
             "response": "All done and dusted! Let me know if you'd like to tweak anything.",
@@ -471,5 +460,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         print("🔥 Unexpected error:", e)
         return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
-
-      
