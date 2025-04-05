@@ -250,7 +250,7 @@ def extract_properties_from_gpt4(message: str, log: str):
         for prop in props:
             if prop["property"] == "furnished":
                 value = str(prop["value"]).strip().lower()
-                if value in ["yes", "furnished", "true", "1"]:
+                if value in ["yes", "furnished", "true", "1", "furnished"]:
                     prop["value"] = "Furnished"
                 elif value in ["no", "unfurnished", "false", "0"]:
                     prop["value"] = "Unfurnished"
