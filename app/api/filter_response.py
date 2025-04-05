@@ -248,7 +248,8 @@ def extract_properties_from_gpt4(message: str, log: str):
                 }
             ],
             max_tokens=700,
-            temperature=0.4
+            temperature=0.4,
+            response_format="json"
         )
         raw = response.choices[0].message.content.strip()
         print("📝 RAW GPT RESPONSE:\n", raw)
@@ -324,7 +325,8 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
-  
+
+
 #---route---
 
 @router.post("/filter-response")
