@@ -217,6 +217,8 @@ def append_message_log(record_id, new_message, sender):
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
+        print("🧠 Calling GPT-4 to extract properties...")
+
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -224,16 +226,36 @@ def extract_properties_from_gpt4(message: str, log: str):
                 {"role": "system", "content": f"Conversation so far:\n{log}"},
                 {"role": "user", "content": message}
             ],
-            max_tokens=500
+            max_tokens=700,
+            temperature=0.4
         )
-        content = response.choices[0].message.content.strip()
-        content = content.replace("```json", "").replace("```", "").strip()
-        if not content.startswith("{"):
+
+        raw = response.choices[0].message.content.strip()
+        print("📝 RAW GPT RESPONSE:\n", raw)
+
+        # Clean and normalize JSON block
+        raw = raw.replace("```json", "").replace("```", "").strip()
+
+        if not raw.startswith("{"):
+            print("❌ Response didn't start with JSON. Returning fallback.")
             return [], "Oops, I wasn’t sure how to respond to that. Could you rephrase or give me more detail?"
-        result_json = json.loads(content)
-        return result_json.get("properties", []), result_json.get("response", "")
+
+        parsed = json.loads(raw)
+
+        props = parsed.get("properties", [])
+        reply = parsed.get("response", "")
+
+        print("✅ Parsed GPT Properties:", json.dumps(props, indent=2))
+        print("✅ Parsed GPT Reply:", reply)
+
+        return props, reply or "All good! Let me know if there's anything extra you'd like added."
+    
+    except json.JSONDecodeError as jde:
+        print("❌ JSON parsing failed:", jde)
+        return [], "Oops — I had trouble understanding that. Mind rephrasing?"
+
     except Exception as e:
-        print("❌ GPT parsing error:", e)
+        print("🔥 Unexpected GPT extraction error:", e)
         return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
 
 
