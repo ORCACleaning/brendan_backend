@@ -286,10 +286,19 @@ async def filter_response_entry(request: Request):
 
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
-            updates = {}
-            for p in props:
-                if isinstance(p, dict) and "property" in p and "value" in p:
-                    updates[p["property"]] = p["value"]
+        updates = {}
+        for p in props:
+            if isinstance(p, dict) and "property" in p and "value" in p:
+                prop = p["property"]
+                val = p["value"]
+                if prop in ["special_request_minutes_min", "special_request_minutes_max"]:
+                    try:
+                         updates[prop] = int(val)
+                    except:
+                        continue
+                else:
+                    updates[prop] = val
+
 
             # Derive window_cleaning from window_count
             if "window_count" in updates:
