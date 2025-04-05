@@ -400,8 +400,25 @@ async def filter_response_entry(request: Request):
                     val = str(updates[field]).strip().lower()
                     updates[field] = val in ["yes", "true", "1"]
 
+            checkbox_fields = {
+                "oven_cleaning",
+                "balcony_cleaning",
+                "window_cleaning",
+                "carpet_cleaning",
+                "garage_cleaning",
+                "blind_cleaning",
+                "upholstery_cleaning",
+                "after_hours_cleaning",
+                "weekend_cleaning",
+            }
+
+            for k, v in updates.items():
+                if k in checkbox_fields:
+                    updates[k] = bool(v)
+
             if updates:
                 update_quote_record(record_id, updates)
+
 
             append_message_log(record_id, reply, "brendan")
 
