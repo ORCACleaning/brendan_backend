@@ -119,6 +119,12 @@ import uuid
 import json
 import requests
 
+# 🔐 These must be defined/imported somewhere securely in your project
+# airtable_api_key = ...
+# airtable_base_id = ...
+# table_name = ...
+# GPT_PROMPT = ...
+# client = openai.Client() or similar
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
@@ -198,9 +204,9 @@ def update_quote_record(record_id, fields):
         "Authorization": f"Bearer {airtable_api_key}",
         "Content-Type": "application/json"
     }
+
     res = requests.patch(url, headers=headers, json={"fields": fields})
 
-    # ✅ Log Airtable response for debugging
     if not res.ok:
         print("❌ Airtable update failed:", res.status_code, res.text)
     else:
@@ -247,7 +253,7 @@ def extract_properties_from_gpt4(message: str, log: str):
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        # ✅ Keyword-based fallback mapping
+        # ✅ Fallback mapping for booleans (e.g. checkbox detection)
         checkbox_keywords = {
             "oven_cleaning": ["oven"],
             "balcony_cleaning": ["balcony"],
@@ -267,6 +273,36 @@ def extract_properties_from_gpt4(message: str, log: str):
             if field not in existing_fields and any(k in message_lower for k in keywords):
                 fallback_props.append({"property": field, "value": True})
 
+        # ✅ Add numeric parsing fallback
+        if "bedrooms_v2" not in existing_fields:
+            if "1 bed" in message_lower or "1bed" in message_lower:
+                fallback_props.append({"property": "bedrooms_v2", "value": 1})
+            elif "2 bed" in message_lower:
+                fallback_props.append({"property": "bedrooms_v2", "value": 2})
+            elif "3 bed" in message_lower:
+                fallback_props.append({"property": "bedrooms_v2", "value": 3})
+            elif "4 bed" in message_lower:
+                fallback_props.append({"property": "bedrooms_v2", "value": 4})
+            elif "5 bed" in message_lower:
+                fallback_props.append({"property": "bedrooms_v2", "value": 5})
+
+        if "bathrooms_v2" not in existing_fields:
+            if "1 bath" in message_lower:
+                fallback_props.append({"property": "bathrooms_v2", "value": 1})
+            elif "2 bath" in message_lower:
+                fallback_props.append({"property": "bathrooms_v2", "value": 2})
+            elif "3 bath" in message_lower:
+                fallback_props.append({"property": "bathrooms_v2", "value": 3})
+
+        if "window_count" not in existing_fields:
+            import re
+            match = re.search(r"(\d+)\s*windows?", message_lower)
+            if match:
+                fallback_props.append({"property": "window_count", "value": int(match.group(1))})
+
+        if "suburb" not in existing_fields:
+            fallback_props.append({"property": "suburb", "value": extract_suburb_from_text(message)})
+
         all_props = props + fallback_props
 
         print("✅ Parsed + Fallback Props:", json.dumps(all_props, indent=2))
@@ -281,6 +317,15 @@ def extract_properties_from_gpt4(message: str, log: str):
         return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
 
 
+def extract_suburb_from_text(text):
+    # 🧠 Placeholder suburb extractor: grabs first capitalized word
+    words = text.split()
+    for i in range(len(words)):
+        if words[i][0].isupper() and words[i].isalpha():
+            return words[i]
+    return "Unknown"
+
+
 def generate_next_actions():
     return [
         {"action": "proceed_booking", "label": "Proceed to Booking"},
@@ -288,6 +333,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 #---route---
 
