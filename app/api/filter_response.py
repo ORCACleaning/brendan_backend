@@ -236,7 +236,7 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # Abuse Filter
+        # ✅ Moved quote_data ABOVE abuse filter
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             if fields.get("abuse_warning_issued"):
@@ -252,7 +252,7 @@ async def filter_response_entry(request: Request):
                     "properties": [], "next_actions": []
                 })
 
-        if quote_data and quote_data["stage"] == "Chat Banned":
+        if stage == "Chat Banned":
             return JSONResponse(content={
                 "response": "This chat’s been closed due to inappropriate messages. If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388.",
                 "properties": [], "next_actions": []
