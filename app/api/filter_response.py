@@ -113,7 +113,9 @@ Once all fields are complete, say:
 
 # --- Utilities ---
 
-import uuid  # ✅ Ensure this is at the top
+import uuid
+import json
+import requests
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
@@ -147,6 +149,7 @@ def get_next_quote_id(prefix="VC"):
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
+
 def create_new_quote(session_id):
     session_id = session_id or str(uuid.uuid4())
     quote_id = get_next_quote_id("VC")
@@ -165,6 +168,7 @@ def create_new_quote(session_id):
     res = requests.post(url, headers=headers, json=data)
     return quote_id, res.json().get("id")
 
+
 def get_quote_by_session(session_id):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
@@ -181,6 +185,7 @@ def get_quote_by_session(session_id):
         }
     return None
 
+
 def update_quote_record(record_id, fields):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
     headers = {
@@ -189,15 +194,23 @@ def update_quote_record(record_id, fields):
     }
     requests.patch(url, headers=headers, json={"fields": fields})
 
+
 def append_message_log(record_id, new_message, sender):
-    current = get_quote_by_record_id(record_id)["fields"].get("message_log", "")
-    updated = f"{current}\n{sender.upper()}: {new_message}".strip()[-5000:]
-    update_quote_record(record_id, {"message_log": updated})
+    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
+    headers = {"Authorization": f"Bearer {airtable_api_key}"}
+    res = requests.get(url, headers=headers).json()
+
+    current_log = res.get("fields", {}).get("message_log", "")
+    new_log = f"{current_log}\n{sender.upper()}: {new_message}".strip()[-5000:]
+
+    update_quote_record(record_id, {"message_log": new_log})
+
 
 def get_quote_by_record_id(record_id):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
     return requests.get(url, headers=headers).json()
+
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
@@ -220,6 +233,7 @@ def extract_properties_from_gpt4(message: str, log: str):
         print("❌ GPT parsing error:", e)
         return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
 
+
 def generate_next_actions():
     return [
         {"action": "proceed_booking", "label": "Proceed to Booking"},
@@ -227,7 +241,6 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
-
 
 
 # --- Route ---
