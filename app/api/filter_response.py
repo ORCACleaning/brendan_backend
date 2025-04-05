@@ -195,18 +195,12 @@ def extract_properties_from_gpt4(message: str, log: str):
             ],
             max_tokens=500
         )
-        print("📥 Raw OpenAI Response:", response)
         content = response.choices[0].message.content.strip()
-        print("📤 Raw GPT Output:", content)
         content = content.replace("```json", "").replace("```", "").strip()
-
         if not content.startswith("{"):
-            print("⚠️ GPT fallback - not JSON:", content)
             return [], "Oops, I wasn’t sure how to respond to that. Could you rephrase or give me more detail?"
-
         result_json = json.loads(content)
         return result_json.get("properties", []), result_json.get("response", "")
-
     except Exception as e:
         print("❌ GPT parsing error:", e)
         return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
@@ -218,6 +212,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 # --- Route ---
 
 @router.post("/filter-response")
@@ -225,40 +220,10 @@ async def filter_response_entry(request: Request):
     try:
         body = await request.json()
         message = body.get("message", "").strip()
-        banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
-        if any(word in message.lower() for word in banned_words):
-            if quote_data:
-                if fields.get("abuse_warning_issued"):
-                    update_quote_record(record_id, {"quote_stage": "Chat Banned"})
-                    return JSONResponse(content={
-                        "response": (
-                            "We’ve had to close this chat due to repeated inappropriate language. "
-                            "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
-                        ),
-                        "properties": [],
-                        "next_actions": []
-                    })
-                else:
-                    update_quote_record(record_id, {"abuse_warning_issued": True})
-                    return JSONResponse(content={
-                        "response": "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat.",
-                        "properties": [],
-                        "next_actions": []
-                    })
-
         session_id = body.get("session_id")
 
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
-
-        if message == "__init__":
-            intro = (
-                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
-                "No sign-up, no spam, just help. We also respect your privacy — you can read our policy here: "
-                "https://orcacleaning.com.au/privacy-policy\n\n"
-                "First up — what suburb’s the property in?"
-            )
-            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
 
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
@@ -271,39 +236,56 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        if quote_data and quote_data["stage"] == "Chat Banned":
-          return JSONResponse(content={
-                "response": (
-                    "This chat’s been closed due to inappropriate messages. "
-                    "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388."
-                ),
-                "properties": [],
-                "next_actions": []
-          })
+        # Abuse Filter
+        banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
+        if any(word in message.lower() for word in banned_words):
+            if fields.get("abuse_warning_issued"):
+                update_quote_record(record_id, {"quote_stage": "Chat Banned"})
+                return JSONResponse(content={
+                    "response": "We’ve had to close this chat due to repeated inappropriate language. You can still contact us at info@orcacleaning.com.au or call 1300 918 388.",
+                    "properties": [], "next_actions": []
+                })
+            else:
+                update_quote_record(record_id, {"abuse_warning_issued": True})
+                return JSONResponse(content={
+                    "response": "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat.",
+                    "properties": [], "next_actions": []
+                })
 
+        if quote_data and quote_data["stage"] == "Chat Banned":
+            return JSONResponse(content={
+                "response": "This chat’s been closed due to inappropriate messages. If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388.",
+                "properties": [], "next_actions": []
+            })
+
+        if message == "__init__":
+            intro = (
+                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
+                "No sign-up, no spam, just help. We also respect your privacy — you can read our policy here: "
+                "https://orcacleaning.com.au/privacy-policy\n\n"
+                "First up — what suburb’s the property in?"
+            )
+            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
 
         append_message_log(record_id, message, "user")
 
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
-        updates = {}
-        for p in props:
-            if isinstance(p, dict) and "property" in p and "value" in p:
-                prop = p["property"]
-                val = p["value"]
-                if prop in ["special_request_minutes_min", "special_request_minutes_max"]:
-                    try:
-                         updates[prop] = int(val)
-                    except:
-                        continue
-                else:
-                    updates[prop] = val
+            updates = {}
+            for p in props:
+                if isinstance(p, dict) and "property" in p and "value" in p:
+                    prop = p["property"]
+                    val = p["value"]
+                    if prop in ["special_request_minutes_min", "special_request_minutes_max"]:
+                        try:
+                            updates[prop] = int(val)
+                        except:
+                            continue
+                    else:
+                        updates[prop] = val
 
-
-            # Derive window_cleaning from window_count
             if "window_count" in updates:
                 updates["window_cleaning"] = "Yes" if updates["window_count"] > 0 else "No"
-
 
             if updates:
                 print(f"📝 Updating Airtable Record {record_id} with: {json.dumps(updates)}")
