@@ -272,8 +272,7 @@ async def filter_response_entry(request: Request):
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
-
-            append_message_log(record_id, message, "user")  # Always log the user's message
+            append_message_log(record_id, message, "user")
 
             if abuse_warned:
                 bot_reply = (
@@ -282,8 +281,7 @@ async def filter_response_entry(request: Request):
                 )
                 update_quote_record(record_id, {
                     "quote_stage": "Chat Banned",
-                    "status": "Chat Banned",
-                    "abuse_warning_issued": "True"  # ✅ Mark as issued (even if previously was)
+                    "abuse_warning_issued": "True"
                 })
                 append_message_log(record_id, bot_reply, "brendan")
                 return JSONResponse(content={
@@ -291,11 +289,10 @@ async def filter_response_entry(request: Request):
                     "properties": [],
                     "next_actions": []
                 })
-
             else:
                 bot_reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
                 update_quote_record(record_id, {
-                    "abuse_warning_issued": "True"  # ✅ ✅ THIS is what was missing
+                    "abuse_warning_issued": "True"
                 })
                 append_message_log(record_id, bot_reply, "brendan")
                 return JSONResponse(content={
@@ -361,8 +358,7 @@ async def filter_response_entry(request: Request):
 
             if all(field in combined_fields for field in required_fields):
                 update_quote_record(record_id, {
-                    "quote_stage": "Quote Calculated",
-                    "status": "Quote Calculated"
+                    "quote_stage": "Quote Calculated"
                 })
                 return JSONResponse(content={
                     "properties": props,
