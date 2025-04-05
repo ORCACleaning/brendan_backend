@@ -214,7 +214,6 @@ def generate_next_actions():
     ]
 
 # --- Route ---
-
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -240,6 +239,9 @@ async def filter_response_entry(request: Request):
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = fields.get("abuse_warning_issued", False)
+            if isinstance(abuse_warned, str):  # interpret string "True" safely
+                abuse_warned = abuse_warned.lower() == "true"
+
             if abuse_warned:
                 update_quote_record(record_id, {"quote_stage": "Chat Banned"})
                 return JSONResponse(content={
