@@ -134,6 +134,7 @@ import re
 
 # 🔐 Injected environment config assumed
 import os
+import json
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -147,7 +148,18 @@ table_name = "Vacate Quotes"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # ✅ Brendan's GPT Prompt
-GPT_PROMPT = """<paste your prompt here>"""
+GPT_PROMPT = """🚨 You must ALWAYS reply in **valid JSON only** — no exceptions.
+
+Example:
+{
+  "properties": [
+    {"property": "suburb", "value": "Mandurah"},
+    {"property": "bedrooms_v2", "value": 2},
+    {"property": "bathrooms_v2", "value": 1}
+  ],
+  "response": "Got it, you're in Mandurah with a 2-bedroom, 1-bathroom place and 5 windows. Just to confirm, is it furnished or unfurnished?"
+}
+... [prompt continues unchanged] ..."""
 
 
 def get_next_quote_id(prefix="VC"):
@@ -249,95 +261,95 @@ def append_message_log(record_id, new_message, sender):
 
 
 def extract_properties_from_gpt4(message: str, log: str):
-    for attempt in range(2):
-        try:
-            print("\U0001f9e0 Calling GPT-4 to extract properties...")
+    try:
+        print("🧠 Calling GPT-4 to extract properties...")
 
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                messages=[
-                    {"role": "system", "content": GPT_PROMPT},
-                    {"role": "system", "content": f"Conversation so far:\n{log}"},
-                    {"role": "user", "content": message}
-                ],
-                max_tokens=700,
-                temperature=0.4
-            )
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": GPT_PROMPT},
+                {"role": "system", "content": f"Conversation so far:\n{log}"},
+                {"role": "user", "content": message}
+            ],
+            max_tokens=700,
+            temperature=0.4,
+            response_format="json"
+        )
 
-            raw = response.choices[0].message.content.strip()
-            print("📝 RAW GPT RESPONSE:\n", raw)
+        raw = response.choices[0].message.content.strip()
+        print("📝 RAW GPT RESPONSE:\n", raw)
 
-            raw = raw.replace("```json", "").replace("```", "").strip()
-            if not raw.startswith("{"):
-                raise ValueError("Non-JSON response")
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        if not raw.startswith("{"):
+            print("❌ Response didn't start with JSON. Returning fallback.")
+            return [], "Oops, I wasn’t sure how to respond to that. Could you rephrase or give me more detail?"
 
-            parsed = json.loads(raw)
-            props = parsed.get("properties", [])
-            reply = parsed.get("response", "")
+        parsed = json.loads(raw)
+        props = parsed.get("properties", [])
+        reply = parsed.get("response", "")
 
-            for prop in props:
-                if prop["property"] == "furnished":
-                    val = str(prop["value"]).strip().lower()
-                    prop["value"] = "Furnished" if val in ["yes", "furnished", "true", "1"] else "Unfurnished"
+        for prop in props:
+            if prop["property"] == "furnished":
+                val = str(prop["value"]).strip().lower()
+                prop["value"] = "Furnished" if val in ["yes", "furnished", "true", "1"] else "Unfurnished"
 
-            message_lower = message.lower()
-            fallback_props = []
-            existing = [p["property"] for p in props]
+        message_lower = message.lower()
+        fallback_props = []
+        existing = [p["property"] for p in props]
 
-            if "carpet_bedroom_count" not in existing:
-                match = re.search(r"(\d+)\s*(bedrooms?|rooms?)\s*.*carpet", message_lower)
-                if match:
-                    fallback_props.append({"property": "carpet_bedroom_count", "value": int(match.group(1))})
+        if "carpet_bedroom_count" not in existing:
+            match = re.search(r"(\d+)\s*(bedrooms?|rooms?)\s*.*carpet", message_lower)
+            if match:
+                fallback_props.append({"property": "carpet_bedroom_count", "value": int(match.group(1))})
 
-            if "carpet_mainroom_count" not in existing:
-                match = re.search(r"(\d+)\s*(living|main).*carpet", message_lower)
-                if match:
-                    fallback_props.append({"property": "carpet_mainroom_count", "value": int(match.group(1))})
+        if "carpet_mainroom_count" not in existing:
+            match = re.search(r"(\d+)\s*(living|main).*carpet", message_lower)
+            if match:
+                fallback_props.append({"property": "carpet_mainroom_count", "value": int(match.group(1))})
 
-            keyword_booleans = {
-                "oven_cleaning": ["oven"],
-                "balcony_cleaning": ["balcony"],
-                "window_cleaning": ["window"],
-                "weekend_cleaning": ["weekend"],
-                "garage_cleaning": ["garage"],
-                "upholstery_cleaning": ["upholstery", "couch", "sofa"],
-                "blind_cleaning": ["blind", "curtain"]
-            }
+        keyword_booleans = {
+            "oven_cleaning": ["oven"],
+            "balcony_cleaning": ["balcony"],
+            "window_cleaning": ["window"],
+            "weekend_cleaning": ["weekend"],
+            "garage_cleaning": ["garage"],
+            "upholstery_cleaning": ["upholstery", "couch", "sofa"],
+            "blind_cleaning": ["blind", "curtain"]
+        }
 
-            for field, words in keyword_booleans.items():
-                if field not in existing and any(w in message_lower for w in words):
-                    fallback_props.append({"property": field, "value": True})
+        for field, words in keyword_booleans.items():
+            if field not in existing and any(w in message_lower for w in words):
+                fallback_props.append({"property": field, "value": True})
 
-            if "bedrooms_v2" not in existing:
-                bed_match = re.search(r"(\d+)\s*bed", message_lower)
-                if bed_match:
-                    fallback_props.append({"property": "bedrooms_v2", "value": int(bed_match.group(1))})
+        if "bedrooms_v2" not in existing:
+            bed_match = re.search(r"(\d+)\s*bed", message_lower)
+            if bed_match:
+                fallback_props.append({"property": "bedrooms_v2", "value": int(bed_match.group(1))})
 
-            if "bathrooms_v2" not in existing:
-                bath_match = re.search(r"(\d+)\s*bath", message_lower)
-                if bath_match:
-                    fallback_props.append({"property": "bathrooms_v2", "value": int(bath_match.group(1))})
+        if "bathrooms_v2" not in existing:
+            bath_match = re.search(r"(\d+)\s*bath", message_lower)
+            if bath_match:
+                fallback_props.append({"property": "bathrooms_v2", "value": int(bath_match.group(1))})
 
-            if "window_count" not in existing:
-                window_match = re.search(r"(\d+)\s*windows?", message_lower)
-                if window_match:
-                    fallback_props.append({"property": "window_count", "value": int(window_match.group(1))})
+        if "window_count" not in existing:
+            window_match = re.search(r"(\d+)\s*windows?", message_lower)
+            if window_match:
+                fallback_props.append({"property": "window_count", "value": int(window_match.group(1))})
 
-            if "suburb" not in existing:
-                fallback_props.append({"property": "suburb", "value": extract_suburb_from_text(message)})
+        if "suburb" not in existing:
+            fallback_props.append({"property": "suburb", "value": extract_suburb_from_text(message)})
 
-            all_props = props + fallback_props
-            print("✅ Parsed + Fallback Props:", json.dumps(all_props, indent=2))
-            return all_props, reply or "All good! Let me know if there's anything extra you'd like added."
+        all_props = props + fallback_props
+        print("✅ Parsed + Fallback Props:", json.dumps(all_props, indent=2))
+        return all_props, reply or "All good! Let me know if there's anything extra you'd like added."
 
-        except (json.JSONDecodeError, ValueError):
-            print("❌ Invalid JSON from GPT, attempt", attempt + 1)
-            if attempt == 0:
-                continue  # Retry once
-            return [], "Oops — I had trouble understanding that. Mind rephrasing?"
-        except Exception as e:
-            print("🔥 Unexpected GPT extraction error:", e)
-            return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
+    except json.JSONDecodeError as jde:
+        print("❌ JSON parsing failed:", jde)
+        return [], "Oops — I had trouble understanding that. Mind rephrasing?"
+
+    except Exception as e:
+        print("🔥 Unexpected GPT extraction error:", e)
+        return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
 
 
 def extract_suburb_from_text(text):
@@ -355,7 +367,6 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
-
 
 #---route---
 
