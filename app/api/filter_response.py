@@ -113,12 +113,14 @@ Once all fields are complete, say:
 
 # --- Utilities ---
 
+import uuid  # ✅ Ensure this is at the top of your file
+
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
     params = {
         "filterByFormula": f"STARTS_WITH(quote_id, '{prefix}-')",
-        "fields[]": "quote_id",
+        "fields[]": ["quote_id"],
         "pageSize": 100
     }
     records = []
@@ -144,6 +146,7 @@ def get_next_quote_id(prefix="VC"):
     return f"{prefix}-{str(next_id).zfill(6)}"
 
 def create_new_quote(session_id):
+    session_id = session_id or str(uuid.uuid4())
     quote_id = get_next_quote_id("VC")
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {
@@ -222,6 +225,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 # --- Route ---
 @router.post("/filter-response")
