@@ -112,7 +112,6 @@ Once all fields are complete, say:
 """
 
 # --- Utilities ---
-
 import uuid
 import json
 import requests
@@ -196,7 +195,13 @@ def update_quote_record(record_id, fields):
         "Authorization": f"Bearer {airtable_api_key}",
         "Content-Type": "application/json"
     }
-    requests.patch(url, headers=headers, json={"fields": fields})
+    res = requests.patch(url, headers=headers, json={"fields": fields})
+
+    # ✅ Log Airtable response for debugging
+    if not res.ok:
+        print("❌ Airtable update failed:", res.status_code, res.text)
+    else:
+        print("✅ Airtable updated:", json.dumps(res.json(), indent=2))
 
 
 def append_message_log(record_id, new_message, sender):
@@ -240,10 +245,6 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
-
-# ✅ Abuse logic cleanup for route only:
-# On first offense → set abuse_warning_issued = True
-# On second offense → set quote_stage = "Chat Banned" (leave it as "Gathering Info" before that)
 
 #---Route---
 @router.post("/filter-response")
