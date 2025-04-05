@@ -126,6 +126,7 @@ Once all fields are complete, say:
 
 
 #---Utilities---
+
 import uuid
 import json
 import requests
@@ -134,7 +135,7 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-# ✅ Load environment variables
+# ✅ Load .env variables
 load_dotenv()
 
 # ✅ Airtable & OpenAI setup
@@ -154,7 +155,6 @@ def get_next_quote_id(prefix="VC"):
         "fields[]": ["quote_id"],
         "pageSize": 100
     }
-
     records = []
     offset = None
     while True:
@@ -166,7 +166,6 @@ def get_next_quote_id(prefix="VC"):
         offset = data.get("offset")
         if not offset:
             break
-
     numbers = []
     for r in records:
         try:
@@ -174,7 +173,6 @@ def get_next_quote_id(prefix="VC"):
             numbers.append(num)
         except:
             continue
-
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
@@ -195,7 +193,6 @@ def create_new_quote(session_id):
     }
     res = requests.post(url, headers=headers, json=data)
     record_id = res.json().get("id")
-
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
     return quote_id, record_id
 
@@ -221,9 +218,7 @@ def update_quote_record(record_id, fields):
         "Authorization": f"Bearer {airtable_api_key}",
         "Content-Type": "application/json"
     }
-
     res = requests.patch(url, headers=headers, json={"fields": fields})
-
     if not res.ok:
         print("❌ Airtable update failed:", res.status_code, res.text)
     else:
@@ -233,58 +228,52 @@ def append_message_log(record_id, new_message, sender):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
     res = requests.get(url, headers=headers).json()
-
     current_log = res.get("fields", {}).get("message_log", "")
     new_log = f"{current_log}\n{sender.upper()}: {new_message}".strip()[-5000:]
-
     update_quote_record(record_id, {"message_log": new_log})
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
         print("🧠 Calling GPT-4 to extract properties...")
-
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": GPT_PROMPT},
-                {"role": "system", "content": f"Conversation so far:\n{log}"},
-                {"role": "user", "content": message}
+                {
+                    "role": "system",
+                    "content": f"{GPT_PROMPT}\n\nConversation so far:\n{log}"
+                },
+                {
+                    "role": "user",
+                    "content": message
+                }
             ],
             max_tokens=700,
             temperature=0.4
         )
-
         raw = response.choices[0].message.content.strip()
         print("📝 RAW GPT RESPONSE:\n", raw)
-
         raw = raw.replace("```json", "").replace("```", "").strip()
         if not raw.startswith("{"):
             print("❌ Response didn't start with JSON. Returning fallback.")
             return [], "Oops, I wasn’t sure how to respond to that. Could you rephrase or give me more detail?"
-
         parsed = json.loads(raw)
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
-
         for prop in props:
             if prop["property"] == "furnished":
                 val = str(prop["value"]).strip().lower()
                 prop["value"] = "Furnished" if val in ["yes", "furnished", "true", "1"] else "Unfurnished"
-
         message_lower = message.lower()
         fallback_props = []
         existing = [p["property"] for p in props]
-
         if "carpet_bedroom_count" not in existing:
             match = re.search(r"(\d+)\s*(bedrooms?|rooms?)\s*.*carpet", message_lower)
             if match:
                 fallback_props.append({"property": "carpet_bedroom_count", "value": int(match.group(1))})
-
         if "carpet_mainroom_count" not in existing:
             match = re.search(r"(\d+)\s*(living|main).*carpet", message_lower)
             if match:
                 fallback_props.append({"property": "carpet_mainroom_count", "value": int(match.group(1))})
-
         keyword_booleans = {
             "oven_cleaning": ["oven"],
             "balcony_cleaning": ["balcony"],
@@ -294,37 +283,29 @@ def extract_properties_from_gpt4(message: str, log: str):
             "upholstery_cleaning": ["upholstery", "couch", "sofa"],
             "blind_cleaning": ["blind", "curtain"]
         }
-
         for field, words in keyword_booleans.items():
             if field not in existing and any(w in message_lower for w in words):
                 fallback_props.append({"property": field, "value": True})
-
         if "bedrooms_v2" not in existing:
             bed_match = re.search(r"(\d+)\s*bed", message_lower)
             if bed_match:
                 fallback_props.append({"property": "bedrooms_v2", "value": int(bed_match.group(1))})
-
         if "bathrooms_v2" not in existing:
             bath_match = re.search(r"(\d+)\s*bath", message_lower)
             if bath_match:
                 fallback_props.append({"property": "bathrooms_v2", "value": int(bath_match.group(1))})
-
         if "window_count" not in existing:
             window_match = re.search(r"(\d+)\s*windows?", message_lower)
             if window_match:
                 fallback_props.append({"property": "window_count", "value": int(window_match.group(1))})
-
         if "suburb" not in existing:
             fallback_props.append({"property": "suburb", "value": extract_suburb_from_text(message)})
-
         all_props = props + fallback_props
         print("✅ Parsed + Fallback Props:", json.dumps(all_props, indent=2))
         return all_props, reply or "All good! Let me know if there's anything extra you'd like added."
-
     except json.JSONDecodeError as jde:
         print("❌ JSON parsing failed:", jde)
         return [], "Oops — I had trouble understanding that. Mind rephrasing?"
-
     except Exception as e:
         print("🔥 Unexpected GPT extraction error:", e)
         return [], "Ah bugger, something didn’t quite work there. Mind trying again?"
@@ -343,8 +324,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
-
-
+  
 #---route---
 
 @router.post("/filter-response")
