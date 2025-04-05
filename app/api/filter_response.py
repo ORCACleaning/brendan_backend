@@ -236,7 +236,6 @@ def extract_properties_from_gpt4(message: str, log: str):
         raw = response.choices[0].message.content.strip()
         print("📝 RAW GPT RESPONSE:\n", raw)
 
-        # Clean and normalize JSON block
         raw = raw.replace("```json", "").replace("```", "").strip()
 
         if not raw.startswith("{"):
@@ -248,11 +247,31 @@ def extract_properties_from_gpt4(message: str, log: str):
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        print("✅ Parsed GPT Properties:", json.dumps(props, indent=2))
-        print("✅ Parsed GPT Reply:", reply)
+        # ✅ Keyword-based fallback mapping
+        checkbox_keywords = {
+            "oven_cleaning": ["oven"],
+            "balcony_cleaning": ["balcony"],
+            "window_cleaning": ["window"],
+            "weekend_cleaning": ["weekend"],
+            "garage_cleaning": ["garage"],
+            "carpet_cleaning": ["carpet"],
+            "upholstery_cleaning": ["upholstery", "couch", "sofa"],
+            "blind_cleaning": ["blind", "curtain"]
+        }
 
-        return props, reply or "All good! Let me know if there's anything extra you'd like added."
-    
+        message_lower = message.lower()
+        fallback_props = []
+        existing_fields = [p["property"] for p in props if "property" in p]
+
+        for field, keywords in checkbox_keywords.items():
+            if field not in existing_fields and any(k in message_lower for k in keywords):
+                fallback_props.append({"property": field, "value": True})
+
+        all_props = props + fallback_props
+
+        print("✅ Parsed + Fallback Props:", json.dumps(all_props, indent=2))
+        return all_props, reply or "All good! Let me know if there's anything extra you'd like added."
+
     except json.JSONDecodeError as jde:
         print("❌ JSON parsing failed:", jde)
         return [], "Oops — I had trouble understanding that. Mind rephrasing?"
