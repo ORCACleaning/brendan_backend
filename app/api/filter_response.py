@@ -97,7 +97,7 @@ Your job is to COLLECT ALL FIELDS REQUIRED to generate a quote — using a frien
 
 ## CONTACT INFO:
 If customer asks, provide:
-Phone: 1300 918 388
+Phone: 1300 918 388  
 Email: info@orcacleaning.com.au
 
 ## REQUIRED FIELD ORDER:
@@ -120,9 +120,10 @@ Email: info@orcacleaning.com.au
     - if yes → ask for real_estate_name
 16. special_requests → capture text + minutes if valid
 
-Once all fields are complete, say:
+Once all fields are complete, say:  
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
+
 
 #---Utilities---
 
