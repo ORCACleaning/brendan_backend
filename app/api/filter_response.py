@@ -111,8 +111,7 @@ Once all fields are complete, say:
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
 
-# --- Utilities ---
-
+#---Utilities---
 import uuid
 import json
 import requests
@@ -168,7 +167,7 @@ def create_new_quote(session_id):
     res = requests.post(url, headers=headers, json=data)
     record_id = res.json().get("id")
     
-    # ✅ Force-initialize message log so it's ready
+    # Initialize message log
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
     return quote_id, record_id
@@ -246,9 +245,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
-
-
-# --- Route ---
+#---Route---
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -274,8 +271,6 @@ async def filter_response_entry(request: Request):
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
-
-            # Always log the user's message
             append_message_log(record_id, message, "user")
 
             if abuse_warned:
@@ -306,7 +301,6 @@ async def filter_response_entry(request: Request):
                     "next_actions": []
                 })
 
-        # ✅ Enforce stage lock if chat is already banned
         if stage == "Chat Banned":
             return JSONResponse(content={
                 "response": (
@@ -317,7 +311,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # ✅ Handle first message
         if message == "__init__":
             intro = (
                 "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
@@ -328,7 +321,6 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, "Brendan started a new quote", "SYSTEM")
             return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
 
-        # ✅ Log customer message
         append_message_log(record_id, message, "user")
 
         if stage == "Gathering Info":
