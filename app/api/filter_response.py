@@ -236,26 +236,36 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # ✅ Moved quote_data ABOVE abuse filter
+        # ✅ FIXED Abuse Filter Logic
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
-            if fields.get("abuse_warning_issued"):
+            abuse_warned = fields.get("abuse_warning_issued", False)
+            if abuse_warned:
                 update_quote_record(record_id, {"quote_stage": "Chat Banned"})
                 return JSONResponse(content={
-                    "response": "We’ve had to close this chat due to repeated inappropriate language. You can still contact us at info@orcacleaning.com.au or call 1300 918 388.",
-                    "properties": [], "next_actions": []
+                    "response": (
+                        "We’ve had to close this chat due to repeated inappropriate language. "
+                        "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
+                    ),
+                    "properties": [],
+                    "next_actions": []
                 })
             else:
                 update_quote_record(record_id, {"abuse_warning_issued": True})
                 return JSONResponse(content={
                     "response": "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat.",
-                    "properties": [], "next_actions": []
+                    "properties": [],
+                    "next_actions": []
                 })
 
         if stage == "Chat Banned":
             return JSONResponse(content={
-                "response": "This chat’s been closed due to inappropriate messages. If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388.",
-                "properties": [], "next_actions": []
+                "response": (
+                    "This chat’s been closed due to inappropriate messages. "
+                    "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388."
+                ),
+                "properties": [],
+                "next_actions": []
             })
 
         if message == "__init__":
