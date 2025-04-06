@@ -296,14 +296,7 @@ def generate_next_actions():
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
-from brendan_utilities import (
-    get_quote_by_session,
-    create_new_quote,
-    append_message_log,
-    extract_properties_from_gpt4,
-    update_quote_record,
-    generate_next_actions
-)
+
 
 router = APIRouter()
 
