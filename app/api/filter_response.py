@@ -316,7 +316,7 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # Handle init trigger
+        # Handle __init__ trigger
         if message == "__init__":
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -333,11 +333,14 @@ async def filter_response_entry(request: Request):
         # --- Handle stage: Gathering Info ---
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
-            print("🔍 Extracted properties:", json.dumps(props, indent=2))
 
-            updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
+            updates = {}
+            for p in props:
+                if "property" in p and "value" in p:
+                    updates[p["property"]] = p["value"]
+
             if updates:
-                print("📤 Updating Airtable with:", json.dumps(updates, indent=2))
+                print(f"🔄 Updating Airtable fields: {updates}")
                 update_quote_record(record_id, updates)
             else:
                 print("⚠️ No valid properties to update.")
