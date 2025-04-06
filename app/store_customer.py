@@ -138,7 +138,8 @@ Thanks for chatting with Brendan! Attached is your PDF quote.
 "                f"You can book your clean here: {data.booking_url}
 
 Cheers,
-Orca Cleaning"
+Orca Cleaning
+"""
         msg.attach(MIMEApplication(body.encode("utf-8"), Name="body.txt"))
 
         with open(pdf_path, "rb") as f:
