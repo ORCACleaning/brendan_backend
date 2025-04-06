@@ -368,6 +368,8 @@ def generate_next_actions():
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
+router = APIRouter()
+
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -378,33 +380,11 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # Check for __init__ trigger
         is_init = message == "__init__"
 
-        # If it's init or no session found, create new
+        # If init: create new quote
         if is_init:
             quote_id, record_id = create_new_quote(session_id)
-            fields = {
-                "quote_id": quote_id,
-                "quote_stage": "Gathering Info",
-                "message_log": "",
-                "session_id": session_id
-            }
-            stage = "Gathering Info"
-            log = ""
-        else:
-            # Use latest session record (not from init branch)
-            quote_data = get_quote_by_session(session_id)
-            if not quote_data:
-                raise HTTPException(status_code=404, detail="Session expired or not initialized.")
-            quote_id = quote_data["quote_id"]
-            record_id = quote_data["record_id"]
-            fields = quote_data["fields"]
-            stage = quote_data["stage"]
-            log = fields.get("message_log", "")
-
-        # Handle __init__ separately (just respond and exit)
-        if is_init:
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
             append_message_log(record_id, intro, "brendan")
@@ -414,28 +394,40 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
+        # Existing session
+        quote_data = get_quote_by_session(session_id)
+        if not quote_data:
+            raise HTTPException(status_code=404, detail="Session expired or not initialized.")
+
+        quote_id = quote_data["quote_id"]
+        record_id = quote_data["record_id"]
+        fields = quote_data["fields"]
+        stage = quote_data["stage"]
+        log = fields.get("message_log", "")
+
         # --- Stage: Gathering Info ---
         if stage == "Gathering Info":
             updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
 
-            props, reply = extract_properties_from_gpt4(message, updated_log)
-            updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
+            # Call GPT-4 for parsing
+            field_updates, reply = extract_properties_from_gpt4(message, updated_log)
 
-            print(f"🛠 Updating Airtable Record {record_id} with fields: {json.dumps(updates, indent=2)}")
-            if updates:
-                update_quote_record(record_id, updates)
+            # Log & update Airtable fields
+            if field_updates:
+                print(f"🛠 Updating Airtable Record {record_id} with fields: {json.dumps(field_updates, indent=2)}")
+                update_quote_record(record_id, field_updates)
 
+            # Update conversation log
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
             return JSONResponse(content={
-                "properties": props,
+                "properties": list(field_updates.keys()),
                 "response": reply or "Got that. Anything else I should know?",
                 "next_actions": []
             })
 
-        # Other stages...
-        # [Keep as-is for Quote Calculated, Personal Info, etc.]
+        # Future stages (to be implemented later)
 
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
