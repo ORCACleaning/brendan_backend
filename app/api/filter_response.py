@@ -385,7 +385,6 @@ def generate_next_actions():
     ]
 
 
-
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
@@ -440,36 +439,44 @@ async def filter_response_entry(request: Request):
         print(f"📇 Airtable Record ID: {record_id}")
         print(f"📜 Stage: {stage}")
 
-        # --- Stage: Gathering Info ---
-        if stage == "Gathering Info":
-            updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
-
-            # Call GPT
-            props_list, reply = extract_properties_from_gpt4(message, updated_log)
-
-            # DEBUG: Show full props
-            print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_list, indent=2)}")
-
-            # Convert to dict
-            updates = {p["property"]: p["value"] for p in props_list if "property" in p and "value" in p}
-
-            print(f"\n🛠 Structured updates ready for Airtable:\n{json.dumps(updates, indent=2)}")
-
-            if not updates:
-                print("⚠️ WARNING: No valid fields parsed — double check GPT output or field map.")
-
-            if updates:
-                update_quote_record(record_id, updates)
-
-            # Append convo log
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-
+        # 🚧 Prevent updates once quote is finalized
+        if stage != "Gathering Info":
+            print(f"🚫 Cannot update — quote_stage is '{stage}'")
             return JSONResponse(content={
-                "properties": list(updates.keys()),
-                "response": reply or "Got that. Anything else I should know?",
+                "properties": [],
+                "response": "That quote's already been calculated. You’ll need to start a new one if anything’s changed.",
                 "next_actions": []
             })
+
+        # --- Stage: Gathering Info ---
+        updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
+
+        # Call GPT
+        props_list, reply = extract_properties_from_gpt4(message, updated_log)
+
+        # DEBUG: Show full props
+        print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_list, indent=2)}")
+
+        # Convert to dict
+        updates = {p["property"]: p["value"] for p in props_list if "property" in p and "value" in p}
+
+        print(f"\n🛠 Structured updates ready for Airtable:\n{json.dumps(updates, indent=2)}")
+
+        if not updates:
+            print("⚠️ WARNING: No valid fields parsed — double check GPT output or field map.")
+
+        if updates:
+            update_quote_record(record_id, updates)
+
+        # Append convo log
+        append_message_log(record_id, message, "user")
+        append_message_log(record_id, reply, "brendan")
+
+        return JSONResponse(content={
+            "properties": list(updates.keys()),
+            "response": reply or "Got that. Anything else I should know?",
+            "next_actions": []
+        })
 
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
