@@ -323,11 +323,12 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # --- Ensure correct record logic ---
+        # --- Always get the latest session info ---
         quote_data = get_quote_by_session(session_id)
 
-        # ✅ Always create a new record if message is __init__ or no record exists
-        if message == "__init__" or not quote_data:
+        # ✅ Always create new record if message is __init__ or session is missing
+        is_new_session = message == "__init__" or not quote_data
+        if is_new_session:
             quote_id, record_id = create_new_quote(session_id)
             fields = {
                 "quote_id": quote_id,
@@ -344,7 +345,7 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # ✅ Init message — greet and stop here
+        # ✅ Handle init greeting
         if message == "__init__":
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -357,18 +358,18 @@ async def filter_response_entry(request: Request):
 
         # --- Stage: Gathering Info ---
         if stage == "Gathering Info":
-            # ⏱ Temporarily update log to include current user message before GPT
+            # ✍️ Temporarily patch log with this message (not saved yet)
             updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
 
-            # 🧠 Extract fields from GPT
+            # 🧠 Let GPT extract fields and reply
             props, reply = extract_properties_from_gpt4(message, updated_log)
             updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
 
-            # ✅ Save extracted fields to Airtable
+            # ✅ Save structured fields if any
             if updates:
                 update_quote_record(record_id, updates)
 
-            # ✅ Log both messages AFTER updates
+            # ✅ Log real interaction now
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
@@ -403,7 +404,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # --- Default Fallback ---
+        # --- Final fallback ---
         return JSONResponse(content={
             "properties": [],
             "response": "All done and dusted! Let me know if you'd like to tweak anything.",
