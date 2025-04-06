@@ -29,7 +29,7 @@ class CustomerData(BaseModel):
     special_request_minutes_max: int = 0
 
     quote_id: str
-    name: str
+    customer_name: str  # ✅ Renamed
     email: str
     phone: str
 
@@ -70,7 +70,7 @@ async def store_customer(data: CustomerData):
         # Airtable format
         airtable_data = {
             "quote_id": data.quote_id,
-            "name": data.name,
+            "customer_name": data.customer_name,  # ✅ Updated field
             "email": data.email,
             "phone": data.phone,
             "suburb": data.suburb,
@@ -130,7 +130,7 @@ async def store_customer(data: CustomerData):
         msg["To"] = data.email
         msg["Subject"] = f"Your Orca Vacate Cleaning Quote ({data.quote_id})"
 
-        body = f"""Hi {data.name},
+        body = f"""Hi {data.customer_name},
 
 Thanks for chatting with Brendan! Attached is your PDF quote.
 
