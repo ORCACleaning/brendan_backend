@@ -323,21 +323,26 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # 🔥 Always create a new row when message is __init__
-        if message == "__init__":
+        # --- Ensure correct record logic ---
+        quote_data = get_quote_by_session(session_id)
+
+        # ✅ Always create a new record if message is __init__ or no record exists
+        if message == "__init__" or not quote_data:
             quote_id, record_id = create_new_quote(session_id)
-            fields, stage, log = {}, "Gathering Info", ""
+            fields = {
+                "quote_id": quote_id,
+                "quote_stage": "Gathering Info",
+                "message_log": "",
+                "session_id": session_id
+            }
+            stage = "Gathering Info"
+            log = ""
         else:
-            quote_data = get_quote_by_session(session_id)
-            if not quote_data:
-                quote_id, record_id = create_new_quote(session_id)
-                fields, stage, log = {}, "Gathering Info", ""
-            else:
-                quote_id = quote_data["quote_id"]
-                record_id = quote_data["record_id"]
-                fields = quote_data["fields"]
-                stage = quote_data["stage"]
-                log = fields.get("message_log", "")
+            quote_id = quote_data["quote_id"]
+            record_id = quote_data["record_id"]
+            fields = quote_data["fields"]
+            stage = quote_data["stage"]
+            log = fields.get("message_log", "")
 
         # ✅ Init message — greet and stop here
         if message == "__init__":
