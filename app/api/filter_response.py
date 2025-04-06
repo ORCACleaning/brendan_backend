@@ -355,6 +355,7 @@ def generate_next_actions():
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
+import json  # ✅ Ensure this is imported if not already
 
 router = APIRouter()
 
@@ -398,12 +399,11 @@ async def filter_response_entry(request: Request):
             updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
 
             # Call GPT-4 for parsing
-            props, reply = extract_properties_from_gpt4(message, updated_log)
+            props_list, reply = extract_properties_from_gpt4(message, updated_log)
 
             # Convert props list to dictionary
-            updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
+            updates = {p["property"]: p["value"] for p in props_list if "property" in p and "value" in p}
 
-            # Log & update Airtable fields
             print(f"🛠 Structured field payload: {json.dumps(updates, indent=2)}")
             if updates:
                 update_quote_record(record_id, updates)
@@ -413,7 +413,7 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, reply, "brendan")
 
             return JSONResponse(content={
-                "properties": props,
+                "properties": list(updates.keys()),
                 "response": reply or "Got that. Anything else I should know?",
                 "next_actions": []
             })
@@ -423,4 +423,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
         return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
-
