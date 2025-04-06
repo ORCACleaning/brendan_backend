@@ -132,46 +132,59 @@ Once all fields are complete, say:
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
 
-
-# --- Utilities ---
-import uuid
-import json
-import requests
+# --- Brendan Utilities ---
 import os
+import json
+import uuid
+import requests
 from dotenv import load_dotenv
-from fastapi import Request, HTTPException
-from fastapi.responses import JSONResponse
 from openai import OpenAI
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
-# --- Init ---
+# Load .env variables
 load_dotenv()
 
 # --- Config ---
-airtable_api_key = os.getenv("AIRTABLE_API_KEY")
-airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
-table_name = "Vacate Quotes"
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-GPT_PROMPT = os.getenv("GPT_PROMPT") or "You're Brendan, a quoting assistant for Orca Cleaning. Return 'properties' as JSON and a friendly 'response'."
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+TABLE_NAME = "Vacate Quotes"
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Brendan's hardcoded GPT prompt (NOT from .env)
+GPT_PROMPT = """
+🚨 You must ALWAYS reply in **valid JSON only** — no exceptions.
+{ "properties": [...], "response": "..." }
+
+You are Brendan, an Aussie quote assistant for Orca Cleaning in WA.
+Start by asking: “What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?”
+Then collect all required fields, confirming one at a time.
+
+Follow Orca’s quoting rules. Skip blind/upholstery questions if unfurnished.
+Don’t quote for anything outside the home. Avoid rugs.
+Be friendly, casual, and professional — Aussie-style.
+"""
 
 # --- Utility Functions ---
+
 def get_next_quote_id(prefix="VC"):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
-    headers = {"Authorization": f"Bearer {airtable_api_key}"}
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     params = {
         "filterByFormula": f"FIND('{prefix}-', {{quote_id}}) = 1",
         "fields[]": ["quote_id"],
         "pageSize": 100
     }
 
-    records = []
-    offset = None
+    records, offset = [], None
     while True:
         if offset:
             params["offset"] = offset
-        response = requests.get(url, headers=headers, params=params)
-        data = response.json()
-        records.extend(data.get("records", []))
-        offset = data.get("offset")
+        res = requests.get(url, headers=headers, params=params).json()
+        records.extend(res.get("records", []))
+        offset = res.get("offset")
         if not offset:
             break
 
@@ -182,15 +195,16 @@ def get_next_quote_id(prefix="VC"):
             numbers.append(num)
         except:
             continue
+
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
-def create_new_quote(session_id):
+def create_new_quote(session_id: str):
     session_id = session_id or str(uuid.uuid4())
-    quote_id = get_next_quote_id("VC")
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
+    quote_id = get_next_quote_id()
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {
-        "Authorization": f"Bearer {airtable_api_key}",
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
     data = {
@@ -205,14 +219,13 @@ def create_new_quote(session_id):
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
     return quote_id, record_id
 
-def get_quote_by_session(session_id):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
-    headers = {"Authorization": f"Bearer {airtable_api_key}"}
+def get_quote_by_session(session_id: str):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     params = {"filterByFormula": f"{{session_id}}='{session_id}'"}
-    res = requests.get(url, headers=headers, params=params)
-    data = res.json()
-    if data.get("records"):
-        record = data["records"][0]
+    res = requests.get(url, headers=headers).json()
+    if res.get("records"):
+        record = res["records"][0]
         return {
             "record_id": record["id"],
             "fields": record["fields"],
@@ -221,10 +234,10 @@ def get_quote_by_session(session_id):
         }
     return None
 
-def update_quote_record(record_id, fields):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
+def update_quote_record(record_id: str, fields: dict):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
-        "Authorization": f"Bearer {airtable_api_key}",
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
     res = requests.patch(url, headers=headers, json={"fields": fields})
@@ -233,15 +246,15 @@ def update_quote_record(record_id, fields):
     else:
         print("✅ Airtable updated:", json.dumps(res.json(), indent=2))
 
-def append_message_log(record_id, new_message, sender):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
-    headers = {"Authorization": f"Bearer {airtable_api_key}"}
-    res = requests.get(url, headers=headers).json()
-    current_log = res.get("fields", {}).get("message_log", "")
-    new_log = f"{current_log}\n{sender.upper()}: {new_message}".strip()[-5000:]
+def append_message_log(record_id: str, message: str, sender: str):
+    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    current = requests.get(url, headers=headers).json()
+    old_log = current.get("fields", {}).get("message_log", "")
+    new_log = f"{old_log}\n{sender.upper()}: {message}".strip()[-5000:]
     update_quote_record(record_id, {"message_log": new_log})
 
-def extract_properties_from_gpt4(message, log):
+def extract_properties_from_gpt4(message: str, log: str):
     try:
         print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
@@ -256,13 +269,18 @@ def extract_properties_from_gpt4(message, log):
         )
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
-        if not raw.startswith("{"):
-            print("❌ Response is not JSON")
-            return [], "Oops — I couldn’t quite understand that. Can you reword it?"
-        parsed = json.loads(raw)
+
+        # Trim clean JSON block only
+        start, end = raw.find("{"), raw.rfind("}")
+        if start == -1 or end == -1:
+            raise ValueError("JSON block not found.")
+        clean_json = raw[start:end+1]
+
+        parsed = json.loads(clean_json)
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
         return props, reply
+
     except Exception as e:
         print("🔥 GPT EXTRACT ERROR:", e)
         return [], "Oops — I couldn’t quite understand that. Can you reword it?"
