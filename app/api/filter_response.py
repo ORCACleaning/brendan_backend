@@ -360,7 +360,6 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # Retrieve or create quote
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             quote_id, record_id = create_new_quote(session_id)
@@ -372,12 +371,10 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # Abuse check
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
             append_message_log(record_id, message, "user")
-
             if abuse_warned:
                 reply = (
                     "We’ve had to close this chat due to repeated inappropriate language. "
@@ -415,7 +412,6 @@ async def filter_response_entry(request: Request):
 
         append_message_log(record_id, message, "user")
 
-        # Handle quote info gathering
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {}
@@ -423,7 +419,7 @@ async def filter_response_entry(request: Request):
             checkbox_fields = {
                 "oven_cleaning", "window_cleaning", "blind_cleaning",
                 "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
-                "after_hours_cleaning", "weekend_cleaning", "is_property_manager"
+                "weekend_cleaning", "is_property_manager"
             }
 
             for p in props:
@@ -438,6 +434,8 @@ async def filter_response_entry(request: Request):
                     elif key == "furnished":
                         val = str(val).strip().lower()
                         updates[key] = "Furnished" if val in ["yes", "furnished", "true", "1"] else "Unfurnished"
+                    elif key == "after_hours_cleaning":
+                        updates["after_hours_surcharge"] = "75%"
                     elif key in checkbox_fields:
                         updates[key] = str(val).strip().lower() in ["yes", "true", "1"]
                     else:
@@ -450,14 +448,9 @@ async def filter_response_entry(request: Request):
                 except:
                     pass
 
-            # Ensure carpet-related fields are always filled if some are missing
             carpet_fields = [
-                "carpet_bedroom_count",
-                "carpet_mainroom_count",
-                "carpet_study_count",
-                "carpet_halway_count",
-                "carpet_stairs_count",
-                "carpet_other_count"
+                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
             ]
             filled_carpet_fields = [f for f in carpet_fields if f in updates or f in fields]
             if filled_carpet_fields and len(filled_carpet_fields) < len(carpet_fields):
@@ -477,7 +470,7 @@ async def filter_response_entry(request: Request):
                 "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
                 "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
                 "blind_cleaning", "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
-                "after_hours_cleaning", "weekend_cleaning", "is_property_manager", "real_estate_name"
+                "after_hours_surcharge", "weekend_cleaning", "is_property_manager", "real_estate_name"
             ]
 
             if all(field in combined_fields for field in required_fields):
@@ -494,7 +487,6 @@ async def filter_response_entry(request: Request):
                     "next_actions": []
                 })
 
-        # Already calculated quote
         elif stage == "Quote Calculated":
             return JSONResponse(content={
                 "properties": [],
@@ -503,7 +495,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": generate_next_actions()
             })
 
-        # Gathering personal info stage
         elif stage == "Gathering Personal Info":
             return JSONResponse(content={
                 "properties": [],
@@ -511,7 +502,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # Fallback for completed or unknown stages
         return JSONResponse(content={
             "properties": [],
             "response": "All done and dusted! Let me know if you'd like to tweak anything.",
@@ -521,4 +511,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         print("🔥 Unexpected error:", e)
         return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
-
