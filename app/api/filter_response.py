@@ -215,7 +215,13 @@ def create_new_quote(session_id: str):
         }
     }
     res = requests.post(url, headers=headers, json=data)
+    if not res.ok:
+        print("❌ FAILED to create quote:", res.status_code, res.text)
+        raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
+    
     record_id = res.json().get("id")
+    print(f"✅ Created new quote record: {record_id} with ID {quote_id}")
+
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
     return quote_id, record_id
 
@@ -247,6 +253,9 @@ def update_quote_record(record_id: str, fields: dict):
         print("✅ Airtable updated:", json.dumps(res.json(), indent=2))
 
 def append_message_log(record_id: str, message: str, sender: str):
+    if not record_id:
+        print("❌ Cannot append log — missing record ID")
+        return
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     current = requests.get(url, headers=headers).json()
@@ -292,6 +301,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
