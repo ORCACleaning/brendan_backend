@@ -35,7 +35,7 @@ class QuoteRequest(BaseModel):
     # ⏰ Surcharges & Scheduling
     weekend_cleaning: Optional[bool] = False
     after_hours_surcharge: Optional[float] = 0.0  # Percent field in Airtable
-    mandurah_property: Optional[strl] = "False"
+    mandurah_property: Optional[str] = "False"
 
     # 🏢 Real Estate / Agent
     is_property_manager: Optional[bool] = False
