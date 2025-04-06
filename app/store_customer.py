@@ -13,7 +13,7 @@ router = APIRouter()
 
 # --- Config ---
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = "appXZ4gOnbdu2Tpme"
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = "Vacate Quotes"
 SMTP_SERVER = "smtp.office365.com"
 SMTP_PORT = 587
@@ -48,8 +48,17 @@ class CustomerData(BaseModel):
     deep_cleaning: bool = False
     fridge_cleaning: bool = False
     range_hood_cleaning: bool = False
+    upholstery_cleaning: bool = False
+    blind_cleaning: bool = False
 
-    after_hours: bool = False
+    carpet_bedroom_count: int = 0
+    carpet_mainroom_count: int = 0
+    carpet_study_count: int = 0
+    carpet_halway_count: int = 0
+    carpet_stairs_count: int = 0
+    carpet_other_count: int = 0
+
+    after_hours_cleaning: bool = False
     weekend_cleaning: bool = False
     after_hours_surcharge: float = 0.0
     weekend_surcharge: float = 0.0
@@ -69,41 +78,50 @@ async def store_customer(data: CustomerData):
     try:
         # Airtable payload with exact field names
         airtable_data = {
-            "Quote ID": data.quote_id,
-            "Customer Name": data.name,
-            "Customer Email": data.email,
-            "Customer Phone": data.phone,
-            "Suburb": data.suburb,
-            "Bedrooms": data.bedrooms_v2,
-            "Bathrooms": data.bathrooms_v2,
-            "Furnished Status": data.furnished,
-            "Property Address": data.property_address,
-            "Business Name": data.business_name,
+            "quote_id": data.quote_id,
+            "customer_name": data.name,
+            "email": data.email,
+            "phone": data.phone,
+            "suburb": data.suburb,
+            "bedrooms_v2": data.bedrooms_v2,
+            "bathrooms_v2": data.bathrooms_v2,
+            "furnished": data.furnished,
+            "property_address": data.property_address,
+            "business_name": data.business_name,
 
-            "Oven Cleaning": bool_to_checkbox(data.oven_cleaning),
-            "Window Cleaning": bool_to_checkbox(data.window_cleaning),
-            "Window Count": data.window_count,
-            "Wall Cleaning": bool_to_checkbox(data.wall_cleaning),
-            "Balcony Cleaning": bool_to_checkbox(data.balcony_cleaning),
-            "Deep Cleaning": bool_to_checkbox(data.deep_cleaning),
-            "Fridge Cleaning": bool_to_checkbox(data.fridge_cleaning),
-            "Rangehood Cleaning": bool_to_checkbox(data.range_hood_cleaning),
+            "oven_cleaning": bool_to_checkbox(data.oven_cleaning),
+            "window_cleaning": bool_to_checkbox(data.window_cleaning),
+            "window_count": data.window_count,
+            "wall_cleaning": bool_to_checkbox(data.wall_cleaning),
+            "balcony_cleaning": bool_to_checkbox(data.balcony_cleaning),
+            "deep_cleaning": bool_to_checkbox(data.deep_cleaning),
+            "fridge_cleaning": bool_to_checkbox(data.fridge_cleaning),
+            "range_hood_cleaning": bool_to_checkbox(data.range_hood_cleaning),
+            "upholstery_cleaning": bool_to_checkbox(data.upholstery_cleaning),
+            "blind_cleaning": bool_to_checkbox(data.blind_cleaning),
 
-            "After Hours": bool_to_checkbox(data.after_hours),
-            "Weekend Cleaning": bool_to_checkbox(data.weekend_cleaning),
-            "After Hours Surcharge": data.after_hours_surcharge,
-            "Weekend Surcharge": data.weekend_surcharge,
+            "carpet_bedroom_count": data.carpet_bedroom_count,
+            "carpet_mainroom_count": data.carpet_mainroom_count,
+            "carpet_study_count": data.carpet_study_count,
+            "carpet_halway_count": data.carpet_halway_count,
+            "carpet_stairs_count": data.carpet_stairs_count,
+            "carpet_other_count": data.carpet_other_count,
 
-            "PDF Quote Link": data.pdf_link,
-            "Booking URL": data.booking_url,
-            "Quote Stage": data.quote_stage,
-            "Quote Notes": data.quote_notes,
-            "Message Log": data.message_log,
-            "Mandurah Property": bool_to_checkbox(data.mandurah_property),
-            "Special Requests": data.special_requests,
-            "Special Request Min Minutes": data.special_request_minutes_min,
-            "Special Request Max Minutes": data.special_request_minutes_max,
-            "Session ID": data.session_id,
+            "after_hours_cleaning": bool_to_checkbox(data.after_hours_cleaning),
+            "weekend_cleaning": bool_to_checkbox(data.weekend_cleaning),
+            "after_hours_surcharge": data.after_hours_surcharge,
+            "weekend_surcharge": data.weekend_surcharge,
+
+            "pdf_link": data.pdf_link,
+            "booking_url": data.booking_url,
+            "quote_stage": data.quote_stage,
+            "quote_notes": data.quote_notes,
+            "message_log": data.message_log,
+            "mandurah_property": bool_to_checkbox(data.mandurah_property),
+            "special_requests": data.special_requests,
+            "special_request_minutes_min": data.special_request_minutes_min,
+            "special_request_minutes_max": data.special_request_minutes_max,
+            "session_id": data.session_id,
         }
 
         headers = {
