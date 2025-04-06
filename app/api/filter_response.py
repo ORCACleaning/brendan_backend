@@ -323,8 +323,6 @@ def generate_next_actions():
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
-router = APIRouter()
-
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -335,21 +333,14 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # --- Always get the latest session info ---
+        # --- Ensure correct record logic ---
         quote_data = get_quote_by_session(session_id)
 
-        # ✅ Always create new record if message is __init__ or session is missing
-        is_new_session = message == "__init__" or not quote_data
-        if is_new_session:
+        is_init = message == "__init__"
+        if is_init or not quote_data:
             quote_id, record_id = create_new_quote(session_id)
-            fields = {
-                "quote_id": quote_id,
-                "quote_stage": "Gathering Info",
-                "message_log": "",
-                "session_id": session_id
-            }
-            stage = "Gathering Info"
-            log = ""
+            fields = {"quote_id": quote_id, "quote_stage": "Gathering Info", "message_log": "", "session_id": session_id}
+            stage, log = "Gathering Info", ""
         else:
             quote_id = quote_data["quote_id"]
             record_id = quote_data["record_id"]
@@ -357,8 +348,8 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # ✅ Handle init greeting
-        if message == "__init__":
+        # ✅ Init message — greet and stop here
+        if is_init:
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
             append_message_log(record_id, intro, "brendan")
@@ -370,18 +361,19 @@ async def filter_response_entry(request: Request):
 
         # --- Stage: Gathering Info ---
         if stage == "Gathering Info":
-            # ✍️ Temporarily patch log with this message (not saved yet)
             updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
 
-            # 🧠 Let GPT extract fields and reply
             props, reply = extract_properties_from_gpt4(message, updated_log)
             updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
 
-            # ✅ Save structured fields if any
+            # ✅ Log debug
+            print(f"🛠 Updating Airtable Record {record_id} with fields: {json.dumps(updates, indent=2)}")
+
+            # ✅ Update Airtable
             if updates:
                 update_quote_record(record_id, updates)
 
-            # ✅ Log real interaction now
+            # ✅ Final log append — now guaranteed to hit correct record
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
@@ -391,7 +383,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # --- Stage: Quote Calculated ---
         elif stage == "Quote Calculated":
             return JSONResponse(content={
                 "properties": [],
@@ -400,7 +391,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": generate_next_actions()
             })
 
-        # --- Stage: Gathering Personal Info ---
         elif stage == "Gathering Personal Info":
             return JSONResponse(content={
                 "properties": [],
@@ -408,7 +398,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # --- Stage: Chat Banned ---
         elif stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
@@ -416,7 +405,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # --- Final fallback ---
         return JSONResponse(content={
             "properties": [],
             "response": "All done and dusted! Let me know if you'd like to tweak anything.",
