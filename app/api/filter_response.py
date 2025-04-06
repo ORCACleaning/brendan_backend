@@ -145,7 +145,6 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from fastapi import HTTPException
 
-# Load .env variables
 load_dotenv()
 
 # --- Config ---
@@ -156,14 +155,37 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# --- Utility Functions ---
+# ✅ Master Airtable field list (used for validation)
+VALID_AIRTABLE_FIELDS = {
+    "quote_id", "timestamp", "source", "suburb", "bedrooms_v2", "bathrooms_v2",
+    "window_cleaning", "window_count", "blind_cleaning", "furnished",
+    "carpet_steam_clean", "oven_cleaning", "garage_cleaning", "extra_hours_requested",
+    "special_requests", "quote_total", "quote_time_estimate", "hourly_rate", "gst_amount",
+    "discount_percent", "discount_reason", "final_price", "customer_name", "email", "phone",
+    "business_name", "property_address", "pdf_link", "booking_url", "quote_stage", "quote_notes",
+    "message_log", "session_id", "privacy_acknowledged", "abuse_warning_issued",
+    "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count",
+    "carpet_stairs_count", "carpet_other_count", "balcony_cleaning", "after_hours_cleaning",
+    "weekend_cleaning", "is_property_manager", "real_estate_name",
+    "special_request_minutes_min", "special_request_minutes_max", "upholstery_cleaning"
+}
 
-import uuid
-import requests
-import json
-from fastapi import HTTPException
-
-# 🔐 Constants should already be imported in your app (e.g. AIRTABLE_API_KEY, AIRTABLE_BASE_ID, TABLE_NAME, GPT_PROMPT)
+# 🔁 Field normalization map
+FIELD_MAP = {
+    "bedrooms": "bedrooms_v2",
+    "bathrooms": "bathrooms_v2",
+    "carpets": "carpet_bedroom_count",
+    "carpet": "carpet_bedroom_count",
+    "garage": "garage_cleaning",
+    "oven": "oven_cleaning",
+    "fridge": "fridge_cleaning",
+    "walls": "wall_cleaning",
+    "windows": "window_cleaning",
+    "balcony": "balcony_cleaning",
+    "furnished_status": "furnished",
+    "property_manager": "is_property_manager",
+    "location": "suburb"
+}
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
@@ -195,10 +217,9 @@ def get_next_quote_id(prefix="VC"):
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
-
 def create_new_quote(session_id: str, force_new: bool = False):
     print(f"🚨 Checking for existing session: {session_id}")
-    
+
     existing = get_quote_by_session(session_id)
     if existing and not force_new:
         print("⚠️ Duplicate session detected. Returning existing quote.")
@@ -231,8 +252,6 @@ def create_new_quote(session_id: str, force_new: bool = False):
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
     return quote_id, record_id
 
-
-
 def get_quote_by_session(session_id: str):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -254,7 +273,6 @@ def get_quote_by_session(session_id: str):
         }
     return None
 
-
 def update_quote_record(record_id: str, fields: dict):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
@@ -262,31 +280,17 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    field_map = {
-        "bedrooms": "bedrooms_v2",
-        "bathrooms": "bathrooms_v2",
-        "carpets": "carpet_cleaning",
-        "carpet": "carpet_cleaning",
-        "garage": "garage_cleaning",
-        "oven": "oven_cleaning",
-        "fridge": "fridge_cleaning",
-        "walls": "wall_cleaning",
-        "windows": "window_cleaning",
-        "balcony": "balcony_cleaning",
-        "furnished_status": "furnished",
-        "property_manager": "is_property_manager",
-        "location": "suburb"
-    }
-
     normalized_fields = {}
     for key, value in fields.items():
-        mapped_key = field_map.get(key, key)
-        normalized_fields[mapped_key] = value
+        mapped_key = FIELD_MAP.get(key, key)
+        if mapped_key in VALID_AIRTABLE_FIELDS:
+            normalized_fields[mapped_key] = value
+        else:
+            print(f"❌ Skipped field '{mapped_key}' — not in Airtable schema")
 
     print(f"\n📤 Updating Airtable Record: {record_id}")
-    print(f"🛠 Structured field payload: {json.dumps(normalized_fields, indent=2)}")
+    print(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Try full update first
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         print("✅ Airtable updated successfully.")
@@ -298,7 +302,6 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception as e:
         print("⚠️ Could not decode Airtable error:", str(e))
 
-    # Try each field individually
     print("\n🔍 Trying individual field updates...")
     successful_fields = []
     for key, value in normalized_fields.items():
@@ -319,8 +322,6 @@ def update_quote_record(record_id: str, fields: dict):
     print("✅ Partial update complete. Fields updated:", successful_fields)
     return successful_fields
 
-
-
 def append_message_log(record_id: str, message: str, sender: str):
     if not record_id:
         print("❌ Cannot append log — missing record ID")
@@ -331,7 +332,6 @@ def append_message_log(record_id: str, message: str, sender: str):
     old_log = current.get("fields", {}).get("message_log", "")
     new_log = f"{old_log}\n{sender.upper()}: {message}".strip()[-5000:]
     update_quote_record(record_id, {"message_log": new_log})
-
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
@@ -376,7 +376,6 @@ def extract_properties_from_gpt4(message: str, log: str):
         print("🪵 RAW fallback content:\n", raw)
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
-
 def generate_next_actions():
     return [
         {"action": "proceed_booking", "label": "Proceed to Booking"},
@@ -384,6 +383,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 
 # --- Route ---
