@@ -131,7 +131,6 @@ Email: info@orcacleaning.com.au
 Once all fields are complete, say:  
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
-
 # --- Brendan Utilities ---
 import os
 import json
@@ -301,7 +300,6 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
-
 
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
