@@ -166,6 +166,7 @@ import requests
 import json
 from fastapi import HTTPException
 
+# 🔐 Constants should already be imported in your app (e.g. AIRTABLE_API_KEY, AIRTABLE_BASE_ID, TABLE_NAME, GPT_PROMPT)
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
@@ -201,8 +202,10 @@ def get_next_quote_id(prefix="VC"):
 def create_new_quote(session_id: str):
     print(f"🚨 Checking for existing session: {session_id}")
     existing = get_quote_by_session(session_id)
+
     if existing:
-        print("⚠️ Duplicate session detected. Quote ID:", existing['quote_id'], "Record ID:", existing['record_id'])
+        print("⚠️ Duplicate session detected. Returning existing quote.")
+        return existing['quote_id'], existing['record_id']
 
     session_id = session_id or str(uuid.uuid4())
     quote_id = get_next_quote_id()
@@ -259,6 +262,7 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
+    # 🔁 Normalize known aliases to Airtable schema
     field_map = {
         "bedrooms": "bedrooms_v2",
         "bathrooms": "bathrooms_v2",
