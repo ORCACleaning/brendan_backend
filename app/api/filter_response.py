@@ -304,50 +304,23 @@ def append_message_log(record_id: str, message: str, sender: str):
     update_quote_record(record_id, {"message_log": new_log})
 
 def extract_properties_from_gpt4(message: str, log: str):
-    try:
-        print("🧠 Calling GPT-4 to extract properties...")
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": GPT_PROMPT},
-                {"role": "system", "content": f"Conversation so far:\n{log}"},
-                {"role": "user", "content": message}
-            ],
-            max_tokens=800,
-            temperature=0.4
-        )
-        raw = response.choices[0].message.content.strip()
-        print("\n🔍 RAW GPT OUTPUT:\n", raw)
+    print("🧠 SIMULATING GPT-4 with hardcoded valid props...")
 
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        start, end = raw.find("{"), raw.rfind("}")
-        if start == -1 or end == -1:
-            raise ValueError("JSON block not found.")
-        clean_json = raw[start:end+1]
+    # Simulated working structure
+    props = [
+        {"property": "suburb", "value": "Midland"},
+        {"property": "bedrooms_v2", "value": 3},
+        {"property": "bathrooms_v2", "value": 2},
+        {"property": "oven_cleaning", "value": True},
+        {"property": "fridge_cleaning", "value": True},
+        {"property": "carpet_cleaning", "value": True},
+        {"property": "wall_cleaning", "value": True}
+    ]
+    reply = "Awesome — I've filled in your details. Anything else I should know?"
 
-        print("\n📦 Clean JSON block before parsing:\n", clean_json)
-
-        parsed = json.loads(clean_json)
-        props_list = parsed.get("properties", [])
-        reply = parsed.get("response", "")
-
-        print("✅ Parsed props:", props_list)
-        print("✅ Parsed reply:", reply)
-
-        # Convert props list to dict (skip non-dict elements)
-        fields = {
-            p["property"]: p["value"]
-            for p in props_list
-            if isinstance(p, dict) and "property" in p and "value" in p
-        }
-
-        print("🛠 Structured field payload:", json.dumps(fields, indent=2))
-        return fields, reply
-
-    except Exception as e:
-        print("🔥 GPT EXTRACT ERROR:", e)
-        print("🪵 RAW fallback content:\n", raw)
-        return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+    print("✅ Parsed props:", props)
+    print("✅ Parsed reply:", reply)
+    return props, reply
 
 def generate_next_actions():
     return [
