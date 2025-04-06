@@ -299,6 +299,17 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
+        # Handle init trigger
+        if message == "__init__":
+            intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, intro, "brendan")
+            return JSONResponse(content={
+                "properties": [],
+                "response": intro,
+                "next_actions": []
+            })
+
         # Log user message
         append_message_log(record_id, message, "user")
 
