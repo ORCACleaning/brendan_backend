@@ -171,7 +171,7 @@ VALID_AIRTABLE_FIELDS = {
 }
 
 # 🔁 Field normalization map
-field_map = {
+FIELD_MAP = {
     "bedrooms": "bedrooms_v2",
     "bathrooms": "bathrooms_v2",
     "carpets": "carpet_cleaning",
