@@ -20,6 +20,7 @@ table_name = "Vacate Quotes"
 
 inflector = inflect.engine()
 
+# ✅ Use this prompt directly — do NOT override it from .env
 GPT_PROMPT = """
 🚨 You must ALWAYS reply in **valid JSON only** — no exceptions.
 
@@ -104,47 +105,46 @@ Phone: 1300 918 388
 Email: info@orcacleaning.com.au
 
 ## REQUIRED FIELD ORDER:
-1. suburb
-2. bedrooms_v2
-3. bathrooms_v2
-4. furnished
-5. oven_cleaning
-6. window_cleaning
-    - if yes → ask for window_count
-7. carpet_bedroom_count
-8. carpet_mainroom_count
-9. carpet_study_count
-10. carpet_halway_count
-11. carpet_stairs_count
-12. carpet_other_count
-13. blind_cleaning (only if furnished = Yes)
-14. garage_cleaning
-15. balcony_cleaning
-16. upholstery_cleaning (only if furnished = Yes)
-17. after_hours_cleaning
-18. weekend_cleaning
-19. is_property_manager
-    - if yes → ask for real_estate_name
+1. suburb  
+2. bedrooms_v2  
+3. bathrooms_v2  
+4. furnished  
+5. oven_cleaning  
+6. window_cleaning  
+    - if yes → ask for window_count  
+7. carpet_bedroom_count  
+8. carpet_mainroom_count  
+9. carpet_study_count  
+10. carpet_halway_count  
+11. carpet_stairs_count  
+12. carpet_other_count  
+13. blind_cleaning (only if furnished = Yes)  
+14. garage_cleaning  
+15. balcony_cleaning  
+16. upholstery_cleaning (only if furnished = Yes)  
+17. after_hours_cleaning  
+18. weekend_cleaning  
+19. is_property_manager  
+    - if yes → ask for real_estate_name  
 20. special_requests → capture text + minutes if valid
 
 Once all fields are complete, say:  
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
 
+
 # --- Utilities ---
-# --- Imports ---
 import uuid
 import json
 import requests
 import re
 import os
 from dotenv import load_dotenv
-from fastapi import Request, HTTPException, APIRouter
+from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 
 # --- Init ---
-router = APIRouter()
 load_dotenv()
 
 # --- Config ---
@@ -152,9 +152,8 @@ airtable_api_key = os.getenv("AIRTABLE_API_KEY")
 airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
 table_name = "Vacate Quotes"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-gpt_prompt = os.getenv("GPT_PROMPT") or "You're Brendan, a quoting assistant for Orca Cleaning. Return 'properties' as JSON and a friendly 'response'."
 
-# --- Utilities ---
+# --- Utility Functions ---
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
@@ -164,7 +163,8 @@ def get_next_quote_id(prefix="VC"):
         "pageSize": 100
     }
 
-    records, offset = [], None
+    records = []
+    offset = None
     while True:
         if offset:
             params["offset"] = offset
@@ -247,7 +247,7 @@ def extract_properties_from_gpt4(message, log):
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": gpt_prompt},
+                {"role": "system", "content": GPT_PROMPT},
                 {"role": "system", "content": f"Conversation so far:\n{log}"},
                 {"role": "user", "content": message}
             ],
@@ -275,6 +275,7 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
+
 # --- Route ---
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -286,6 +287,7 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
+        # Lookup or create quote
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             quote_id, record_id = create_new_quote(session_id)
@@ -297,8 +299,10 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
+        # Log user message
         append_message_log(record_id, message, "user")
 
+        # --- Handle stage: Gathering Info ---
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
@@ -311,6 +315,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
+        # --- Handle stage: Quote Calculated ---
         elif stage == "Quote Calculated":
             return JSONResponse(content={
                 "properties": [],
@@ -319,6 +324,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": generate_next_actions()
             })
 
+        # --- Handle stage: Gathering Personal Info ---
         elif stage == "Gathering Personal Info":
             return JSONResponse(content={
                 "properties": [],
@@ -326,6 +332,15 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
+        # --- Handle stage: Chat Banned ---
+        elif stage == "Chat Banned":
+            return JSONResponse(content={
+                "properties": [],
+                "response": "Sorry mate — this chat’s been closed due to inappropriate messages. If you’d like to continue, please call us on 1300 918 388 or email info@orcacleaning.com.au.",
+                "next_actions": []
+            })
+
+        # --- Default fallback ---
         return JSONResponse(content={
             "properties": [],
             "response": "All done and dusted! Let me know if you'd like to tweak anything.",
