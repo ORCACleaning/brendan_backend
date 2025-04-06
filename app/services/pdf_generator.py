@@ -8,7 +8,6 @@ def generate_quote_pdf(data: dict) -> str:
     quote_id = data.get("quote_id") or f"VAC-{uuid.uuid4().hex[:8]}"
     filename = f"{quote_id}.pdf"
     output_path = f"app/static/quotes/{filename}"
-
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     # Load logo image as base64
@@ -16,11 +15,10 @@ def generate_quote_pdf(data: dict) -> str:
     with open(logo_path, "rb") as logo_file:
         logo_base64 = base64.b64encode(logo_file.read()).decode("utf-8")
 
-    # Load Jinja2 environment
+    # Load Jinja2 template
     env = Environment(loader=FileSystemLoader("app/services/templates"))
     template = env.get_template("quote_template.html")
 
-    # Inject logo
     data["logo_base64"] = logo_base64
 
     # --- Extra Services Section ---
@@ -30,12 +28,11 @@ def generate_quote_pdf(data: dict) -> str:
         wc = data.get("window_count") or 0
         extra_services.append(f"Window Cleaning ({wc} windows)" if wc else "Window Cleaning")
 
-    # Carpet cleaning by room type
     carpet_fields = [
         ("carpet_bedroom_count", "bedroom"),
-        ("carpet_main_count", "main room"),
+        ("carpet_mainroom_count", "main room"),
         ("carpet_study_count", "study"),
-        ("carpet_hallway_count", "hallway"),
+        ("carpet_halway_count", "hallway"),  # ✅ corrected from typo
         ("carpet_stairs_count", "stairs"),
         ("carpet_other_count", "other area")
     ]
@@ -46,32 +43,23 @@ def generate_quote_pdf(data: dict) -> str:
 
     if data.get("oven_cleaning"):
         extra_services.append("Oven Cleaning")
-
     if data.get("garage_cleaning"):
         extra_services.append("Garage/Shed Cleaning")
-
     if data.get("wall_cleaning"):
         extra_services.append("Wall Cleaning")
-
     if data.get("balcony_cleaning"):
         extra_services.append("Balcony Cleaning")
-
     if data.get("fridge_cleaning"):
         extra_services.append("Fridge Cleaning")
-
     if data.get("range_hood_cleaning"):
         extra_services.append("Range Hood Cleaning")
-
     if data.get("deep_cleaning"):
         extra_services.append("Deep/Detail Cleaning")
-
     if data.get("blind_cleaning"):
         extra_services.append("Blind/Curtain Cleaning")
-
     if data.get("upholstery_cleaning"):
         extra_services.append("Upholstery Cleaning")
 
-    # Add service summary to template data
     data["extra_services"] = ", ".join(extra_services) if extra_services else "None"
 
     # --- Property Manager Info ---
@@ -82,10 +70,10 @@ def generate_quote_pdf(data: dict) -> str:
         data["property_manager_note"] = "–"
 
     # --- After Hours Surcharge Info ---
-    after_hours = str(data.get("after_hours_surcharge", "")).strip()
+    after_hours = data.get("after_hours_surcharge", 0)
     data["after_hours_note"] = (
-        f"✅ After-Hours Cleaning Surcharge ({after_hours}%)"
-        if after_hours and after_hours != "0" else "–"
+        f"✅ After-Hours Cleaning Surcharge (${after_hours:.2f})"
+        if after_hours and float(after_hours) > 0 else "–"
     )
 
     # --- Final Render ---
