@@ -161,6 +161,12 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 
 # --- Utility Functions ---
 
+import uuid
+import requests
+import json
+from fastapi import HTTPException
+
+
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -190,6 +196,7 @@ def get_next_quote_id(prefix="VC"):
 
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
+
 
 def create_new_quote(session_id: str):
     print(f"🚨 Checking for existing session: {session_id}")
@@ -222,11 +229,18 @@ def create_new_quote(session_id: str):
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
     return quote_id, record_id
 
+
 def get_quote_by_session(session_id: str):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     params = {"filterByFormula": f"{{session_id}}='{session_id}'"}
     res = requests.get(url, headers=headers).json()
+
+    if len(res.get("records", [])) > 1:
+        print(f"🚨 MULTIPLE QUOTES found for session_id: {session_id}")
+        for r in res["records"]:
+            print(f"   → ID: {r['id']} | Quote ID: {r['fields'].get('quote_id')}")
+
     if res.get("records"):
         record = res["records"][0]
         return {
@@ -237,6 +251,7 @@ def get_quote_by_session(session_id: str):
         }
     return None
 
+
 def update_quote_record(record_id: str, fields: dict):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
@@ -244,7 +259,6 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # 🔁 Field Normalization Map
     field_map = {
         "bedrooms": "bedrooms_v2",
         "bathrooms": "bathrooms_v2",
@@ -261,7 +275,6 @@ def update_quote_record(record_id: str, fields: dict):
         "location": "suburb"
     }
 
-    # 🧼 Normalize fields
     normalized_fields = {}
     for key, value in fields.items():
         mapped_key = field_map.get(key, key)
@@ -270,7 +283,6 @@ def update_quote_record(record_id: str, fields: dict):
     print(f"\n📤 Updating Airtable Record: {record_id}")
     print(f"🛠 Structured field payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Try full update
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         print("✅ Airtable updated successfully.")
@@ -282,7 +294,6 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception as e:
         print("⚠️ Could not decode Airtable error:", str(e))
 
-    # 🕵️ Try fields one-by-one to isolate the problem
     print("\n🔍 Trying individual field updates to isolate issues...")
     for key, value in normalized_fields.items():
         single_payload = {"fields": {key: value}}
@@ -309,6 +320,7 @@ def append_message_log(record_id: str, message: str, sender: str):
     old_log = current.get("fields", {}).get("message_log", "")
     new_log = f"{old_log}\n{sender.upper()}: {message}".strip()[-5000:]
     update_quote_record(record_id, {"message_log": new_log})
+
 
 def extract_properties_from_gpt4(message: str, log: str):
     try:
@@ -353,6 +365,7 @@ def extract_properties_from_gpt4(message: str, log: str):
         print("🪵 RAW fallback content:\n", raw)
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
+
 def generate_next_actions():
     return [
         {"action": "proceed_booking", "label": "Proceed to Booking"},
@@ -360,6 +373,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
