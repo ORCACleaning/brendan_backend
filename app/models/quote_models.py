@@ -54,6 +54,10 @@ class QuoteRequest(BaseModel):
     customer_email: Optional[str] = None
     customer_phone: Optional[str] = None
 
+    # 📌 Additional Fields (Missing Previously)
+    quote_notes: Optional[str] = None
+    message_log: Optional[str] = None
+
     # 🧠 System Fields
     quote_stage: Optional[str] = "Gathering Info"
     quote_status: Optional[str] = "Pending"
