@@ -131,15 +131,7 @@ async def store_customer(data: CustomerData):
         msg["To"] = data.email
         msg["Subject"] = f"Your Orca Vacate Cleaning Quote ({data.quote_id})"
 
-        body = f"""Hi {data.name},
-
-Thanks for chatting with Brendan! Attached is your PDF quote.
-
-You can book your clean here: {data.booking_url}
-
-Cheers,  
-Orca Cleaning
-"""
+        body = f"Hi {data.name},
 
 Thanks for chatting with Brendan! Attached is your PDF quote.
 
