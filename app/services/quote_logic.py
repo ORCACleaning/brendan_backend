@@ -49,18 +49,18 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
 
     for service, time in EXTRA_SERVICE_TIMES.items():
-        if getattr(data, service, False):
+        if str(getattr(data, service, "false")).lower() == "true":
             base_minutes += time
 
-    if data.window_cleaning:
+    if str(data.window_cleaning).lower() == "true":
         base_minutes += (data.window_count or 0) * 10
-        if data.blind_cleaning:
+        if str(data.blind_cleaning).lower() == "true":
             base_minutes += (data.window_count or 0) * 10
 
-    if data.oven_cleaning:
+    if str(data.oven_cleaning).lower() == "true":
         base_minutes += 30
 
-    if data.upholstery_cleaning:
+    if str(data.upholstery_cleaning).lower() == "true":
         base_minutes += 45
 
     if str(data.furnished).lower() == "furnished":
@@ -87,16 +87,15 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
-    weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
-    after_hours_fee = data.after_hours_surcharge or 0  # ✅ use provided field directly
+    weekend_fee = WEEKEND_SURCHARGE if str(data.weekend_cleaning).lower() == "true" else 0
+    after_hours_fee = data.after_hours_surcharge or 0
     mandurah_field = str(data.mandurah_property).strip().lower()
     mandurah_fee = MANDURAH_SURCHARGE if mandurah_field in ["yes", "true", "1"] else 0
-
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
-    if data.is_property_manager:
+    if str(data.is_property_manager).lower() == "true":
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
 
     discount_amount = round(total_before_discount * (total_discount_percent / 100), 2)
