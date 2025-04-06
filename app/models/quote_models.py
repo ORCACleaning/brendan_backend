@@ -9,10 +9,10 @@ class QuoteRequest(BaseModel):
     bathrooms_v2: int
     furnished: str  # "Furnished" / "Unfurnished"
 
-    # 🧼 Standard Cleaning Options
-    oven_cleaning: bool
-    window_cleaning: bool
-    window_count: Optional[int] = 0  # e.g. 10
+    # 🧼 Standard Cleaning Options (Airtable checkboxes as "True"/"False")
+    oven_cleaning: str  # "True" or "False"
+    window_cleaning: str  # "True" or "False"
+    window_count: Optional[int] = 0
 
     # 🧹 Carpet Cleaning (detailed breakdown)
     carpet_bedroom_count: Optional[int] = 0
@@ -23,30 +23,30 @@ class QuoteRequest(BaseModel):
     carpet_other_count: Optional[int] = 0
 
     # ➕ Optional Extras
-    wall_cleaning: Optional[bool] = False
-    balcony_cleaning: Optional[bool] = False
-    deep_cleaning: Optional[bool] = False
-    fridge_cleaning: Optional[bool] = False
-    range_hood_cleaning: Optional[bool] = False
-    garage_cleaning: Optional[bool] = False
-    blind_cleaning: Optional[bool] = False
-    upholstery_cleaning: Optional[bool] = False
+    wall_cleaning: Optional[str] = "False"
+    balcony_cleaning: Optional[str] = "False"
+    deep_cleaning: Optional[str] = "False"
+    fridge_cleaning: Optional[str] = "False"
+    range_hood_cleaning: Optional[str] = "False"
+    garage_cleaning: Optional[str] = "False"
+    blind_cleaning: Optional[str] = "False"
+    upholstery_cleaning: Optional[str] = "False"
 
     # ⏰ Surcharges & Scheduling
-    weekend_cleaning: Optional[bool] = False
-    after_hours_surcharge: Optional[float] = 0.0  # Percent field in Airtable
+    weekend_cleaning: Optional[str] = "False"
+    after_hours_surcharge: Optional[float] = 0.0
     mandurah_property: Optional[str] = "False"
 
     # 🏢 Real Estate / Agent
-    is_property_manager: Optional[bool] = False
+    is_property_manager: Optional[str] = "False"
     real_estate_name: Optional[str] = None
 
-    # 🤖 Special Requests (AI-handled)
+    # 🤖 Special Requests
     special_requests: Optional[str] = None
     special_request_minutes_min: Optional[int] = None
     special_request_minutes_max: Optional[int] = None
 
-    # 👤 Personal Info (later stage)
+    # 👤 Personal Info
     customer_name: Optional[str] = None
     customer_email: Optional[str] = None
     customer_phone: Optional[str] = None
@@ -57,7 +57,7 @@ class QuoteRequest(BaseModel):
     quote_id: Optional[str] = None
     quote_pdf_link: Optional[str] = None
     booking_url: Optional[str] = None
-    privacy_acknowledged: Optional[str] = None
+    privacy_acknowledged: Optional[str] = "False"
 
 
 # ✅ Output Model for Quote Response
