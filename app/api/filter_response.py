@@ -165,7 +165,6 @@ Follow Orca’s quoting rules. Skip blind/upholstery questions if unfurnished.
 Don’t quote for anything outside the home. Avoid rugs.
 Be friendly, casual, and professional — Aussie-style.
 """
-
 # --- Utility Functions ---
 
 def get_next_quote_id(prefix="VC"):
@@ -217,7 +216,7 @@ def create_new_quote(session_id: str):
     if not res.ok:
         print("❌ FAILED to create quote:", res.status_code, res.text)
         raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
-    
+
     record_id = res.json().get("id")
     print(f"✅ Created new quote record: {record_id} with ID {quote_id}")
 
@@ -276,22 +275,29 @@ def extract_properties_from_gpt4(message: str, log: str):
             temperature=0.4
         )
         raw = response.choices[0].message.content.strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
+        print("\n🔍 RAW GPT OUTPUT:\n", raw)
 
-        # Trim clean JSON block only
+        raw = raw.replace("```json", "").replace("```", "").strip()
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
         clean_json = raw[start:end+1]
 
+        print("\n📦 Clean JSON block before parsing:\n", clean_json)
+
         parsed = json.loads(clean_json)
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
+
+        print("✅ Parsed props:", props)
+        print("✅ Parsed reply:", reply)
+
         return props, reply
 
     except Exception as e:
         print("🔥 GPT EXTRACT ERROR:", e)
-        return [], "Oops — I couldn’t quite understand that. Can you reword it?"
+        print("🪵 RAW fallback content:\n", raw)
+        return [], "Sorry — I couldn’t understand that. Could you rephrase?"
 
 def generate_next_actions():
     return [
