@@ -132,6 +132,8 @@ Once all fields are complete, say:
 """
 
 # --- Utilities ---
+
+# --- Utilities ---
 import uuid
 import json
 import requests
@@ -142,6 +144,7 @@ from openai import OpenAI
 from fastapi import Request, HTTPException
 from fastapi.responses import JSONResponse
 
+# ✅ Load environment variables
 load_dotenv()
 
 # ✅ Airtable & OpenAI setup
@@ -158,6 +161,7 @@ def get_next_quote_id(prefix="VC"):
         "fields[]": ["quote_id"],
         "pageSize": 100
     }
+
     records = []
     offset = None
     while True:
@@ -177,6 +181,7 @@ def get_next_quote_id(prefix="VC"):
             numbers.append(num)
         except:
             continue
+
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
@@ -244,8 +249,9 @@ def extract_suburb_from_text(text):
     return "Unknown"
 
 def extract_properties_from_gpt4(message, log):
-    prompt = os.getenv("GPT_PROMPT") or "Default GPT prompt here."
+    prompt = os.getenv("GPT_PROMPT") or "You are Brendan, a smart vacate cleaning assistant for Orca Cleaning..."
     try:
+        print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -258,6 +264,9 @@ def extract_properties_from_gpt4(message, log):
         )
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
+        if not raw.startswith("{"):
+            print("❌ Response is not JSON")
+            return [], "Oops — I couldn’t quite understand that. Can you reword it?"
         parsed = json.loads(raw)
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
@@ -273,6 +282,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 # --- Route ---
 
