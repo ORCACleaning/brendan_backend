@@ -435,7 +435,7 @@ async def filter_response_entry(request: Request):
                         val = str(val).strip().lower()
                         updates[key] = "Furnished" if val in ["yes", "furnished", "true", "1"] else "Unfurnished"
                     elif key == "after_hours_cleaning":
-                        updates["after_hours_surcharge"] = "75%"
+                        updates["after_hours"] = True
                     elif key in checkbox_fields:
                         updates[key] = str(val).strip().lower() in ["yes", "true", "1"]
                     else:
@@ -470,7 +470,7 @@ async def filter_response_entry(request: Request):
                 "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
                 "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
                 "blind_cleaning", "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
-                "after_hours_surcharge", "weekend_cleaning", "is_property_manager", "real_estate_name"
+                "after_hours", "weekend_cleaning", "is_property_manager", "real_estate_name"
             ]
 
             if all(field in combined_fields for field in required_fields):
