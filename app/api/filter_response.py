@@ -293,7 +293,6 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
-
 # --- Route ---
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -334,9 +333,15 @@ async def filter_response_entry(request: Request):
         # --- Handle stage: Gathering Info ---
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
+            print("🔍 Extracted properties:", json.dumps(props, indent=2))
+
             updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
             if updates:
+                print("📤 Updating Airtable with:", json.dumps(updates, indent=2))
                 update_quote_record(record_id, updates)
+            else:
+                print("⚠️ No valid properties to update.")
+
             append_message_log(record_id, reply, "brendan")
             return JSONResponse(content={
                 "properties": props,
