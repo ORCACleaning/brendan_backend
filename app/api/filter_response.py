@@ -420,14 +420,6 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 import json
 
-from utility import (
-    create_new_quote,
-    get_quote_by_session,
-    update_quote_record,
-    append_message_log,
-    extract_properties_from_gpt4
-)
-
 router = APIRouter()
 
 @router.post("/filter-response")
