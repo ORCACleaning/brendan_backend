@@ -359,7 +359,7 @@ def generate_next_actions():
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
-import json  # ✅ Ensure this is imported if not already
+import json
 
 router = APIRouter()
 
@@ -375,7 +375,7 @@ async def filter_response_entry(request: Request):
 
         is_init = message == "__init__"
 
-        # If init: create new quote
+        # Init = new quote
         if is_init:
             quote_id, record_id = create_new_quote(session_id)
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
@@ -398,21 +398,33 @@ async def filter_response_entry(request: Request):
         stage = quote_data["stage"]
         log = fields.get("message_log", "")
 
+        print(f"\n🧾 Session ID: {session_id}")
+        print(f"🔗 Quote ID: {quote_id}")
+        print(f"📇 Airtable Record ID: {record_id}")
+        print(f"📜 Stage: {stage}")
+
         # --- Stage: Gathering Info ---
         if stage == "Gathering Info":
             updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
 
-            # Call GPT-4 for parsing
+            # Call GPT
             props_list, reply = extract_properties_from_gpt4(message, updated_log)
 
-            # ✅ FIXED: allow falsy values like False, 0, etc.
-            updates = {p["property"]: p["value"] for p in props_list if "property" in p}
+            # DEBUG: Show full props
+            print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_list, indent=2)}")
 
-            print(f"🛠 Structured field payload: {json.dumps(updates, indent=2)}")
+            # Convert to dict
+            updates = {p["property"]: p["value"] for p in props_list if "property" in p and "value" in p}
+
+            print(f"\n🛠 Structured updates ready for Airtable:\n{json.dumps(updates, indent=2)}")
+
+            if not updates:
+                print("⚠️ WARNING: No valid fields parsed — double check GPT output or field map.")
+
             if updates:
                 update_quote_record(record_id, updates)
 
-            # Update conversation log
+            # Append convo log
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
@@ -421,8 +433,6 @@ async def filter_response_entry(request: Request):
                 "response": reply or "Got that. Anything else I should know?",
                 "next_actions": []
             })
-
-        # Future stages (to be implemented later)
 
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
