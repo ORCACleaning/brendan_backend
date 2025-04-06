@@ -405,8 +405,8 @@ async def filter_response_entry(request: Request):
             # Call GPT-4 for parsing
             props_list, reply = extract_properties_from_gpt4(message, updated_log)
 
-            # Convert props list to dictionary
-            updates = {p["property"]: p["value"] for p in props_list if "property" in p and "value" in p}
+            # ✅ FIXED: allow falsy values like False, 0, etc.
+            updates = {p["property"]: p["value"] for p in props_list if "property" in p}
 
             print(f"🛠 Structured field payload: {json.dumps(updates, indent=2)}")
             if updates:
