@@ -9,9 +9,9 @@ class QuoteRequest(BaseModel):
     bathrooms_v2: int
     furnished: str  # "Furnished" / "Unfurnished"
 
-    # 🧼 Standard Cleaning Options (Airtable checkboxes as "True"/"False")
-    oven_cleaning: str  # "True" or "False"
-    window_cleaning: str  # "True" or "False"
+    # 🧼 Standard Cleaning Options (Airtable checkboxes as "true"/"false")
+    oven_cleaning: str
+    window_cleaning: str
     window_count: Optional[int] = 0
 
     # 🧹 Carpet Cleaning (detailed breakdown)
@@ -23,22 +23,25 @@ class QuoteRequest(BaseModel):
     carpet_other_count: Optional[int] = 0
 
     # ➕ Optional Extras
-    wall_cleaning: Optional[str] = "False"
-    balcony_cleaning: Optional[str] = "False"
-    deep_cleaning: Optional[str] = "False"
-    fridge_cleaning: Optional[str] = "False"
-    range_hood_cleaning: Optional[str] = "False"
-    garage_cleaning: Optional[str] = "False"
-    blind_cleaning: Optional[str] = "False"
-    upholstery_cleaning: Optional[str] = "False"
+    wall_cleaning: Optional[str] = "false"
+    balcony_cleaning: Optional[str] = "false"
+    deep_cleaning: Optional[str] = "false"
+    fridge_cleaning: Optional[str] = "false"
+    range_hood_cleaning: Optional[str] = "false"
+    garage_cleaning: Optional[str] = "false"
+    blind_cleaning: Optional[str] = "false"
+    upholstery_cleaning: Optional[str] = "false"
 
     # ⏰ Surcharges & Scheduling
-    weekend_cleaning: Optional[str] = "False"
+    after_hours_cleaning: Optional[str] = "false"
+    weekend_cleaning: Optional[str] = "false"
     after_hours_surcharge: Optional[float] = 0.0
-    mandurah_property: Optional[str] = "False"
+    weekend_surcharge: Optional[float] = 0.0
+    mandurah_property: Optional[str] = "false"
+    mandurah_surcharge: Optional[float] = 0.0
 
     # 🏢 Real Estate / Agent
-    is_property_manager: Optional[str] = "False"
+    is_property_manager: Optional[str] = "false"
     real_estate_name: Optional[str] = None
 
     # 🤖 Special Requests
@@ -57,7 +60,7 @@ class QuoteRequest(BaseModel):
     quote_id: Optional[str] = None
     quote_pdf_link: Optional[str] = None
     booking_url: Optional[str] = None
-    privacy_acknowledged: Optional[str] = "False"
+    privacy_acknowledged: Optional[str] = "false"
 
 
 # ✅ Output Model for Quote Response
