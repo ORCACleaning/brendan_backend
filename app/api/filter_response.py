@@ -286,7 +286,13 @@ def generate_next_actions():
 
 # --- Route ---
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import JSONResponse
+from .utilities import (
+    get_quote_by_session, create_new_quote, update_quote_record,
+    append_message_log, extract_properties_from_gpt4,
+    generate_next_actions
+)
 
 router = APIRouter()
 
@@ -311,6 +317,49 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
+        # Handle __init__ message BEFORE any GPT
+        if message == "__init__":
+            intro = (
+                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
+                "No sign-up, no spam, just help. We also respect your privacy — you can read our policy here: "
+                "https://orcacleaning.com.au/privacy-policy\n\n"
+                "First up — what suburb’s the property in?"
+            )
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, intro, "brendan")
+            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
+
+        # Abuse filter
+        banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
+        if any(word in message.lower() for word in banned_words):
+            abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
+            append_message_log(record_id, message, "user")
+            if abuse_warned:
+                reply = (
+                    "We’ve had to close this chat due to repeated inappropriate language. "
+                    "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
+                )
+                update_quote_record(record_id, {
+                    "quote_stage": "Chat Banned",
+                    "abuse_warning_issued": "True"
+                })
+                append_message_log(record_id, reply, "brendan")
+                return JSONResponse(content={"response": reply, "properties": [], "next_actions": []})
+            else:
+                reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
+                update_quote_record(record_id, {"abuse_warning_issued": "True"})
+                append_message_log(record_id, reply, "brendan")
+                return JSONResponse(content={"response": reply, "properties": [], "next_actions": []})
+
+        if stage == "Chat Banned":
+            return JSONResponse(content={
+                "response": "This chat’s been closed due to inappropriate messages. "
+                            "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388.",
+                "properties": [],
+                "next_actions": []
+            })
+
+        # Normal flow
         append_message_log(record_id, message, "user")
 
         if stage == "Gathering Info":
