@@ -360,6 +360,7 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
+        # Retrieve or create quote
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             quote_id, record_id = create_new_quote(session_id)
@@ -371,13 +372,14 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
+        # Abuse check
         banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
         if any(word in message.lower() for word in banned_words):
             abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
             append_message_log(record_id, message, "user")
 
             if abuse_warned:
-                bot_reply = (
+                reply = (
                     "We’ve had to close this chat due to repeated inappropriate language. "
                     "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
                 )
@@ -385,30 +387,18 @@ async def filter_response_entry(request: Request):
                     "quote_stage": "Chat Banned",
                     "abuse_warning_issued": "True"
                 })
-                append_message_log(record_id, bot_reply, "brendan")
-                return JSONResponse(content={
-                    "response": bot_reply,
-                    "properties": [],
-                    "next_actions": []
-                })
+                append_message_log(record_id, reply, "brendan")
+                return JSONResponse(content={"response": reply, "properties": [], "next_actions": []})
             else:
-                bot_reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
-                update_quote_record(record_id, {
-                    "abuse_warning_issued": "True"
-                })
-                append_message_log(record_id, bot_reply, "brendan")
-                return JSONResponse(content={
-                    "response": bot_reply,
-                    "properties": [],
-                    "next_actions": []
-                })
+                reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
+                update_quote_record(record_id, {"abuse_warning_issued": "True"})
+                append_message_log(record_id, reply, "brendan")
+                return JSONResponse(content={"response": reply, "properties": [], "next_actions": []})
 
         if stage == "Chat Banned":
             return JSONResponse(content={
-                "response": (
-                    "This chat’s been closed due to inappropriate messages. "
-                    "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388."
-                ),
+                "response": "This chat’s been closed due to inappropriate messages. "
+                            "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388.",
                 "properties": [],
                 "next_actions": []
             })
@@ -425,6 +415,7 @@ async def filter_response_entry(request: Request):
 
         append_message_log(record_id, message, "user")
 
+        # Handle quote info gathering
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
             updates = {}
@@ -437,27 +428,20 @@ async def filter_response_entry(request: Request):
 
             for p in props:
                 if isinstance(p, dict) and "property" in p and "value" in p:
-                    prop = p["property"]
-                    val = p["value"]
+                    key, val = p["property"], p["value"]
 
-                    if prop in ["special_request_minutes_min", "special_request_minutes_max"]:
+                    if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                         try:
-                            updates[prop] = int(val)
+                            updates[key] = int(val)
                         except:
                             continue
-                    elif prop == "furnished":
+                    elif key == "furnished":
                         val = str(val).strip().lower()
-                        if val in ["yes", "furnished", "true", "1"]:
-                            updates[prop] = "Furnished"
-                        elif val in ["no", "unfurnished", "false", "0"]:
-                            updates[prop] = "Unfurnished"
-                        else:
-                            continue
-                    elif prop in checkbox_fields:
-                        val = str(val).strip().lower()
-                        updates[prop] = val in ["yes", "true", "1"]
+                        updates[key] = "Furnished" if val in ["yes", "furnished", "true", "1"] else "Unfurnished"
+                    elif key in checkbox_fields:
+                        updates[key] = str(val).strip().lower() in ["yes", "true", "1"]
                     else:
-                        updates[prop] = val
+                        updates[key] = val
 
             if "window_count" in updates and "window_cleaning" not in updates:
                 try:
@@ -466,11 +450,20 @@ async def filter_response_entry(request: Request):
                 except:
                     pass
 
-            # Set carpet_bedroom_count or carpet_mainroom_count to 0 if one is provided but not the other
-            if "carpet_bedroom_count" in updates and "carpet_mainroom_count" not in updates:
-                updates["carpet_mainroom_count"] = 0
-            elif "carpet_mainroom_count" in updates and "carpet_bedroom_count" not in updates:
-                updates["carpet_bedroom_count"] = 0
+            # Ensure carpet-related fields are always filled if some are missing
+            carpet_fields = [
+                "carpet_bedroom_count",
+                "carpet_mainroom_count",
+                "carpet_study_count",
+                "carpet_halway_count",
+                "carpet_stairs_count",
+                "carpet_other_count"
+            ]
+            filled_carpet_fields = [f for f in carpet_fields if f in updates or f in fields]
+            if filled_carpet_fields and len(filled_carpet_fields) < len(carpet_fields):
+                for f in carpet_fields:
+                    if f not in updates and f not in fields:
+                        updates[f] = 0
 
             if updates:
                 update_quote_record(record_id, updates)
@@ -480,15 +473,15 @@ async def filter_response_entry(request: Request):
             combined_fields = {**fields, **updates}
             required_fields = [
                 "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
-                "window_cleaning", "window_count", "carpet_bedroom_count", "carpet_mainroom_count",
+                "window_cleaning", "window_count",
+                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
                 "blind_cleaning", "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
                 "after_hours_cleaning", "weekend_cleaning", "is_property_manager", "real_estate_name"
             ]
 
             if all(field in combined_fields for field in required_fields):
-                update_quote_record(record_id, {
-                    "quote_stage": "Quote Calculated"
-                })
+                update_quote_record(record_id, {"quote_stage": "Quote Calculated"})
                 return JSONResponse(content={
                     "properties": props,
                     "response": "Thanks legend! I’ve got what I need to whip up your quote. Hang tight…",
@@ -501,15 +494,16 @@ async def filter_response_entry(request: Request):
                     "next_actions": []
                 })
 
+        # Already calculated quote
         elif stage == "Quote Calculated":
-            pdf = fields.get("pdf_link", "#")
-            booking = fields.get("booking_url", "#")
             return JSONResponse(content={
                 "properties": [],
-                "response": f"Your quote’s ready! 👉 [View PDF]({pdf}) or [Schedule Now]({booking})",
+                "response": f"Your quote’s ready! 👉 [View PDF]({fields.get('pdf_link', '#')}) "
+                            f"or [Schedule Now]({fields.get('booking_url', '#')})",
                 "next_actions": generate_next_actions()
             })
 
+        # Gathering personal info stage
         elif stage == "Gathering Personal Info":
             return JSONResponse(content={
                 "properties": [],
@@ -517,6 +511,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
+        # Fallback for completed or unknown stages
         return JSONResponse(content={
             "properties": [],
             "response": "All done and dusted! Let me know if you'd like to tweak anything.",
@@ -526,3 +521,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         print("🔥 Unexpected error:", e)
         return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
+
