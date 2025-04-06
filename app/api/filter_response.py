@@ -245,22 +245,36 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
     try:
+        print(f"\n📤 Updating Airtable Record: {record_id}")
+        print(f"📝 Payload:\n{json.dumps(fields, indent=2)}")
         res = requests.patch(url, headers=headers, json={"fields": fields})
         if not res.ok:
             print("❌ Airtable update failed:", res.status_code)
-            print("🔍 Payload sent:", json.dumps(fields, indent=2))
-            print("🧾 Airtable response:", res.text)
-
-            if "error" in res.json():
-                err = res.json()["error"]
-                if "message" in err:
-                    print("🚨 Airtable field error message:", err["message"])
+            print("❌ Response:\n", res.text)
         else:
             print("✅ Airtable updated:", json.dumps(res.json(), indent=2))
-
     except Exception as e:
         print("🔥 EXCEPTION DURING AIRTABLE UPDATE:", e)
-        print("🔍 Fields attempted:", fields)
+
+def append_message_log(record_id: str, message: str, sender: str):
+    if not record_id:
+        print("❌ Cannot append log — missing record ID")
+        return
+    try:
+        print(f"\n🧩 Appending message from {sender.upper()} to record {record_id}...")
+        url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+        headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+        current = requests.get(url, headers=headers).json()
+        if "fields" not in current:
+            print("❌ ERROR: Could not fetch existing fields from Airtable")
+            print(current)
+            return
+        old_log = current["fields"].get("message_log", "")
+        new_log = f"{old_log}\n{sender.upper()}: {message}".strip()[-5000:]
+        update_quote_record(record_id, {"message_log": new_log})
+    except Exception as e:
+        print("🔥 EXCEPTION DURING LOG APPEND:", e)
+
 
 def append_message_log(record_id: str, message: str, sender: str):
     if not record_id:
