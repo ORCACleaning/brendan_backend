@@ -244,11 +244,23 @@ def update_quote_record(record_id: str, fields: dict):
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
-    res = requests.patch(url, headers=headers, json={"fields": fields})
-    if not res.ok:
-        print("❌ Airtable update failed:", res.status_code, res.text)
-    else:
-        print("✅ Airtable updated:", json.dumps(res.json(), indent=2))
+    try:
+        res = requests.patch(url, headers=headers, json={"fields": fields})
+        if not res.ok:
+            print("❌ Airtable update failed:", res.status_code)
+            print("🔍 Payload sent:", json.dumps(fields, indent=2))
+            print("🧾 Airtable response:", res.text)
+
+            if "error" in res.json():
+                err = res.json()["error"]
+                if "message" in err:
+                    print("🚨 Airtable field error message:", err["message"])
+        else:
+            print("✅ Airtable updated:", json.dumps(res.json(), indent=2))
+
+    except Exception as e:
+        print("🔥 EXCEPTION DURING AIRTABLE UPDATE:", e)
+        print("🔍 Fields attempted:", fields)
 
 def append_message_log(record_id: str, message: str, sender: str):
     if not record_id:
