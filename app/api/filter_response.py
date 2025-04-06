@@ -393,6 +393,14 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 import json
 
+from utility import (
+    create_new_quote,
+    get_quote_by_session,
+    update_quote_record,
+    append_message_log,
+    extract_properties_from_gpt4
+)
+
 router = APIRouter()
 
 @router.post("/filter-response")
@@ -405,11 +413,10 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        is_init = message == "__init__"
-
-        # Init = new quote
-        if is_init:
-            quote_id, record_id = create_new_quote(session_id)
+        # Handle __init__ → Always start a new quote
+        if message.lower() == "__init__":
+            print("🧪 DEBUG — FORCING NEW QUOTE")
+            quote_id, record_id = create_new_quote(session_id, force_new=True)
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
             append_message_log(record_id, intro, "brendan")
@@ -419,7 +426,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # Existing session
+        # Otherwise, get existing quote
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Session expired or not initialized.")
