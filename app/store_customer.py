@@ -1,4 +1,3 @@
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import requests
@@ -6,6 +5,7 @@ import os
 import smtplib
 from io import BytesIO
 from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from app.services.pdf_generator import generate_quote_pdf
 
@@ -67,7 +67,7 @@ def bool_to_checkbox(value: bool) -> str:
 @router.post("/store-customer")
 async def store_customer(data: CustomerData):
     try:
-        # Convert booleans to Airtable-compatible "true"/"false" strings
+        # Airtable format
         airtable_data = {
             "quote_id": data.quote_id,
             "name": data.name,
@@ -99,12 +99,11 @@ async def store_customer(data: CustomerData):
             "quote_stage": data.quote_stage,
             "quote_notes": data.quote_notes,
             "message_log": data.message_log,
-            
-        "mandurah_property": bool_to_checkbox(data.mandurah_property),
-        "special_requests": data.special_requests,
-        "special_request_minutes_min": data.special_request_minutes_min,
-        "special_request_minutes_max": data.special_request_minutes_max,
-        "session_id": data.session_id,
+            "mandurah_property": bool_to_checkbox(data.mandurah_property),
+            "special_requests": data.special_requests,
+            "special_request_minutes_min": data.special_request_minutes_min,
+            "special_request_minutes_max": data.special_request_minutes_max,
+            "session_id": data.session_id,
         }
 
         headers = {
@@ -112,7 +111,7 @@ async def store_customer(data: CustomerData):
             "Content-Type": "application/json"
         }
 
-        # --- Airtable Update ---
+        # Airtable POST
         response = requests.post(
             f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}",
             headers=headers,
@@ -122,10 +121,10 @@ async def store_customer(data: CustomerData):
         if response.status_code >= 300:
             raise Exception(f"Airtable error: {response.text}")
 
-        # --- Generate PDF ---
+        # Generate PDF
         pdf_path = generate_quote_pdf(data.dict())
 
-        # --- Send Email with PDF ---
+        # Send Email
         msg = MIMEMultipart()
         msg["From"] = SENDER_EMAIL
         msg["To"] = data.email
@@ -135,12 +134,12 @@ async def store_customer(data: CustomerData):
 
 Thanks for chatting with Brendan! Attached is your PDF quote.
 
-"                f"You can book your clean here: {data.booking_url}
+You can book your clean here: {data.booking_url}
 
-Cheers,
+Cheers,  
 Orca Cleaning
 """
-        msg.attach(MIMEApplication(body.encode("utf-8"), Name="body.txt"))
+        msg.attach(MIMEText(body, "plain"))
 
         with open(pdf_path, "rb") as f:
             part = MIMEApplication(f.read(), Name=os.path.basename(pdf_path))
