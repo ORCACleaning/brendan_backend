@@ -6,6 +6,7 @@ import smtplib
 from io import BytesIO
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
+from app.services.pdf_generator import generate_quote_pdf
 
 router = APIRouter()
 
@@ -21,158 +22,136 @@ SENDER_EMAIL = SMTP_USER
 
 # --- Data Model ---
 class CustomerData(BaseModel):
-    quote_id: str
-    customer_name: str
-    customer_email: str
-    customer_phone: str
-
-    after_hours: bool = False
-    weekend_cleaning: bool = False
-    is_property_manager: bool = False
-    real_estate_company_name: str = ""
+    mandurah_property: bool = False
     special_requests: str = ""
     special_request_minutes_min: int = 0
     special_request_minutes_max: int = 0
-    mandurah_property: bool = False
 
-    wall_cleaning: bool = False
-    balcony_cleaning: bool = False
+    quote_id: str
+    name: str
+    email: str
+    phone: str
+
+    suburb: str
+    bedrooms_v2: int
+    bathrooms_v2: int
+    furnished: str
+    property_address: str
+    business_name: str
+
+    oven_cleaning: bool = False
     window_cleaning: bool = False
     window_count: int = 0
+    wall_cleaning: bool = False
+    balcony_cleaning: bool = False
     deep_cleaning: bool = False
     fridge_cleaning: bool = False
     range_hood_cleaning: bool = False
-    garage_cleaning: bool = False
 
-    # ✅ New fields for carpeted areas
-    carpet_bedroom_count: int = 0
-    carpet_mainroom_count: int = 0
+    after_hours: bool = False
+    weekend_cleaning: bool = False
+    after_hours_surcharge: float = 0.0
+    weekend_surcharge: float = 0.0
 
-# --- Helper Functions ---
-def find_airtable_record(quote_id):
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    params = {"filterByFormula": f"{{quote_id}} = '{quote_id}'"}
+    pdf_link: str = ""
+    booking_url: str = ""
+    quote_stage: str = "Personal Info Received"
+    quote_notes: str = ""
+    message_log: str = ""
+    session_id: str = ""
 
-    response = requests.get(url, headers=headers, params=params)
-    print("🔍 Airtable raw response:", response.json())
-    records = response.json().get("records", [])
-    return records[0] if records else None
+def bool_to_checkbox(value: bool) -> str:
+    return "true" if value else "false"
 
-def send_email(to_email: str, customer_name: str, quote_id: str, pdf_link: str, booking_url: str):
-    subject = f"Your Orca Cleaning Quote – Ref #{quote_id}"
-    body = f"""
-    G'day {customer_name},
-
-    Thanks for reaching out to Orca Cleaning! Here's your personalized quote for the cleaning job.
-
-    Quote ID: {quote_id}
-    Please find your quote PDF attached.
-
-    You can also **Schedule Now** using the link below:
-    {booking_url}
-
-    If you're a property manager, we’ve already applied your discount — just confirm your real estate company in the form!
-
-    Need help? Just reply to this email or text us on WhatsApp. Cheers!
-
-    The Orca Cleaning Team
-    """
-
-    # Create email
-    msg = MIMEMultipart()
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = to_email
-    msg['Subject'] = subject
-    msg.attach(MIMEApplication(body, 'plain'))
-
+@router.post("/store-customer")
+async def store_customer(data: CustomerData):
     try:
-        response = requests.get(pdf_link)
-        if response.status_code != 200:
-            print(f"🔴 Error downloading PDF: {response.status_code}")
-            raise HTTPException(status_code=500, detail="Error downloading PDF")
+        # Convert booleans to Airtable-compatible "true"/"false" strings
+        airtable_data = {
+            "quote_id": data.quote_id,
+            "name": data.name,
+            "email": data.email,
+            "phone": data.phone,
+            "suburb": data.suburb,
+            "bedrooms_v2": data.bedrooms_v2,
+            "bathrooms_v2": data.bathrooms_v2,
+            "furnished": data.furnished,
+            "property_address": data.property_address,
+            "business_name": data.business_name,
 
-        pdf_data = BytesIO(response.content)
-        msg.attach(MIMEApplication(pdf_data.read(), Name=f"Quote_{quote_id}.pdf", _subtype="pdf"))
-        print("✅ PDF attached successfully.")
-    except Exception as e:
-        print(f"🔴 Error attaching PDF: {e}")
-        raise HTTPException(status_code=500, detail="Error attaching PDF")
+            "oven_cleaning": bool_to_checkbox(data.oven_cleaning),
+            "window_cleaning": bool_to_checkbox(data.window_cleaning),
+            "window_count": data.window_count,
+            "wall_cleaning": bool_to_checkbox(data.wall_cleaning),
+            "balcony_cleaning": bool_to_checkbox(data.balcony_cleaning),
+            "deep_cleaning": bool_to_checkbox(data.deep_cleaning),
+            "fridge_cleaning": bool_to_checkbox(data.fridge_cleaning),
+            "range_hood_cleaning": bool_to_checkbox(data.range_hood_cleaning),
 
-    try:
+            "after_hours": bool_to_checkbox(data.after_hours),
+            "weekend_cleaning": bool_to_checkbox(data.weekend_cleaning),
+            "after_hours_surcharge": data.after_hours_surcharge,
+            "weekend_surcharge": data.weekend_surcharge,
+
+            "pdf_link": data.pdf_link,
+            "booking_url": data.booking_url,
+            "quote_stage": data.quote_stage,
+            "quote_notes": data.quote_notes,
+            "message_log": data.message_log,
+            
+        "mandurah_property": bool_to_checkbox(data.mandurah_property),
+        "special_requests": data.special_requests,
+        "special_request_minutes_min": data.special_request_minutes_min,
+        "special_request_minutes_max": data.special_request_minutes_max,
+        "session_id": data.session_id,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        # --- Airtable Update ---
+        response = requests.post(
+            f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}",
+            headers=headers,
+            json={"fields": airtable_data}
+        )
+
+        if response.status_code >= 300:
+            raise Exception(f"Airtable error: {response.text}")
+
+        # --- Generate PDF ---
+        pdf_path = generate_quote_pdf(data.dict())
+
+        # --- Send Email with PDF ---
+        msg = MIMEMultipart()
+        msg["From"] = SENDER_EMAIL
+        msg["To"] = data.email
+        msg["Subject"] = f"Your Orca Vacate Cleaning Quote ({data.quote_id})"
+
+        body = f"Hi {data.name},
+
+Thanks for chatting with Brendan! Attached is your PDF quote.
+
+"                f"You can book your clean here: {data.booking_url}
+
+Cheers,
+Orca Cleaning"
+        msg.attach(MIMEApplication(body.encode("utf-8"), Name="body.txt"))
+
+        with open(pdf_path, "rb") as f:
+            part = MIMEApplication(f.read(), Name=os.path.basename(pdf_path))
+            part["Content-Disposition"] = f'attachment; filename="{os.path.basename(pdf_path)}"'
+            msg.attach(part)
+
         with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
             server.starttls()
             server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SENDER_EMAIL, to_email, msg.as_string())
-            print(f"✅ Email sent successfully to {to_email}")
+            server.sendmail(SENDER_EMAIL, data.email, msg.as_string())
+
+        return {"status": "success", "quote_id": data.quote_id}
+
     except Exception as e:
-        print(f"🔴 Error sending email: {e}")
-        raise HTTPException(status_code=500, detail="Error sending email")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# --- Endpoint ---
-@router.post("/store-customer")
-def store_customer(data: CustomerData):
-    record = find_airtable_record(data.quote_id)
-    if not record:
-        print(f"🔴 Quote ID {data.quote_id} not found in Airtable.")
-        raise HTTPException(status_code=404, detail="Quote ID not found in Airtable")
-
-    pdf_link = f"https://orcacleaning.com.au/quotes/{data.quote_id}.pdf"
-    booking_url = f"https://orcacleaning.com.au/schedule?quote_id={data.quote_id}"
-
-    # ✅ Update Airtable
-    airtable_data = {
-        "fields": {
-            "quote_id": data.quote_id,
-            "customer_name": data.customer_name,
-            "customer_email": data.customer_email,
-            "customer_phone": data.customer_phone,
-            "after_hours": "Yes" if data.after_hours else "No",
-            "weekend_cleaning": "Yes" if data.weekend_cleaning else "No",
-            "is_property_manager": "Yes" if data.is_property_manager else "No",
-            "real_estate_company_name": data.real_estate_company_name.strip() or "N/A",
-            "special_requests": data.special_requests or "None",
-            "special_request_minutes_min": data.special_request_minutes_min,
-            "special_request_minutes_max": data.special_request_minutes_max,
-            "mandurah_property": "Yes" if data.mandurah_property else "No",
-            "wall_cleaning": "Yes" if data.wall_cleaning else "No",
-            "balcony_cleaning": "Yes" if data.balcony_cleaning else "No",
-            "window_cleaning": "Yes" if data.window_cleaning else "No",
-            "window_count": data.window_count,
-            "deep_cleaning": "Yes" if data.deep_cleaning else "No",
-            "fridge_cleaning": "Yes" if data.fridge_cleaning else "No",
-            "range_hood_cleaning": "Yes" if data.range_hood_cleaning else "No",
-            "garage_cleaning": "Yes" if data.garage_cleaning else "No",
-
-            # ✅ New carpet fields
-            "carpet_bedroom_count": data.carpet_bedroom_count,
-            "carpet_mainroom_count": data.carpet_mainroom_count,
-
-            "status": "Quote Only",
-            "pdf_link": pdf_link,
-            "booking_url": booking_url,
-        }
-    }
-
-    airtable_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{AIRTABLE_TABLE_NAME}/{record['id']}"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    print(f"🔄 Sending update to Airtable: {airtable_url}")
-    response = requests.patch(airtable_url, json=airtable_data, headers=headers)
-    if response.status_code != 200:
-        print(f"🔴 Error updating Airtable: {response.text}")
-        raise HTTPException(status_code=500, detail="Error updating Airtable")
-    else:
-        print(f"✅ Airtable update successful: {response.json()}")
-
-    send_email(data.customer_email, data.customer_name, data.quote_id, pdf_link, booking_url)
-
-    return {
-        "status": "success",
-        "message": f"Quote email sent to {data.customer_email}.",
-        "booking_url": booking_url,
-        "quote_id": data.quote_id
-    }
