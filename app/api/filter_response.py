@@ -192,6 +192,11 @@ def get_next_quote_id(prefix="VC"):
     return f"{prefix}-{str(next_id).zfill(6)}"
 
 def create_new_quote(session_id: str):
+    print(f"🚨 Checking for existing session: {session_id}")
+    existing = get_quote_by_session(session_id)
+    if existing:
+        print("⚠️ Duplicate session detected. Quote ID:", existing['quote_id'], "Record ID:", existing['record_id'])
+
     session_id = session_id or str(uuid.uuid4())
     quote_id = get_next_quote_id()
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
