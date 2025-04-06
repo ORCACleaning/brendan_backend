@@ -333,7 +333,25 @@ def append_message_log(record_id: str, message: str, sender: str):
     new_log = f"{old_log}\n{sender.upper()}: {message}".strip()[-5000:]
     update_quote_record(record_id, {"message_log": new_log})
 
-def extract_properties_from_gpt4(message: str, log: str):
+import smtplib
+from email.mime.text import MIMEText
+
+def send_gpt_error_email(error_msg: str):
+    try:
+        msg = MIMEText(error_msg)
+        msg["Subject"] = "🚨 Brendan GPT Extraction Error"
+        msg["From"] = "info@orcacleaning.com.au"
+        msg["To"] = "admin@orcacleaning.com.au"
+
+        with smtplib.SMTP("smtp.office365.com", 587) as server:
+            server.starttls()
+            server.login("info@orcacleaning.com.au", os.getenv("SMTP_PASS"))
+            server.sendmail(msg["From"], msg["To"], msg.as_string())
+    except Exception as e:
+        print("⚠️ Could not send GPT error alert:", e)
+
+
+def extract_properties_from_gpt4(message: str, log: str, record_id: str = None):
     try:
         print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
@@ -372,8 +390,20 @@ def extract_properties_from_gpt4(message: str, log: str):
         return field_updates, reply
 
     except Exception as e:
-        print("🔥 GPT EXTRACT ERROR:", e)
-        print("🪵 RAW fallback content:\n", raw)
+        raw_fallback = raw if "raw" in locals() else "[No raw GPT output]"
+        error_msg = f"GPT EXTRACT ERROR: {str(e)}\nRAW fallback:\n{raw_fallback}"
+        print("🔥", error_msg)
+
+        # ✅ Airtable error log
+        if record_id:
+            try:
+                update_quote_record(record_id, {"gpt_error_log": error_msg[:10000]})
+            except Exception as airtable_err:
+                print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
+
+        # ✅ Optional email alert
+        # send_gpt_error_email(error_msg)
+
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
 def generate_next_actions():
