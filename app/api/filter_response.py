@@ -294,6 +294,19 @@ def generate_next_actions():
     ]
 
 # --- Route ---
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import JSONResponse
+from brendan_utilities import (
+    get_quote_by_session,
+    create_new_quote,
+    append_message_log,
+    extract_properties_from_gpt4,
+    update_quote_record,
+    generate_next_actions
+)
+
+router = APIRouter()
+
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -316,7 +329,7 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # Handle __init__ trigger
+        # Handle __init__ to start convo
         if message == "__init__":
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -327,24 +340,15 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # Log user message
+        # Log user's message
         append_message_log(record_id, message, "user")
 
-        # --- Handle stage: Gathering Info ---
+        # --- Stage: Gathering Info ---
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
-
-            updates = {}
-            for p in props:
-                if "property" in p and "value" in p:
-                    updates[p["property"]] = p["value"]
-
+            updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
             if updates:
-                print(f"🔄 Updating Airtable fields: {updates}")
                 update_quote_record(record_id, updates)
-            else:
-                print("⚠️ No valid properties to update.")
-
             append_message_log(record_id, reply, "brendan")
             return JSONResponse(content={
                 "properties": props,
@@ -352,7 +356,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # --- Handle stage: Quote Calculated ---
+        # --- Stage: Quote Calculated ---
         elif stage == "Quote Calculated":
             return JSONResponse(content={
                 "properties": [],
@@ -361,7 +365,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": generate_next_actions()
             })
 
-        # --- Handle stage: Gathering Personal Info ---
+        # --- Stage: Gathering Personal Info ---
         elif stage == "Gathering Personal Info":
             return JSONResponse(content={
                 "properties": [],
@@ -369,7 +373,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # --- Handle stage: Chat Banned ---
+        # --- Stage: Chat Banned ---
         elif stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
@@ -377,7 +381,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # --- Default fallback ---
+        # --- Default Fallback ---
         return JSONResponse(content={
             "properties": [],
             "response": "All done and dusted! Let me know if you'd like to tweak anything.",
@@ -385,5 +389,5 @@ async def filter_response_entry(request: Request):
         })
 
     except Exception as e:
-        print("🔥 Unexpected error:", e)
+        print("🔥 UNEXPECTED ERROR:", e)
         return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
