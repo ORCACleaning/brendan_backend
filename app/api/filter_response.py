@@ -269,17 +269,14 @@ def update_quote_record(record_id: str, fields: dict):
         mapped_key = field_map.get(key, key)
         normalized_fields[mapped_key] = value
 
-    # 📝 Log full update attempt
     print(f"\n📤 Updating Airtable Record: {record_id}")
     print(f"📝 Payload:\n{json.dumps(normalized_fields, indent=2)}")
 
-    # 🚀 Try full update first
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         print("✅ Airtable updated successfully.")
         return
 
-    # ❌ If full update fails, log raw error
     print(f"❌ Airtable update failed: {res.status_code}")
     try:
         error_msg = res.json()
@@ -287,7 +284,6 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception as e:
         print("⚠️ Could not decode Airtable error:", str(e))
 
-    # 🔍 Fallback: try each field individually
     print("\n🔍 Trying individual field updates to isolate issues...")
     for key, value in normalized_fields.items():
         test_payload = {"fields": {key: value}}
@@ -339,18 +335,26 @@ def extract_properties_from_gpt4(message: str, log: str):
         print("\n📦 Clean JSON block before parsing:\n", clean_json)
 
         parsed = json.loads(clean_json)
-        props = parsed.get("properties", [])
+        props_list = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        print("✅ Parsed props:", props)
+        print("✅ Parsed props:", props_list)
         print("✅ Parsed reply:", reply)
 
-        return props, reply
+        # Convert props list to dict (skip non-dict elements)
+        fields = {
+            p["property"]: p["value"]
+            for p in props_list
+            if isinstance(p, dict) and "property" in p and "value" in p
+        }
+
+        print("🛠 Structured field payload:", json.dumps(fields, indent=2))
+        return fields, reply
 
     except Exception as e:
         print("🔥 GPT EXTRACT ERROR:", e)
         print("🪵 RAW fallback content:\n", raw)
-        return [], "Sorry — I couldn’t understand that. Could you rephrase?"
+        return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
 def generate_next_actions():
     return [
@@ -359,7 +363,6 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
-
 
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
