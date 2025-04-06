@@ -89,7 +89,9 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
     after_hours_fee = data.after_hours_surcharge or 0  # ✅ use provided field directly
-    mandurah_fee = MANDURAH_SURCHARGE if data.mandurah_property else 0
+    mandurah_field = str(data.mandurah_property).strip().lower()
+    mandurah_fee = MANDURAH_SURCHARGE if mandurah_field in ["yes", "true", "1"] else 0
+
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
