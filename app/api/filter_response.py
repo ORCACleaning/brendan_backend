@@ -171,11 +171,11 @@ VALID_AIRTABLE_FIELDS = {
 }
 
 # 🔁 Field normalization map
-FIELD_MAP = {
+field_map = {
     "bedrooms": "bedrooms_v2",
     "bathrooms": "bathrooms_v2",
-    "carpets": "carpet_bedroom_count",
-    "carpet": "carpet_bedroom_count",
+    "carpets": "carpet_cleaning",
+    "carpet": "carpet_cleaning",
     "garage": "garage_cleaning",
     "oven": "oven_cleaning",
     "fridge": "fridge_cleaning",
@@ -184,8 +184,14 @@ FIELD_MAP = {
     "balcony": "balcony_cleaning",
     "furnished_status": "furnished",
     "property_manager": "is_property_manager",
-    "location": "suburb"
+    "location": "suburb",
+    
+    # ✅ Direct field passthroughs (must be included explicitly)
+    "suburb": "suburb",
+    "bedrooms_v2": "bedrooms_v2",
+    "bathrooms_v2": "bathrooms_v2"
 }
+
 
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
