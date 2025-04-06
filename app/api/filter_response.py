@@ -305,7 +305,6 @@ def generate_next_actions():
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
-
 router = APIRouter()
 
 @router.post("/filter-response")
@@ -317,7 +316,6 @@ async def filter_response_entry(request: Request):
 
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
-
 
         # 🔥 Always create a new row when message is __init__
         if message == "__init__":
@@ -335,7 +333,7 @@ async def filter_response_entry(request: Request):
                 stage = quote_data["stage"]
                 log = fields.get("message_log", "")
 
-        # Handle __init__ to start convo
+        # ✅ Init message — greet and stop here
         if message == "__init__":
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -346,16 +344,23 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-        # Log user's message
-        append_message_log(record_id, message, "user")
-
         # --- Stage: Gathering Info ---
         if stage == "Gathering Info":
-            props, reply = extract_properties_from_gpt4(message, log)
+            # ⏱ Temporarily update log to include current user message before GPT
+            updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
+
+            # 🧠 Extract fields from GPT
+            props, reply = extract_properties_from_gpt4(message, updated_log)
             updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
+
+            # ✅ Save extracted fields to Airtable
             if updates:
                 update_quote_record(record_id, updates)
+
+            # ✅ Log both messages AFTER updates
+            append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
+
             return JSONResponse(content={
                 "properties": props,
                 "response": reply or "Got that. Anything else I should know?",
