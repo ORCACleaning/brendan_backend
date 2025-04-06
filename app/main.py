@@ -15,8 +15,7 @@ app.include_router(quote.router, prefix="/api")
 # Welcome endpoint with corrected emoji encoding
 @app.get("/")
 def read_root():
-    response = {"message": "Welcome to Brendan Backend! 🎉"}
     return JSONResponse(
-        content=json.dumps(response, ensure_ascii=False),  # Ensures emoji stays as-is
+        content={"message": "Welcome to Brendan Backend! 🎉"},
         media_type="application/json; charset=utf-8"
     )
