@@ -132,27 +132,29 @@ Once all fields are complete, say:
 """
 
 # --- Utilities ---
-
-# --- Utilities ---
+# --- Imports ---
 import uuid
 import json
 import requests
 import re
 import os
 from dotenv import load_dotenv
-from openai import OpenAI
-from fastapi import Request, HTTPException
+from fastapi import Request, HTTPException, APIRouter
 from fastapi.responses import JSONResponse
+from openai import OpenAI
 
-# ✅ Load environment variables
+# --- Init ---
+router = APIRouter()
 load_dotenv()
 
-# ✅ Airtable & OpenAI setup
+# --- Config ---
 airtable_api_key = os.getenv("AIRTABLE_API_KEY")
 airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
 table_name = "Vacate Quotes"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+gpt_prompt = os.getenv("GPT_PROMPT") or "You're Brendan, a quoting assistant for Orca Cleaning. Return 'properties' as JSON and a friendly 'response'."
 
+# --- Utilities ---
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
@@ -162,8 +164,7 @@ def get_next_quote_id(prefix="VC"):
         "pageSize": 100
     }
 
-    records = []
-    offset = None
+    records, offset = [], None
     while True:
         if offset:
             params["offset"] = offset
@@ -181,7 +182,6 @@ def get_next_quote_id(prefix="VC"):
             numbers.append(num)
         except:
             continue
-
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
@@ -241,26 +241,18 @@ def append_message_log(record_id, new_message, sender):
     new_log = f"{current_log}\n{sender.upper()}: {new_message}".strip()[-5000:]
     update_quote_record(record_id, {"message_log": new_log})
 
-def extract_suburb_from_text(text):
-    words = text.split()
-    for i in range(len(words)):
-        if words[i][0].isupper() and words[i].isalpha():
-            return words[i]
-    return "Unknown"
-
 def extract_properties_from_gpt4(message, log):
-    prompt = os.getenv("GPT_PROMPT") or "You are Brendan, a smart vacate cleaning assistant for Orca Cleaning..."
     try:
         print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
-                {"role": "system", "content": prompt},
+                {"role": "system", "content": gpt_prompt},
                 {"role": "system", "content": f"Conversation so far:\n{log}"},
                 {"role": "user", "content": message}
             ],
             max_tokens=800,
-            temperature=0.3
+            temperature=0.4
         )
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
@@ -273,7 +265,7 @@ def extract_properties_from_gpt4(message, log):
         return props, reply
     except Exception as e:
         print("🔥 GPT EXTRACT ERROR:", e)
-        return [], "Oops — I couldn't quite get that. Could you reword it?"
+        return [], "Oops — I couldn’t quite understand that. Can you reword it?"
 
 def generate_next_actions():
     return [
@@ -283,19 +275,7 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
-
 # --- Route ---
-
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
-from .utilities import (
-    get_quote_by_session, create_new_quote, update_quote_record,
-    append_message_log, extract_properties_from_gpt4,
-    generate_next_actions
-)
-
-router = APIRouter()
-
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -317,49 +297,6 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        # Handle __init__ message BEFORE any GPT
-        if message == "__init__":
-            intro = (
-                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
-                "No sign-up, no spam, just help. We also respect your privacy — you can read our policy here: "
-                "https://orcacleaning.com.au/privacy-policy\n\n"
-                "First up — what suburb’s the property in?"
-            )
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, intro, "brendan")
-            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
-
-        # Abuse filter
-        banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
-        if any(word in message.lower() for word in banned_words):
-            abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
-            append_message_log(record_id, message, "user")
-            if abuse_warned:
-                reply = (
-                    "We’ve had to close this chat due to repeated inappropriate language. "
-                    "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
-                )
-                update_quote_record(record_id, {
-                    "quote_stage": "Chat Banned",
-                    "abuse_warning_issued": "True"
-                })
-                append_message_log(record_id, reply, "brendan")
-                return JSONResponse(content={"response": reply, "properties": [], "next_actions": []})
-            else:
-                reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
-                update_quote_record(record_id, {"abuse_warning_issued": "True"})
-                append_message_log(record_id, reply, "brendan")
-                return JSONResponse(content={"response": reply, "properties": [], "next_actions": []})
-
-        if stage == "Chat Banned":
-            return JSONResponse(content={
-                "response": "This chat’s been closed due to inappropriate messages. "
-                            "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388.",
-                "properties": [],
-                "next_actions": []
-            })
-
-        # Normal flow
         append_message_log(record_id, message, "user")
 
         if stage == "Gathering Info":
