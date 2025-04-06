@@ -376,19 +376,22 @@ async def filter_response_entry(request: Request):
             updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
 
             # Call GPT-4 for parsing
-            field_updates, reply = extract_properties_from_gpt4(message, updated_log)
+            props, reply = extract_properties_from_gpt4(message, updated_log)
+
+            # Convert props list to dictionary
+            updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
 
             # Log & update Airtable fields
-            if field_updates:
-                print(f"🛠 Updating Airtable Record {record_id} with fields: {json.dumps(field_updates, indent=2)}")
-                update_quote_record(record_id, field_updates)
+            print(f"🛠 Structured field payload: {json.dumps(updates, indent=2)}")
+            if updates:
+                update_quote_record(record_id, updates)
 
             # Update conversation log
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
             return JSONResponse(content={
-                "properties": list(field_updates.keys()),
+                "properties": props,
                 "response": reply or "Got that. Anything else I should know?",
                 "next_actions": []
             })
@@ -398,3 +401,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
         return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
+
