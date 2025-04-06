@@ -7,20 +7,18 @@ class QuoteRequest(BaseModel):
     suburb: str
     bedrooms_v2: int
     bathrooms_v2: int
-    furnished: str  # "Yes" / "No"
+    furnished: str  # "Furnished" / "Unfurnished"
 
     # 🧼 Standard Cleaning Options
     oven_cleaning: bool
     window_cleaning: bool
-    windows_v2: Optional[int] = 0
-    window_count: Optional[int] = 0  # Alias for consistency
+    window_count: Optional[int] = 0  # e.g. 10
 
-    # 🧹 Carpet Cleaning (per-room breakdown)
-    carpet_cleaning: bool
+    # 🧹 Carpet Cleaning (detailed breakdown)
     carpet_bedroom_count: Optional[int] = 0
-    carpet_main_count: Optional[int] = 0
+    carpet_mainroom_count: Optional[int] = 0
     carpet_study_count: Optional[int] = 0
-    carpet_hallway_count: Optional[int] = 0
+    carpet_halway_count: Optional[int] = 0
     carpet_stairs_count: Optional[int] = 0
     carpet_other_count: Optional[int] = 0
 
@@ -34,10 +32,12 @@ class QuoteRequest(BaseModel):
     blind_cleaning: Optional[bool] = False
     upholstery_cleaning: Optional[bool] = False
 
-    # ⏰ Conditions & Scheduling
-    after_hours: Optional[bool] = False
+    # ⏰ Surcharges & Scheduling
     weekend_cleaning: Optional[bool] = False
+    after_hours_surcharge: Optional[float] = 0.0  # Percent field in Airtable
     mandurah_property: Optional[bool] = False
+
+    # 🏢 Real Estate / Agent
     is_property_manager: Optional[bool] = False
     real_estate_name: Optional[str] = None
 
