@@ -131,6 +131,7 @@ Email: info@orcacleaning.com.au
 Once all fields are complete, say:  
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
+
 # --- Brendan Utilities ---
 import os
 import json
@@ -139,7 +140,6 @@ import requests
 from dotenv import load_dotenv
 from openai import OpenAI
 from fastapi import HTTPException
-from fastapi.responses import JSONResponse
 
 # Load .env variables
 load_dotenv()
@@ -165,6 +165,7 @@ Follow Orca’s quoting rules. Skip blind/upholstery questions if unfurnished.
 Don’t quote for anything outside the home. Avoid rugs.
 Be friendly, casual, and professional — Aussie-style.
 """
+
 # --- Utility Functions ---
 
 def get_next_quote_id(prefix="VC"):
@@ -244,37 +245,63 @@ def update_quote_record(record_id: str, fields: dict):
         "Authorization": f"Bearer {AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
-    try:
-        print(f"\n📤 Updating Airtable Record: {record_id}")
-        print(f"📝 Payload:\n{json.dumps(fields, indent=2)}")
-        res = requests.patch(url, headers=headers, json={"fields": fields})
-        if not res.ok:
-            print("❌ Airtable update failed:", res.status_code)
-            print("❌ Response:\n", res.text)
-        else:
-            print("✅ Airtable updated:", json.dumps(res.json(), indent=2))
-    except Exception as e:
-        print("🔥 EXCEPTION DURING AIRTABLE UPDATE:", e)
 
-def append_message_log(record_id: str, message: str, sender: str):
-    if not record_id:
-        print("❌ Cannot append log — missing record ID")
+    # 🔁 Field Normalization Map
+    field_map = {
+        "bedrooms": "bedrooms_v2",
+        "bathrooms": "bathrooms_v2",
+        "carpets": "carpet_cleaning",
+        "carpet": "carpet_cleaning",
+        "garage": "garage_cleaning",
+        "oven": "oven_cleaning",
+        "fridge": "fridge_cleaning",
+        "walls": "wall_cleaning",
+        "windows": "window_cleaning",
+        "balcony": "balcony_cleaning",
+        "furnished_status": "furnished",
+        "property_manager": "is_property_manager",
+        "location": "suburb"
+    }
+
+    # 🧼 Normalize and prepare safe fields
+    normalized_fields = {}
+    for key, value in fields.items():
+        mapped_key = field_map.get(key, key)
+        normalized_fields[mapped_key] = value
+
+    # 📝 Log full update attempt
+    print(f"\n📤 Updating Airtable Record: {record_id}")
+    print(f"📝 Payload:\n{json.dumps(normalized_fields, indent=2)}")
+
+    # 🚀 Try full update first
+    res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
+    if res.ok:
+        print("✅ Airtable updated successfully.")
         return
-    try:
-        print(f"\n🧩 Appending message from {sender.upper()} to record {record_id}...")
-        url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-        headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-        current = requests.get(url, headers=headers).json()
-        if "fields" not in current:
-            print("❌ ERROR: Could not fetch existing fields from Airtable")
-            print(current)
-            return
-        old_log = current["fields"].get("message_log", "")
-        new_log = f"{old_log}\n{sender.upper()}: {message}".strip()[-5000:]
-        update_quote_record(record_id, {"message_log": new_log})
-    except Exception as e:
-        print("🔥 EXCEPTION DURING LOG APPEND:", e)
 
+    # ❌ If full update fails, log raw error
+    print(f"❌ Airtable update failed: {res.status_code}")
+    try:
+        error_msg = res.json()
+        print(f"🧾 Error message:\n{json.dumps(error_msg, indent=2)}")
+    except Exception as e:
+        print("⚠️ Could not decode Airtable error:", str(e))
+
+    # 🔍 Fallback: try each field individually
+    print("\n🔍 Trying individual field updates to isolate issues...")
+    for key, value in normalized_fields.items():
+        test_payload = {"fields": {key: value}}
+        single_res = requests.patch(url, headers=headers, json=test_payload)
+
+        if single_res.ok:
+            print(f"✅ Field '{key}' updated successfully.")
+        else:
+            print(f"❌ Field '{key}' failed to update.")
+            try:
+                err = single_res.json()
+                print(f"   🧾 Airtable Error: {err['error']['message']}")
+            except Exception:
+                print("   ⚠️ Could not decode field-level error.")
 
 def append_message_log(record_id: str, message: str, sender: str):
     if not record_id:
@@ -332,6 +359,7 @@ def generate_next_actions():
         {"action": "email_pdf", "label": "Email PDF Quote"},
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
+
 
 # --- Route ---
 from fastapi import APIRouter, Request, HTTPException
