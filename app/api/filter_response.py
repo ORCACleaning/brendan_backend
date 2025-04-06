@@ -137,7 +137,6 @@ Once all fields are complete, say:
 import uuid
 import json
 import requests
-import re
 import os
 from dotenv import load_dotenv
 from fastapi import Request, HTTPException
@@ -152,6 +151,7 @@ airtable_api_key = os.getenv("AIRTABLE_API_KEY")
 airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
 table_name = "Vacate Quotes"
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+GPT_PROMPT = os.getenv("GPT_PROMPT") or "You're Brendan, a quoting assistant for Orca Cleaning. Return 'properties' as JSON and a friendly 'response'."
 
 # --- Utility Functions ---
 def get_next_quote_id(prefix="VC"):
