@@ -262,7 +262,6 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # 🔁 Normalize known aliases to Airtable schema
     field_map = {
         "bedrooms": "bedrooms_v2",
         "bathrooms": "bathrooms_v2",
@@ -287,31 +286,39 @@ def update_quote_record(record_id: str, fields: dict):
     print(f"\n📤 Updating Airtable Record: {record_id}")
     print(f"🛠 Structured field payload: {json.dumps(normalized_fields, indent=2)}")
 
+    # Try full update first
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         print("✅ Airtable updated successfully.")
-        return
+        return list(normalized_fields.keys())
 
-    print(f"❌ Airtable update failed: {res.status_code}")
+    print(f"❌ Airtable bulk update failed: {res.status_code}")
     try:
         print("🧾 Error message:", json.dumps(res.json(), indent=2))
     except Exception as e:
         print("⚠️ Could not decode Airtable error:", str(e))
 
-    print("\n🔍 Trying individual field updates to isolate issues...")
+    # Try each field individually
+    print("\n🔍 Trying individual field updates...")
+    successful_fields = []
     for key, value in normalized_fields.items():
-        single_payload = {"fields": {key: value}}
-        single_res = requests.patch(url, headers=headers, json=single_payload)
+        payload = {"fields": {key: value}}
+        single_res = requests.patch(url, headers=headers, json=payload)
 
         if single_res.ok:
             print(f"✅ Field '{key}' updated successfully.")
+            successful_fields.append(key)
         else:
             print(f"❌ Field '{key}' failed to update.")
             try:
                 err = single_res.json()
                 print(f"   🧾 Airtable Error: {err['error']['message']}")
-            except Exception:
+            except:
                 print("   ⚠️ Could not decode field-level error.")
+
+    print("✅ Partial update complete. Fields updated:", successful_fields)
+    return successful_fields
+
 
 
 def append_message_log(record_id: str, message: str, sender: str):
