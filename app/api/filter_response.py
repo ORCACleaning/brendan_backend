@@ -131,10 +131,7 @@ Once all fields are complete, say:
 “Thanks legend! I’ve got what I need to whip up your quote. Hang tight…”
 """
 
-
-
-#---Utilities---
-
+# --- Utilities ---
 import uuid
 import json
 import requests
@@ -142,8 +139,9 @@ import re
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
+from fastapi import Request, HTTPException
+from fastapi.responses import JSONResponse
 
-# ✅ Load .env variables
 load_dotenv()
 
 # ✅ Airtable & OpenAI setup
@@ -160,7 +158,6 @@ def get_next_quote_id(prefix="VC"):
         "fields[]": ["quote_id"],
         "pageSize": 100
     }
-
     records = []
     offset = None
     while True:
@@ -180,7 +177,6 @@ def get_next_quote_id(prefix="VC"):
             numbers.append(num)
         except:
             continue
-
     next_id = max(numbers) + 1 if numbers else 1
     return f"{prefix}-{str(next_id).zfill(6)}"
 
@@ -247,6 +243,29 @@ def extract_suburb_from_text(text):
             return words[i]
     return "Unknown"
 
+def extract_properties_from_gpt4(message, log):
+    prompt = os.getenv("GPT_PROMPT") or "Default GPT prompt here."
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "system", "content": f"Conversation so far:\n{log}"},
+                {"role": "user", "content": message}
+            ],
+            max_tokens=800,
+            temperature=0.3
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = raw.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(raw)
+        props = parsed.get("properties", [])
+        reply = parsed.get("response", "")
+        return props, reply
+    except Exception as e:
+        print("🔥 GPT EXTRACT ERROR:", e)
+        return [], "Oops — I couldn't quite get that. Could you reword it?"
+
 def generate_next_actions():
     return [
         {"action": "proceed_booking", "label": "Proceed to Booking"},
@@ -255,8 +274,11 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
+# --- Route ---
 
-#---route---
+from fastapi import APIRouter
+
+router = APIRouter()
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -279,121 +301,19 @@ async def filter_response_entry(request: Request):
             stage = quote_data["stage"]
             log = fields.get("message_log", "")
 
-        banned_words = ["fuck", "shit", "dick", "cunt", "bitch"]
-        if any(word in message.lower() for word in banned_words):
-            abuse_warned = str(fields.get("abuse_warning_issued", "False")).lower() == "true"
-            append_message_log(record_id, message, "user")
-            if abuse_warned:
-                reply = (
-                    "We’ve had to close this chat due to repeated inappropriate language. "
-                    "You can still contact us at info@orcacleaning.com.au or call 1300 918 388."
-                )
-                update_quote_record(record_id, {
-                    "quote_stage": "Chat Banned",
-                    "abuse_warning_issued": "True"
-                })
-                append_message_log(record_id, reply, "brendan")
-                return JSONResponse(content={"response": reply, "properties": [], "next_actions": []})
-            else:
-                reply = "Let’s keep it respectful, yeah? One more like that and I’ll have to end the chat."
-                update_quote_record(record_id, {"abuse_warning_issued": "True"})
-                append_message_log(record_id, reply, "brendan")
-                return JSONResponse(content={"response": reply, "properties": [], "next_actions": []})
-
-        if stage == "Chat Banned":
-            return JSONResponse(content={
-                "response": "This chat’s been closed due to inappropriate messages. "
-                            "If you think this was a mistake, reach out at info@orcacleaning.com.au or call 1300 918 388.",
-                "properties": [],
-                "next_actions": []
-            })
-
-        if message == "__init__":
-            intro = (
-                "Hey there, I’m Brendan 👋 from Orca Cleaning. I’ll help you sort a quote in under 2 minutes. "
-                "No sign-up, no spam, just help. We also respect your privacy — you can read our policy here: "
-                "https://orcacleaning.com.au/privacy-policy\n\n"
-                "First up — what suburb’s the property in?"
-            )
-            append_message_log(record_id, "Brendan started a new quote", "SYSTEM")
-            return JSONResponse(content={"response": intro, "properties": [], "next_actions": []})
-
         append_message_log(record_id, message, "user")
 
         if stage == "Gathering Info":
             props, reply = extract_properties_from_gpt4(message, log)
-            updates = {}
-
-            checkbox_fields = {
-                "oven_cleaning", "window_cleaning", "blind_cleaning",
-                "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
-                "weekend_cleaning", "is_property_manager"
-            }
-
-            for p in props:
-                if isinstance(p, dict) and "property" in p and "value" in p:
-                    key, val = p["property"], p["value"]
-
-                    if key in ["special_request_minutes_min", "special_request_minutes_max"]:
-                        try:
-                            updates[key] = int(val)
-                        except:
-                            continue
-                    elif key == "furnished":
-                        val = str(val).strip().lower()
-                        updates[key] = "Furnished" if val in ["yes", "furnished", "true", "1"] else "Unfurnished"
-                    elif key == "after_hours_cleaning":
-                        updates["after_hours"] = True
-                    elif key in checkbox_fields:
-                        updates[key] = str(val).strip().lower() in ["yes", "true", "1"]
-                    else:
-                        updates[key] = val
-
-            if "window_count" in updates and "window_cleaning" not in updates:
-                try:
-                    count = int(updates["window_count"])
-                    updates["window_cleaning"] = count > 0
-                except:
-                    pass
-
-            carpet_fields = [
-                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
-            ]
-            filled_carpet_fields = [f for f in carpet_fields if f in updates or f in fields]
-            if filled_carpet_fields and len(filled_carpet_fields) < len(carpet_fields):
-                for f in carpet_fields:
-                    if f not in updates and f not in fields:
-                        updates[f] = 0
-
+            updates = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
             if updates:
                 update_quote_record(record_id, updates)
-
             append_message_log(record_id, reply, "brendan")
-
-            combined_fields = {**fields, **updates}
-            required_fields = [
-                "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
-                "window_cleaning", "window_count",
-                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-                "blind_cleaning", "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
-                "after_hours", "weekend_cleaning", "is_property_manager", "real_estate_name"
-            ]
-
-            if all(field in combined_fields for field in required_fields):
-                update_quote_record(record_id, {"quote_stage": "Quote Calculated"})
-                return JSONResponse(content={
-                    "properties": props,
-                    "response": "Thanks legend! I’ve got what I need to whip up your quote. Hang tight…",
-                    "next_actions": []
-                })
-            else:
-                return JSONResponse(content={
-                    "properties": props,
-                    "response": reply or "Got that. Anything else I should know?",
-                    "next_actions": []
-                })
+            return JSONResponse(content={
+                "properties": props,
+                "response": reply or "Got that. Anything else I should know?",
+                "next_actions": []
+            })
 
         elif stage == "Quote Calculated":
             return JSONResponse(content={
