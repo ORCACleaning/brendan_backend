@@ -27,14 +27,22 @@ def generate_quote_pdf(data: dict) -> str:
     extra_services = []
 
     if data.get("window_cleaning"):
-        wc = data.get("window_count")
-        if wc:
-            extra_services.append(f"Window Cleaning ({wc} windows)")
-        else:
-            extra_services.append("Window Cleaning")
+        wc = data.get("window_count") or 0
+        extra_services.append(f"Window Cleaning ({wc} windows)" if wc else "Window Cleaning")
 
-    if data.get("carpet_cleaning"):
-        extra_services.append("Carpet Steam Cleaning")
+    # Carpet cleaning by room type
+    carpet_fields = [
+        ("carpet_bedroom_count", "bedroom"),
+        ("carpet_main_count", "main room"),
+        ("carpet_study_count", "study"),
+        ("carpet_hallway_count", "hallway"),
+        ("carpet_stairs_count", "stairs"),
+        ("carpet_other_count", "other area")
+    ]
+    for field, label in carpet_fields:
+        count = data.get(field, 0)
+        if count and int(count) > 0:
+            extra_services.append(f"Carpet Steam Cleaning – {count} {label}(s)")
 
     if data.get("oven_cleaning"):
         extra_services.append("Oven Cleaning")
@@ -57,21 +65,28 @@ def generate_quote_pdf(data: dict) -> str:
     if data.get("deep_cleaning"):
         extra_services.append("Deep/Detail Cleaning")
 
+    if data.get("blind_cleaning"):
+        extra_services.append("Blind/Curtain Cleaning")
+
+    if data.get("upholstery_cleaning"):
+        extra_services.append("Upholstery Cleaning")
+
     # Add service summary to template data
     data["extra_services"] = ", ".join(extra_services) if extra_services else "None"
 
     # --- Property Manager Info ---
     if data.get("is_property_manager"):
-        agency = data.get("real_estate_agency", "Your Real Estate Agency")
+        agency = data.get("real_estate_name", "Your Real Estate Agency")
         data["property_manager_note"] = f"✅ Property Manager Discount Applied (5%) — {agency}"
     else:
         data["property_manager_note"] = "–"
 
-    # --- After Hours Surcharge ---
-    if data.get("after_hours_cleaning"):
-        data["after_hours_note"] = "✅ After-Hours/Weekend Cleaning"
-    else:
-        data["after_hours_note"] = "–"
+    # --- After Hours Surcharge Info ---
+    after_hours = str(data.get("after_hours_surcharge", "")).strip()
+    data["after_hours_note"] = (
+        f"✅ After-Hours Cleaning Surcharge ({after_hours}%)"
+        if after_hours and after_hours != "0" else "–"
+    )
 
     # --- Final Render ---
     html_out = template.render(**data)
