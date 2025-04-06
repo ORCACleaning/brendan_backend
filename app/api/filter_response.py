@@ -239,6 +239,7 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
+    # 🔁 Field Normalization Map
     field_map = {
         "bedrooms": "bedrooms_v2",
         "bathrooms": "bathrooms_v2",
@@ -255,14 +256,16 @@ def update_quote_record(record_id: str, fields: dict):
         "location": "suburb"
     }
 
+    # 🧼 Normalize fields
     normalized_fields = {}
     for key, value in fields.items():
         mapped_key = field_map.get(key, key)
         normalized_fields[mapped_key] = value
 
     print(f"\n📤 Updating Airtable Record: {record_id}")
-    print(f"📝 Payload:\n{json.dumps(normalized_fields, indent=2)}")
+    print(f"🛠 Structured field payload: {json.dumps(normalized_fields, indent=2)}")
 
+    # Try full update
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         print("✅ Airtable updated successfully.")
@@ -270,15 +273,15 @@ def update_quote_record(record_id: str, fields: dict):
 
     print(f"❌ Airtable update failed: {res.status_code}")
     try:
-        error_msg = res.json()
-        print(f"🧾 Error message:\n{json.dumps(error_msg, indent=2)}")
+        print("🧾 Error message:", json.dumps(res.json(), indent=2))
     except Exception as e:
         print("⚠️ Could not decode Airtable error:", str(e))
 
+    # 🕵️ Try fields one-by-one to isolate the problem
     print("\n🔍 Trying individual field updates to isolate issues...")
     for key, value in normalized_fields.items():
-        test_payload = {"fields": {key: value}}
-        single_res = requests.patch(url, headers=headers, json=test_payload)
+        single_payload = {"fields": {key: value}}
+        single_res = requests.patch(url, headers=headers, json=single_payload)
 
         if single_res.ok:
             print(f"✅ Field '{key}' updated successfully.")
@@ -289,6 +292,7 @@ def update_quote_record(record_id: str, fields: dict):
                 print(f"   🧾 Airtable Error: {err['error']['message']}")
             except Exception:
                 print("   ⚠️ Could not decode field-level error.")
+
 
 def append_message_log(record_id: str, message: str, sender: str):
     if not record_id:
