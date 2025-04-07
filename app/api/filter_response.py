@@ -196,7 +196,9 @@ VALID_AIRTABLE_FIELDS = {
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count",
     "carpet_stairs_count", "carpet_other_count", "balcony_cleaning", "after_hours_cleaning",
     "weekend_cleaning", "is_property_manager", "real_estate_name",
-    "special_request_minutes_min", "special_request_minutes_max", "upholstery_cleaning"
+    "special_request_minutes_min", "special_request_minutes_max", "upholstery_cleaning", 
+    "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning", "mandurah_property",
+
 }
 
 # 🔁 Field normalization map
@@ -338,7 +340,9 @@ def update_quote_record(record_id: str, fields: dict):
 
     # ✅ Boolean checkbox fields in Airtable
     BOOLEAN_FIELDS = {
-        "oven_cleaning", "window_cleaning", "blind_cleaning", "garage_cleaning"
+        "oven_cleaning", "window_cleaning", "blind_cleaning", "garage_cleaning",
+        "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", 
+        "wall_cleaning", "mandurah_property"
     }
 
     normalized_fields = {}
