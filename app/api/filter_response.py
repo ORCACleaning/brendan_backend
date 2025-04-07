@@ -139,6 +139,7 @@ Once all fields are complete, say:
 
 # --- Brendan Utilities ---
 from fastapi import HTTPException
+import uuid
 
 # --- Config ---
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
