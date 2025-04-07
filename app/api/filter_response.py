@@ -396,7 +396,7 @@ def send_gpt_error_email(error_msg: str):
         print("⚠️ Could not send GPT error alert:", e)
 
 
-def extract_properties_from_gpt4(message: str, log: str, record_id: str = None):
+def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     try:
         print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
@@ -432,6 +432,19 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None):
             if isinstance(p, dict) and "property" in p and "value" in p:
                 field_updates[p["property"]] = p["value"]
 
+        # 🧠 Handle escalation to office
+        if (
+            "contact our office" in reply.lower()
+            or "call the office" in reply.lower()
+            or "ring the office" in reply.lower()
+        ):
+            print("📞 Detected referral to office. Applying escalation flags.")
+            field_updates["quote_stage"] = "Referred to Office"
+            field_updates["quote_notes"] = "Brendan referred the customer to the office — unsure how to handle request."
+
+            if quote_id and quote_id not in reply:
+                reply += f"\n\nQuote Number: {quote_id} — mention this when you call so we can help quicker."
+
         return field_updates, reply
 
     except Exception as e:
@@ -446,10 +459,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None):
             except Exception as airtable_err:
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
-        # ✅ Optional email alert
-        # send_gpt_error_email(error_msg)
-
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 def generate_next_actions():
     return [
@@ -516,7 +527,7 @@ async def filter_response_entry(request: Request):
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
 
         # Call GPT
-        props_dict, reply = extract_properties_from_gpt4(message, updated_log)
+        props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
         print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_dict, indent=2)}")
         updates = props_dict
