@@ -633,6 +633,12 @@ async def filter_response_entry(request: Request):
             print("⚠️ WARNING: No valid fields parsed — double check GPT output or field map.")
 
         if updates:
+            # 🔁 Replace fake quote number in reply with actual quote_id
+            if "123456" in reply or "{{quote_id}}" in reply:
+                reply = reply.replace("123456", quote_id)
+                reply = reply.replace("{{quote_id}}", quote_id)
+
+            # ✅ Make sure we update quote_stage and quote_notes if present
             update_quote_record(record_id, updates)
 
         # Append convo log
