@@ -270,8 +270,13 @@ def create_new_quote(session_id: str, force_new: bool = False):
 def get_quote_by_session(session_id: str):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    params = {"filterByFormula": f"{{session_id}}='{session_id}'"}
-    res = requests.get(url, headers=headers).json()
+    params = {
+        "filterByFormula": f"{{session_id}}='{session_id}'",
+        "sort[0][field]": "timestamp",
+        "sort[0][direction]": "desc",
+        "pageSize": 1  # Only fetch the latest one
+    }
+    res = requests.get(url, headers=headers, params=params).json()
 
     if len(res.get("records", [])) > 1:
         print(f"🚨 MULTIPLE QUOTES found for session_id: {session_id}")
