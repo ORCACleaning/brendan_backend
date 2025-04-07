@@ -138,15 +138,7 @@ Once all fields are complete, say:
 
 
 # --- Brendan Utilities ---
-import os
-import json
-import uuid
-import requests
-from dotenv import load_dotenv
-from openai import OpenAI
 from fastapi import HTTPException
-
-load_dotenv()
 
 # --- Config ---
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
@@ -452,11 +444,12 @@ async def filter_response_entry(request: Request):
             quote_id, record_id = create_new_quote(session_id, force_new=True)
 
             # 💡 Fetch the ACTUAL session_id that Airtable stored
-            new_session = get_quote_by_session(f"{session_id}-new")
-            if new_session:
+            new_session = get_quote_by_session(session_id)
+            if new_session and new_session["fields"].get("session_id", "").startswith(f"{session_id}-new"):
+                session_id = new_session["fields"]["session_id"]
                 record_id = new_session["record_id"]
                 quote_id = new_session["quote_id"]
-                session_id = new_session["fields"].get("session_id", session_id)  # ✅ ⬅ FIX HERE
+
 
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
