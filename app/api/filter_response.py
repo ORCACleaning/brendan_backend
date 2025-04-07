@@ -477,7 +477,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         field_updates = {}
 
-        # 🔄 Load existing values for merging
+        # 🔄 Load existing values if special fields are involved
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
@@ -496,31 +496,32 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
                     if key == "special_requests":
                         prev = existing.get("special_requests", "").strip()
-                        if value.strip() != prev:
-                            combined = value.strip()
-                            if prev and prev not in combined:
-                                combined = f"{prev}\n+ {value.strip()}"
-                            field_updates[key] = combined
+                        new = str(value).strip()
+
+                        if prev == new:
+                            field_updates[key] = new  # No change
+                        elif all(item.strip() in prev for item in new.split(",")):
+                            field_updates[key] = prev  # Already included
+                        elif all(item.strip() in new for item in prev.split(",")):
+                            field_updates[key] = new  # Full overwrite (items removed)
+                        else:
+                            # Genuinely new extras
+                            field_updates[key] = f"{prev}\n+ {new}".strip()
 
                     elif key == "special_request_minutes_min":
-                        prev = int(existing.get("special_request_minutes_min", 0))
-                        if int(value) > prev:
-                            field_updates[key] = prev + int(value)
+                        new_val = int(value)
+                        field_updates[key] = new_val  # Always use latest estimate
 
                     elif key == "special_request_minutes_max":
-                        prev = int(existing.get("special_request_minutes_max", 0))
-                        if int(value) > prev:
-                            field_updates[key] = prev + int(value)
+                        new_val = int(value)
+                        field_updates[key] = new_val  # Always use latest estimate
 
                     else:
-                        # Skip if same value already stored
-                        if str(existing.get(key)).strip() != str(value).strip():
-                            field_updates[key] = value
+                        field_updates[key] = value
 
                 elif len(p) == 1:
                     for k, v in p.items():
-                        if str(existing.get(k)).strip() != str(v).strip():
-                            field_updates[k] = v
+                        field_updates[k] = v
 
         # 🧠 Handle escalation to office
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
@@ -551,6 +552,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 
 def generate_next_actions():
