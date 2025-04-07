@@ -169,6 +169,12 @@ If asked, say:
 - NEVER repeat the privacy policy more than once.
 - NEVER reply in a list or bullet points inside JSON.
 - NEVER answer questions not related to quoting — just redirect to the office.
+
+## ☎️ CONTACT EXIT HANDLING:
+- If the customer asks for contact info (phone, email, who to speak to), pause and ask:
+  > “All good! Do you want to keep going with the quote here, or would you prefer to call the office instead?”
+- If they choose to call: Say goodbye, stop quoting, and don’t ask for more info.
+- If they choose to continue: Resume asking for missing fields.
 """
 
 
