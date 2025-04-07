@@ -239,7 +239,10 @@ def create_new_quote(session_id: str, force_new: bool = False):
     elif existing and force_new:
         print("🔁 Force creating new quote despite duplicate session ID.")
 
-    session_id = session_id or str(uuid.uuid4())
+    # Always generate a new session ID if forcing
+    if force_new:
+        session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
+
     quote_id = get_next_quote_id()
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {
