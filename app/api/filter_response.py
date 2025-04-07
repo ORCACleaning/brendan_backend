@@ -450,14 +450,24 @@ async def filter_response_entry(request: Request):
         if message.lower() == "__init__":
             print("🧪 DEBUG — FORCING NEW QUOTE")
             quote_id, record_id = create_new_quote(session_id, force_new=True)
+
+            # 💡 Fetch the session_id that was actually stored
+            new_session = get_quote_by_session(session_id=f"{session_id}-new")
+            if new_session:
+                record_id = new_session["record_id"]
+                quote_id = new_session["quote_id"]
+                session_id = new_session["fields"].get("session_id", session_id)
+
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
             append_message_log(record_id, intro, "brendan")
             return JSONResponse(content={
                 "properties": [],
                 "response": intro,
-                "next_actions": []
+                "next_actions": [],
+                "session_id": session_id  # <-- Pass new ID back to frontend
             })
+
 
         # Otherwise, get existing quote
         quote_data = get_quote_by_session(session_id)
