@@ -297,7 +297,7 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # 🧼 Normalize dropdowns with strict values
+    # 💡 Normalize dropdowns
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if val == "furnished":
@@ -305,13 +305,27 @@ def update_quote_record(record_id: str, fields: dict):
         elif val == "unfurnished":
             fields["furnished"] = "Unfurnished"
 
+    # ✅ Boolean checkbox fields in Airtable
+    BOOLEAN_FIELDS = {
+        "oven_cleaning", "window_cleaning", "blind_cleaning", "garage_cleaning"
+    }
+
     normalized_fields = {}
     for key, value in fields.items():
         mapped_key = FIELD_MAP.get(key, key)
-        if mapped_key in VALID_AIRTABLE_FIELDS:
-            normalized_fields[mapped_key] = value
-        else:
+
+        if mapped_key not in VALID_AIRTABLE_FIELDS:
             print(f"❌ Skipped field '{mapped_key}' — not in Airtable schema")
+            continue
+
+        # 🧠 Normalize booleans
+        if mapped_key in BOOLEAN_FIELDS:
+            if str(value).strip().lower() in ["yes", "true", "1"]:
+                value = True
+            elif str(value).strip().lower() in ["no", "false", "0"]:
+                value = False
+
+        normalized_fields[mapped_key] = value
 
     print(f"\n📤 Updating Airtable Record: {record_id}")
     print(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
@@ -346,6 +360,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     print("✅ Partial update complete. Fields updated:", successful_fields)
     return successful_fields
+
 
 
 def append_message_log(record_id: str, message: str, sender: str):
