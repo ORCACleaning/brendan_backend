@@ -297,6 +297,14 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
+    # 🧼 Normalize dropdowns with strict values
+    if "furnished" in fields:
+        val = str(fields["furnished"]).strip().lower()
+        if val == "furnished":
+            fields["furnished"] = "Furnished"
+        elif val == "unfurnished":
+            fields["furnished"] = "Unfurnished"
+
     normalized_fields = {}
     for key, value in fields.items():
         mapped_key = FIELD_MAP.get(key, key)
@@ -338,6 +346,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     print("✅ Partial update complete. Fields updated:", successful_fields)
     return successful_fields
+
 
 def append_message_log(record_id: str, message: str, sender: str):
     if not record_id:
