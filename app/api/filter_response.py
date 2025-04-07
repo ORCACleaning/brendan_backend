@@ -433,14 +433,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 field_updates[p["property"]] = p["value"]
 
         # 🧠 Handle escalation to office
-        if (
-            "contact our office" in reply.lower()
-            or "call the office" in reply.lower()
-            or "ring the office" in reply.lower()
-        ):
+        if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
             print("📞 Detected referral to office. Applying escalation flags.")
             field_updates["quote_stage"] = "Referred to Office"
-            field_updates["quote_notes"] = "Brendan referred the customer to the office — unsure how to handle request."
+
+            # Include original customer message in the notes for visibility
+            referral_note = (
+                f"Brendan referred the customer to the office — unsure how to handle request.\n\n"
+                f"📩 Customer said: “{message.strip()}”"
+            )
+            field_updates["quote_notes"] = referral_note[:10000]  # Airtable max length protection
 
             if quote_id and quote_id not in reply:
                 reply += f"\n\nQuote Number: {quote_id} — mention this when you call so we can help quicker."
