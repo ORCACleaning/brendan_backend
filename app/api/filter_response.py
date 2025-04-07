@@ -487,8 +487,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         print("✅ Parsed reply:", reply)
 
         field_updates = {}
+        special_list = []
+        minutes_min = 0
+        minutes_max = 0
 
-        # 🔄 Load existing values if special fields are involved
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
@@ -499,47 +501,46 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             else:
                 print("⚠️ Could not load existing fields for merge")
 
+        existing_requests = existing.get("special_requests", "")
+        existing_list = [x.strip() for x in existing_requests.split(",") if x.strip()]
+        minutes_min = int(existing.get("special_request_minutes_min", 0))
+        minutes_max = int(existing.get("special_request_minutes_max", 0))
+
         for p in props:
             if isinstance(p, dict):
                 if "property" in p and "value" in p:
                     key = p["property"]
                     value = p["value"]
 
-                    # ➕ Cumulative merge for special requests
                     if key == "special_requests":
-                        prev = existing.get("special_requests", "")
-                        if prev and prev.strip() not in value:
-                            value = f"{prev.strip()}\n+ {value}".strip()
-                        field_updates["special_requests"] = value
+                        new_items = [x.strip() for x in value.split(",") if x.strip()]
+                        special_list = list({*existing_list, *new_items})
 
                     elif key == "special_request_minutes_min":
-                        prev = int(existing.get("special_request_minutes_min", 0))
-                        field_updates["special_request_minutes_min"] = prev + int(value)
+                        delta = int(value) - minutes_min if message.lower().startswith("i changed my mind") else int(value)
+                        minutes_min += delta
 
                     elif key == "special_request_minutes_max":
-                        prev = int(existing.get("special_request_minutes_max", 0))
-                        field_updates["special_request_minutes_max"] = prev + int(value)
+                        delta = int(value) - minutes_max if message.lower().startswith("i changed my mind") else int(value)
+                        minutes_max += delta
 
                     else:
                         field_updates[key] = value
 
-                elif len(p) == 1:
-                    # Accept {"field_name": value} format
-                    for k, v in p.items():
-                        field_updates[k] = v
+        if special_list:
+            field_updates["special_requests"] = ", ".join(sorted(set(special_list)))
+            field_updates["special_request_minutes_min"] = minutes_min
+            field_updates["special_request_minutes_max"] = minutes_max
 
-        # 🧠 Handle escalation to office
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
             print("📞 Detected referral to office. Applying escalation flags.")
             field_updates["quote_stage"] = "Referred to Office"
-
             referral_note = (
                 f"Brendan referred the customer to the office — unsure how to handle request.\n\n"
                 f"📩 Customer said: “{message.strip()}”"
             )
-            field_updates["quote_notes"] = referral_note[:10000]  # Airtable max field limit
+            field_updates["quote_notes"] = referral_note[:10000]
 
-            # ⛔️ Fix fake quote number like VC-123456
             if quote_id:
                 reply = reply.replace("VC-123456", quote_id)
                 reply = reply.replace("{{quote_id}}", quote_id)
@@ -558,8 +559,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
-
 
 def generate_next_actions():
     return [
