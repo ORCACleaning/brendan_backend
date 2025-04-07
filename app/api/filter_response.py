@@ -257,7 +257,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
     print(f"✅ Created new quote record: {record_id} with ID {quote_id}")
 
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
-    return quote_id, record_id
+    return quote_id, record_id, session_id  # Include final session_id
 
 def get_quote_by_session(session_id: str):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
@@ -441,15 +441,7 @@ async def filter_response_entry(request: Request):
         # Handle __init__ → Always start a new quote
         if message.lower() == "__init__":
             print("🧪 DEBUG — FORCING NEW QUOTE")
-            quote_id, record_id = create_new_quote(session_id, force_new=True)
-
-            # 💡 Fetch the ACTUAL session_id that Airtable stored
-            new_session = get_quote_by_session(session_id)
-            if new_session and new_session["fields"].get("session_id", "").startswith(f"{session_id}-new"):
-                session_id = new_session["fields"]["session_id"]
-                record_id = new_session["record_id"]
-                quote_id = new_session["quote_id"]
-
+            quote_id, record_id, session_id = create_new_quote(session_id, force_new=True)
 
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -459,9 +451,8 @@ async def filter_response_entry(request: Request):
                 "properties": [],
                 "response": intro,
                 "next_actions": [],
-                "session_id": session_id  # ✅ ⬅ FIX: now returns the actual value used
+                "session_id": session_id  # ✅ Already correct
             })
-
 
         # Otherwise, get existing quote
         quote_data = get_quote_by_session(session_id)
@@ -496,7 +487,6 @@ async def filter_response_entry(request: Request):
 
         print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_dict, indent=2)}")
         updates = props_dict
-
 
         print(f"\n🛠 Structured updates ready for Airtable:\n{json.dumps(updates, indent=2)}")
 
