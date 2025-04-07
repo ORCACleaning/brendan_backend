@@ -428,12 +428,6 @@ def generate_next_actions():
 
 
 # --- Route ---
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
-import json
-
-router = APIRouter()
-
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
