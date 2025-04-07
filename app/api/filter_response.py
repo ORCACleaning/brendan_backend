@@ -112,6 +112,8 @@ SPECIAL REQUEST RULES:
   - `special_requests` (text, comma-separated list of extras)
   - `special_request_minutes_min` (running total in minutes)
   - `special_request_minutes_max` (running total in minutes)
+  - If the customer updates or removes a previous special request, treat it as a new final list and overwrite the previous entry completely — do not keep old ones unless the customer repeats them.
+
 
 ✅ Cumulative rules:
 - Only add new requests not already listed.
