@@ -486,13 +486,11 @@ async def filter_response_entry(request: Request):
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
 
         # Call GPT
-        props_list, reply = extract_properties_from_gpt4(message, updated_log)
+        props_dict, reply = extract_properties_from_gpt4(message, updated_log)
 
-        # DEBUG: Show full props
-        print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_list, indent=2)}")
+        print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_dict, indent=2)}")
+        updates = props_dict
 
-        # Convert to dict
-        updates = {p["property"]: p["value"] for p in props_list if "property" in p and "value" in p}
 
         print(f"\n🛠 Structured updates ready for Airtable:\n{json.dumps(updates, indent=2)}")
 
