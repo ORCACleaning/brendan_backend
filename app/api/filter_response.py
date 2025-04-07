@@ -474,6 +474,13 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
+        # ✅ Catch additional top-level fields
+        top_level_fields = ["quote_stage", "quote_notes"]
+        for field in top_level_fields:
+            if field in parsed:
+                props.append({"property": field, "value": parsed[field]})
+
+
         print("✅ Parsed props:", props)
         print("✅ Parsed reply:", reply)
 
