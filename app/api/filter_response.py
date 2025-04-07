@@ -124,7 +124,7 @@ If any of the above banned services are requested:
   - Set `quote_stage = Referred to Office`
   - Include their original message in `quote_notes`
   - Mention the quote number in your reply:  
-    “Quote Number: VC-xxxxxx — mention this when you call so we can help quicker.”
+    “Quote Number: {{quote_id}} — mention this when you call so we can help quicker.”
 
 SUBURB RULE:
 Only Perth and Mandurah (WA). Confirm full name (not nicknames like "Freo", "KP").
@@ -487,13 +487,46 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         print("✅ Parsed reply:", reply)
 
         field_updates = {}
+
+        # 🔄 Load existing values if special fields are involved
+        existing = {}
+        if record_id:
+            url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
+            headers = {"Authorization": f"Bearer {airtable_api_key}"}
+            res = requests.get(url, headers=headers)
+            if res.ok:
+                existing = res.json().get("fields", {})
+            else:
+                print("⚠️ Could not load existing fields for merge")
+
         for p in props:
             if isinstance(p, dict):
                 if "property" in p and "value" in p:
-                    field_updates[p["property"]] = p["value"]
+                    key = p["property"]
+                    value = p["value"]
+
+                    # ➕ Cumulative merge for special requests
+                    if key == "special_requests":
+                        prev = existing.get("special_requests", "")
+                        if prev and prev.strip() not in value:
+                            value = f"{prev.strip()}\n+ {value}".strip()
+                        field_updates["special_requests"] = value
+
+                    elif key == "special_request_minutes_min":
+                        prev = int(existing.get("special_request_minutes_min", 0))
+                        field_updates["special_request_minutes_min"] = prev + int(value)
+
+                    elif key == "special_request_minutes_max":
+                        prev = int(existing.get("special_request_minutes_max", 0))
+                        field_updates["special_request_minutes_max"] = prev + int(value)
+
+                    else:
+                        field_updates[key] = value
+
                 elif len(p) == 1:
                     # Accept {"field_name": value} format
-                    field_updates.update(p)
+                    for k, v in p.items():
+                        field_updates[k] = v
 
         # 🧠 Handle escalation to office
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
@@ -506,8 +539,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             )
             field_updates["quote_notes"] = referral_note[:10000]  # Airtable max field limit
 
-            if quote_id and quote_id not in reply:
-                reply += f"\n\nQuote Number: {quote_id} — mention this when you call so we can help quicker."
+            # ⛔️ Fix fake quote number like VC-123456
+            if quote_id:
+                reply = reply.replace("VC-123456", quote_id)
+                reply = reply.replace("{{quote_id}}", quote_id)
 
         return field_updates, reply
 
@@ -516,7 +551,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         error_msg = f"GPT EXTRACT ERROR: {str(e)}\nRAW fallback:\n{raw_fallback}"
         print("🔥", error_msg)
 
-        # ✅ Airtable error log
         if record_id:
             try:
                 update_quote_record(record_id, {"gpt_error_log": error_msg[:10000]})
@@ -524,6 +558,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 
 def generate_next_actions():
