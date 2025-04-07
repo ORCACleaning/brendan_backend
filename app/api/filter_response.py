@@ -199,14 +199,6 @@ FIELD_MAP = {
     "special_request_minutes_max": "special_request_minutes_max",
 }
 
-    
-    # ✅ Direct field passthroughs (must be included explicitly)
-    "suburb": "suburb",
-    "bedrooms_v2": "bedrooms_v2",
-    "bathrooms_v2": "bathrooms_v2"
-}
-
-
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
