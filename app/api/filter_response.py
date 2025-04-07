@@ -439,8 +439,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         field_updates = {}
         for p in props:
-            if isinstance(p, dict) and "property" in p and "value" in p:
-                field_updates[p["property"]] = p["value"]
+            if isinstance(p, dict):
+                if "property" in p and "value" in p:
+                    field_updates[p["property"]] = p["value"]
+                elif len(p) == 1:
+                    # Accept {"field_name": value} format
+                    field_updates.update(p)
 
         # 🧠 Handle escalation to office
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
