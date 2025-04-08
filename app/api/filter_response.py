@@ -474,12 +474,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        # ✅ Catch additional top-level fields
-        top_level_fields = ["quote_stage", "quote_notes"]
-        for field in top_level_fields:
+        # ✅ Catch additional top-level fields like quote_stage and quote_notes
+        for field in ["quote_stage", "quote_notes"]:
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
-
 
         print("✅ Parsed props:", props)
         print("✅ Parsed reply:", reply)
@@ -518,12 +516,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                             field_updates[key] = f"{prev}\n+ {new}".strip()
 
                     elif key == "special_request_minutes_min":
-                        new_val = int(value)
-                        field_updates[key] = new_val  # Always use latest estimate
+                        field_updates[key] = int(value)
 
                     elif key == "special_request_minutes_max":
-                        new_val = int(value)
-                        field_updates[key] = new_val  # Always use latest estimate
+                        field_updates[key] = int(value)
 
                     else:
                         field_updates[key] = value
@@ -544,8 +540,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             field_updates["quote_notes"] = referral_note[:10000]
 
             if quote_id:
-                reply = reply.replace("VC-123456", quote_id)
-                reply = reply.replace("{{quote_id}}", quote_id)
+                # Replace all variations of dummy quote numbers with real one
+                for token in ["VC-123456", "123456", "{{quote_id}}"]:
+                    if token in reply:
+                        reply = reply.replace(token, quote_id)
 
         return field_updates, reply
 
