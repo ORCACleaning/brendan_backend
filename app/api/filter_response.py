@@ -585,8 +585,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates["quote_notes"] = referral_note[:10000]
 
-            if quote_id and all(q not in reply.lower() for q in ["vc-123456", "{{quote_id}}", quote_id.lower()]):
-                reply += f" Your quote number is {quote_id}."
+            # 🔁 Replace placeholder quote number with actual one
+            if quote_id:
+                if "123456" in reply or "{{quote_id}}" in reply:
+                    reply = reply.replace("123456", quote_id)
+                    reply = reply.replace("{{quote_id}}", quote_id)
+                elif "quote number" not in reply.lower():
+                    reply = f"Quote Number: {quote_id}. Phone: 1300 918 388. Email: info@orcacleaning.com.au. " + reply
+
 
         if "referred to the office" in reply.lower():
             choices = [
