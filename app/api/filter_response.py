@@ -441,14 +441,7 @@ def send_gpt_error_email(error_msg: str):
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import re
     import random
-
-    def is_inquiring(message: str) -> bool:
-        inquiry_phrases = [
-            "do you clean", "can you clean", "do you offer", "what about", 
-            "how much time does", "how long does", "is it possible to clean"
-        ]
-        message_lower = message.lower()
-        return any(phrase in message_lower for phrase in inquiry_phrases)
+    from .location_utils import get_suburb_postcode_pair, is_valid_region
 
     try:
         print("🧠 Calling GPT-4 to extract properties...")
@@ -533,11 +526,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                         field_updates[key] = value
                         continue
 
-                if key == "special_requests":
-                    if is_inquiring(message):
-                        print("🔍 Detected inquiry — not adding to special_requests.")
-                        continue
+                if key == "suburb":
+                    suburb, postcode = get_suburb_postcode_pair(value)
+                    if not is_valid_region(suburb, postcode):
+                        print(f"🚫 Suburb/Postcode not in valid region: {suburb}, {postcode}")
+                        reply = "Sorry, we only service the Perth Metro and Mandurah region. Could you double check the suburb or postcode?"
+                        return {}, reply
+                    field_updates[key] = suburb
+                    field_updates["postcode"] = postcode
 
+                elif key == "special_requests":
                     new_raw = [item.strip() for item in str(value).split(",") if item.strip()]
                     banned_keywords = [
                         "pressure wash", "pressure washing", "roof clean", "bbq", "bbq hood",
@@ -626,9 +624,51 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates[key] = value
 
-            elif isinstance(p, dict) and len(p) == 1:
-                for k, v in p.items():
-                    field_updates[k] = v
+        if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
+            print("📞 Detected referral to office. Applying escalation flags.")
+            if current_stage != "Referred to Office":
+                field_updates["quote_stage"] = "Referred to Office"
+                field_updates["status"] = "referred_to_office"
+                print("✅ Setting quote_stage and status to 'Referred to Office'")
+
+            referral_note = f"Brendan referred the customer to the office — unsure how to handle request.\n\n📩 Customer said: “{message.strip()}”"
+            referral_note += f"\n\nQuote ID: {quote_id}" if quote_id else ""
+
+            previous_notes = existing.get("quote_notes", "").strip()
+            if "referred the customer to the office" not in previous_notes.lower():
+                if "quote_notes" in field_updates:
+                    merged = f"{previous_notes}\n\n---\n{referral_note}".strip()
+                    field_updates["quote_notes"] = merged[:10000]
+                elif previous_notes:
+                    field_updates["quote_notes"] = f"{previous_notes}\n\n---\n{referral_note}"[:10000]
+                else:
+                    field_updates["quote_notes"] = referral_note[:10000]
+
+            if quote_id:
+                for token in ["VC-123456", "123456", "{{quote_id}}"]:
+                    reply = reply.replace(token, quote_id)
+                if quote_id not in reply:
+                    reply = f"{reply.strip().rstrip('.')} Your quote number is {quote_id} in case you need to reference it."
+            else:
+                print("⚠️ No quote_id provided — could not insert into reply.")
+                reply = f"{reply.strip().rstrip('.')} Just mention your quote when you call so we can look it up for you."
+
+        if "give us a call" in reply.lower() or "would you like to finish" in reply.lower():
+            if "give us a call" in log.lower() or "would you like to finish" in log.lower():
+                print("🧼 Cleaning duplicate escalation prompt from reply...")
+                reply = reply.split("Would you like to")[0].strip()
+                reply = reply.split("give us a call")[0].strip()
+                reply = reply.rstrip(".").strip()
+
+        if "referred to the office" in reply.lower():
+            choices = [
+                "Would you like to keep going here, or give us a bell instead?",
+                "Happy to finish the quote here — or would you rather call us?",
+                "I can help you here if you'd like, or feel free to call the office.",
+                "Want to keep going here, or give us a buzz instead?",
+                "No worries if you’d rather call — otherwise I can help you right here."
+            ]
+            reply += " " + random.choice(choices)
 
         return field_updates, reply
 
@@ -644,6 +684,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 
 def generate_next_actions():
