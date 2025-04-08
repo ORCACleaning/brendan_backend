@@ -152,24 +152,7 @@ If asked:
 - Add quote ID into the reply: “Quote Number: {{quote_id}}”
 - Save the original request into `quote_notes`
 
-EXAMPLES OF COMMON SPECIAL REQUESTS:
-(Use these for time estimates when confident)
-
-1. Balcony door tracks – 20–40 min  
-2. Microwave interior – 10–15 min  
-3. Light mould removal in bathroom corners – 30–45 min  
-4. Sticker residue from windows – 10–30 min  
-5. High cobweb removal – 20–30 min  
-6. Vacuum inside wardrobes – 10–20 min  
-7. Deep spot clean on a single wall – 20–30 min  
-8. Pet hair on furniture – 30–60 min  
-9. Clean small pile of dishes – 10–20 min  
-10. Bathroom drawer wipeout – 15–25 min  
-11. Rangehood filter soak – 20–40 min  
-12. Wipe balcony railings – 20–30 min  
-13. Mattress spot clean – 30–45 min  
-14. Small wall patch cleanup – 10–15 min  
-15. Other: Use best guess if confident
+---
 
 SUBURB RULE:
 - Only allow suburbs in Perth or Mandurah (Western Australia)
@@ -189,7 +172,16 @@ NEVER:
 - Repeat privacy policy more than once
 - Use bullet points in JSON
 - Break JSON format
+
+---
+
+DETECTING INQUIRIES VS. REQUESTS:
+- If the customer asks a question like “Do you clean X?”, respond with:
+  “We sure do clean X! It usually takes about Y minutes. Would you like to add this to your quote?”
+
+- If the customer explicitly requests a service like “Please clean X,” then add the service to the quote immediately.
 """
+
 
 # --- Brendan Utilities ---
 from fastapi import HTTPException
@@ -450,6 +442,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     import re
     import random
 
+    def is_inquiring(message: str) -> bool:
+        inquiry_phrases = [
+            "do you clean", "can you clean", "do you offer", "what about", 
+            "how much time does", "how long does", "is it possible to clean"
+        ]
+        message_lower = message.lower()
+        return any(phrase in message_lower for phrase in inquiry_phrases)
+
     try:
         print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
@@ -534,6 +534,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                         continue
 
                 if key == "special_requests":
+                    if is_inquiring(message):
+                        print("🔍 Detected inquiry — not adding to special_requests.")
+                        continue
+
                     new_raw = [item.strip() for item in str(value).split(",") if item.strip()]
                     banned_keywords = [
                         "pressure wash", "pressure washing", "roof clean", "bbq", "bbq hood",
@@ -543,7 +547,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     filtered = [item for item in new_raw if all(bad not in item.lower() for bad in banned_keywords)]
 
                     if not filtered and value.strip() == "":
-                        # 🧼 Special request REMOVAL
                         print("🧼 Customer removed all special requests. Resetting fields.")
                         field_updates["special_requests"] = ""
                         field_updates["special_request_minutes_min"] = 0
@@ -594,7 +597,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                             elif "rangehood" in li:
                                 added_min += 20; added_max += 40
 
-
                 elif key == "special_request_minutes_min":
                     try:
                         val = int(value)
@@ -628,57 +630,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 for k, v in p.items():
                     field_updates[k] = v
 
-        if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
-            print("📞 Detected referral to office. Applying escalation flags.")
-
-            if current_stage != "Referred to Office":
-                field_updates["quote_stage"] = "Referred to Office"
-                field_updates["status"] = "referred_to_office"
-                print("✅ Setting quote_stage and status to 'Referred to Office'")
-
-            referral_note = f"Brendan referred the customer to the office — unsure how to handle request.\n\n📩 Customer said: “{message.strip()}”"
-            referral_note += f"\n\nQuote ID: {quote_id}" if quote_id else ""
-
-            previous_notes = existing.get("quote_notes", "").strip()
-
-            if "referred the customer to the office" in previous_notes.lower():
-                print("ℹ️ Referral note already exists — not duplicating.")
-            else:
-                if "quote_notes" in field_updates:
-                    merged = f"{previous_notes}\n\n---\n{referral_note}".strip()
-                    field_updates["quote_notes"] = merged[:10000]
-                elif previous_notes:
-                    field_updates["quote_notes"] = f"{previous_notes}\n\n---\n{referral_note}"[:10000]
-                else:
-                    field_updates["quote_notes"] = referral_note[:10000]
-
-            if quote_id:
-                for token in ["VC-123456", "123456", "{{quote_id}}"]:
-                    reply = reply.replace(token, quote_id)
-                if quote_id not in reply:
-                    reply = f"{reply.strip().rstrip('.')}. Your quote number is {quote_id} in case you need to reference it."
-            else:
-                print("⚠️ No quote_id provided — could not insert into reply.")
-                reply = f"{reply.strip().rstrip('.')}. Just mention your quote when you call so we can look it up for you."
-
-        if "give us a call" in reply.lower() or "would you like to finish" in reply.lower():
-            if "give us a call" in log.lower() or "would you like to finish" in log.lower():
-                print("🧼 Cleaning duplicate escalation prompt from reply...")
-                reply = reply.split("Would you like to")[0].strip()
-                reply = reply.split("give us a call")[0].strip()
-                reply = reply.rstrip(".").strip()
-
-        # 🪄 Fix 25: rotate fallback messages
-        if "referred to the office" in reply.lower():
-            choices = [
-                "Would you like to keep going here, or give us a bell instead?",
-                "Happy to finish the quote here — or would you rather call us?",
-                "I can help you here if you'd like, or feel free to call the office.",
-                "Want to keep going here, or give us a buzz instead?",
-                "No worries if you’d rather call — otherwise I can help you right here."
-            ]
-            reply += " " + random.choice(choices)
-
         return field_updates, reply
 
     except Exception as e:
@@ -693,8 +644,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
-
 
 
 def generate_next_actions():
