@@ -437,11 +437,14 @@ def send_gpt_error_email(error_msg: str):
     except Exception as e:
         print("⚠️ Could not send GPT error alert:", e)
 
-
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import re
     import random
-    from .location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
+    from app.api.location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
+    try:
+        from app.api.location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
+    except ImportError:
+        from .location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
 
     try:
         print("🧠 Calling GPT-4 to extract properties...")
@@ -501,9 +504,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         original_notes = existing.get("quote_notes", "")
         existing_specials_raw = existing.get("special_requests", "")
         original_specials = [x.strip().lower() for x in existing_specials_raw.split(",") if x.strip()]
-        original_min = int(existing.get("special_request_minutes_min", 0))
-        original_max = int(existing.get("special_request_minutes_max", 0))
-
         added_min = added_max = 0
 
         for p in props:
@@ -563,7 +563,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                         field_updates["special_requests"] = ""
                         field_updates["special_request_minutes_min"] = 0
                         field_updates["special_request_minutes_max"] = 0
-                        added_min = added_max = 0
                         continue
 
                     if not filtered:
@@ -616,7 +615,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                             if time_guess and val < time_guess:
                                 print(f"⚠️ GPT min {val} < user guess {time_guess}, using {time_guess}")
                                 val = time_guess
-                            field_updates[key] = original_min + added_min
+                            field_updates[key] = val + added_min
                     except:
                         print(f"⚠️ Invalid min time format: {value}")
 
@@ -627,7 +626,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                             if time_guess and val < time_guess:
                                 print(f"⚠️ GPT max {val} < user guess {time_guess}, using {time_guess}")
                                 val = time_guess
-                            field_updates[key] = original_max + added_max
+                            field_updates[key] = val + added_max
                     except:
                         print(f"⚠️ Invalid max time format: {value}")
 
@@ -639,7 +638,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if current_stage != "Referred to Office":
                 field_updates["quote_stage"] = "Referred to Office"
                 field_updates["status"] = "referred_to_office"
-                print("✅ Setting quote_stage and status to 'Referred to Office'")
 
             referral_note = f"Brendan referred the customer to the office — unsure how to handle request.\n\n📩 Customer said: “{message.strip()}”"
             referral_note += f"\n\nQuote ID: {quote_id}" if quote_id else ""
@@ -655,12 +653,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     field_updates["quote_notes"] = referral_note[:10000]
 
             if quote_id:
-                for token in ["VC-123456", "123456", "{{quote_id}}"]:
-                    reply = reply.replace(token, quote_id)
-                if quote_id not in reply:
-                    reply = f"{reply.strip().rstrip('.')} Your quote number is {quote_id} in case you need to reference it."
+                quote_id_lower = quote_id.lower()
+                if all(q not in reply.lower() for q in ["vc-123456", "123456", "{{quote_id}}", quote_id_lower]):
+                    reply += f" Your quote number is {quote_id}."
             else:
-                reply = f"{reply.strip().rstrip('.')} Just mention your quote when you call so we can look it up for you."
+                if "quote" not in reply.lower():
+                    reply += " Just mention your quote when you call so we can look it up for you."
 
         if "give us a call" in reply.lower() or "would you like to finish" in reply.lower():
             if "give us a call" in log.lower() or "would you like to finish" in log.lower():
@@ -692,6 +690,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
+
 
 def generate_next_actions():
     return [
