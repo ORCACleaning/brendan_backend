@@ -495,7 +495,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             except:
                 time_guess = None
 
-        # 🔄 Load existing values if special fields are involved
+        # 🔄 Load existing values
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{airtable_base_id}/{table_name}/{record_id}"
@@ -506,102 +506,130 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             else:
                 print("⚠️ Could not load existing fields for merge")
 
+        current_stage = existing.get("quote_stage", "")
+        original_notes = existing.get("quote_notes", "")
         original_specials = [x.strip().lower() for x in existing.get("special_requests", "").split(",") if x.strip()]
         original_min = int(existing.get("special_request_minutes_min", 0))
         original_max = int(existing.get("special_request_minutes_max", 0))
 
         for p in props:
-            if isinstance(p, dict):
-                if "property" in p and "value" in p:
-                    key = p["property"]
-                    value = p["value"]
+            if isinstance(p, dict) and "property" in p and "value" in p:
+                key = p["property"]
+                value = p["value"]
 
-                    if key == "special_requests":
-                        new_clean = [item.strip() for item in str(value).split(",") if item.strip()]
-                        banned_keywords = [
-                            "pressure wash", "pressure washing", "roof clean", "bbq", "bbq hood",
-                            "external window", "external windows", "lawn", "garden", "shed", "driveway",
-                            "mowing", "rubbish removal", "furniture removal", "sauna", "pool"
-                        ]
-                        filtered = [item for item in new_clean if all(bad not in item.lower() for bad in banned_keywords)]
+                if key == "quote_stage":
+                    if current_stage == "Referred to Office":
+                        print("⚠️ Skipping quote_stage update — already referred to office.")
+                        continue
 
-                        if not filtered:
-                            print("🚫 All special requests were rejected as banned — skipping field.")
-                            continue
-
-                        # Final cleanup
-                        cleaned = []
-                        for item in filtered:
-                            item = item.replace("+", "").replace("\n", "").strip()
-                            if item and item.lower() not in [c.lower() for c in cleaned]:
-                                cleaned.append(item)
-
-                        final_string = ", ".join(cleaned)
-                        print("🧼 Final cleaned specials:", final_string)
-                        field_updates[key] = final_string
-
-                        # Calculate what was removed
-                        removed = [item for item in original_specials if item not in [f.lower() for f in cleaned]]
-                        print("🧾 Removed specials:", removed)
-
-                        deduction_min = deduction_max = 0
-                        for r in removed:
-                            if "microwave" in r:
-                                deduction_min += 10; deduction_max += 15
-                            elif "balcony door track" in r:
-                                deduction_min += 20; deduction_max += 40
-                            elif "cobweb" in r:
-                                deduction_min += 20; deduction_max += 30
-                            elif "drawer" in r:
-                                deduction_min += 15; deduction_max += 25
-                            elif "light mould" in r:
-                                deduction_min += 30; deduction_max += 45
-                            elif "wall" in r:
-                                deduction_min += 20; deduction_max += 30
-                            elif "pet hair" in r:
-                                deduction_min += 30; deduction_max += 60
-                            elif "dishes" in r:
-                                deduction_min += 10; deduction_max += 20
-                            elif "mattress" in r:
-                                deduction_min += 30; deduction_max += 45
-                            elif "stick" in r or "residue" in r:
-                                deduction_min += 10; deduction_max += 30
-                            elif "balcony rail" in r:
-                                deduction_min += 20; deduction_max += 30
-                            elif "rangehood" in r:
-                                deduction_min += 20; deduction_max += 40
-
-                        new_min = max(original_min - deduction_min, 0)
-                        new_max = max(original_max - deduction_max, 0)
-                        field_updates["special_request_minutes_min"] = new_min
-                        field_updates["special_request_minutes_max"] = new_max
-
-                    elif key in ["special_request_minutes_min", "special_request_minutes_max"]:
-                        try:
-                            val = int(value)
-                            if val < 5:
-                                print(f"⚠️ Rejected unrealistic time value for {key}: {val}")
-                                continue
-                            if time_guess and val < time_guess:
-                                print(f"⚠️ GPT {key} = {val} < user guess {time_guess} — using {time_guess}")
-                                val = time_guess
-                            field_updates[key] = val
-                        except:
-                            print(f"⚠️ Invalid format for {key}: {value}")
-
+                if key == "quote_notes":
+                    if current_stage == "Referred to Office" and original_notes:
+                        combined = f"{original_notes.strip()}\n\n---\n{str(value).strip()}"
+                        field_updates[key] = combined[:10000]
+                        print("📝 Merged quote_notes into existing notes.")
+                        continue
                     else:
                         field_updates[key] = value
+                        continue
 
-                elif len(p) == 1:
-                    for k, v in p.items():
-                        field_updates[k] = v
+                if key == "special_requests":
+                    new_clean = [item.strip() for item in str(value).split(",") if item.strip()]
+                    banned_keywords = [
+                        "pressure wash", "pressure washing", "roof clean", "bbq", "bbq hood",
+                        "external window", "external windows", "lawn", "garden", "shed", "driveway",
+                        "mowing", "rubbish removal", "furniture removal", "sauna", "pool"
+                    ]
+                    filtered = [item for item in new_clean if all(bad not in item.lower() for bad in banned_keywords)]
+
+                    if not filtered:
+                        print("🚫 All special requests were rejected as banned — skipping field.")
+                        continue
+
+                    cleaned = []
+                    for item in filtered:
+                        item = item.replace("+", "").replace("\n", "").strip()
+                        if item and item.lower() not in [c.lower() for c in cleaned]:
+                            cleaned.append(item)
+
+                    final_string = ", ".join(cleaned)
+                    print("🧼 Final cleaned specials:", final_string)
+                    field_updates[key] = final_string
+
+                    removed = [item for item in original_specials if item not in [f.lower() for f in cleaned]]
+                    print("🧾 Removed specials:", removed)
+
+                    deduction_min = deduction_max = 0
+                    for r in removed:
+                        if "microwave" in r:
+                            deduction_min += 10; deduction_max += 15
+                        elif "balcony door track" in r:
+                            deduction_min += 20; deduction_max += 40
+                        elif "cobweb" in r:
+                            deduction_min += 20; deduction_max += 30
+                        elif "drawer" in r:
+                            deduction_min += 15; deduction_max += 25
+                        elif "light mould" in r:
+                            deduction_min += 30; deduction_max += 45
+                        elif "wall" in r:
+                            deduction_min += 20; deduction_max += 30
+                        elif "pet hair" in r:
+                            deduction_min += 30; deduction_max += 60
+                        elif "dishes" in r:
+                            deduction_min += 10; deduction_max += 20
+                        elif "mattress" in r:
+                            deduction_min += 30; deduction_max += 45
+                        elif "stick" in r or "residue" in r:
+                            deduction_min += 10; deduction_max += 30
+                        elif "balcony rail" in r:
+                            deduction_min += 20; deduction_max += 30
+                        elif "rangehood" in r:
+                            deduction_min += 20; deduction_max += 40
+
+                    new_min = max(original_min - deduction_min, 0)
+                    new_max = max(original_max - deduction_max, 0)
+                    field_updates["special_request_minutes_min"] = new_min
+                    field_updates["special_request_minutes_max"] = new_max
+                    continue
+
+                if key in ["special_request_minutes_min", "special_request_minutes_max"]:
+                    try:
+                        val = int(value)
+                        if val < 5:
+                            print(f"⚠️ Rejected unrealistic time value for {key}: {val}")
+                            continue
+                        if time_guess and val < time_guess:
+                            print(f"⚠️ GPT {key} = {val} < user guess {time_guess} — using {time_guess}")
+                            val = time_guess
+                        field_updates[key] = val
+                    except:
+                        print(f"⚠️ Invalid format for {key}: {value}")
+                    continue
+
+                # Normal fields
+                field_updates[key] = value
+
+            elif isinstance(p, dict) and len(p) == 1:
+                for k, v in p.items():
+                    field_updates[k] = v
 
         # 🧠 Handle escalation to office
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
             print("📞 Detected referral to office. Applying escalation flags.")
-            field_updates["quote_stage"] = "Referred to Office"
+
+            if current_stage != "Referred to Office":
+                field_updates["quote_stage"] = "Referred to Office"
+                print("✅ Setting quote_stage to 'Referred to Office'")
+            else:
+                print("⚠️ Skipping quote_stage — already set to 'Referred to Office'")
+
             referral_note = f"Brendan referred the customer to the office — unsure how to handle request.\n\n📩 Customer said: “{message.strip()}”"
-            field_updates["quote_notes"] = referral_note[:10000]
+            if "quote_notes" in field_updates:
+                merged = f"{existing.get('quote_notes', '').strip()}\n\n---\n{referral_note}"
+                field_updates["quote_notes"] = merged[:10000]
+            elif current_stage == "Referred to Office" and original_notes:
+                field_updates["quote_notes"] = f"{original_notes.strip()}\n\n---\n{referral_note}"[:10000]
+            else:
+                field_updates["quote_notes"] = referral_note[:10000]
 
             if quote_id:
                 if all(token not in reply for token in ["VC-123456", "123456", "{{quote_id}}", quote_id]):
