@@ -445,6 +445,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     except ImportError:
         from .location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
 
+
     try:
         print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
