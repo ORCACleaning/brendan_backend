@@ -447,6 +447,8 @@ def send_gpt_error_email(error_msg: str):
 
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
+    import re
+
     try:
         print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
@@ -474,7 +476,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        # ✅ Catch additional top-level fields like quote_stage and quote_notes
         for field in ["quote_stage", "quote_notes"]:
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
@@ -483,6 +484,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         print("✅ Parsed reply:", reply)
 
         field_updates = {}
+
+        # ⏱ Extract customer-estimated minutes from the message
+        time_guess = None
+        match = re.search(r"(?:take|about|around|roughly)?\s*(\d{1,3})\s*(?:minutes|min)", message.lower())
+        if match:
+            try:
+                time_guess = int(match.group(1))
+                print(f"🧠 Customer suggested time estimate: {time_guess} min")
+            except:
+                time_guess = None
 
         # 🔄 Load existing values if special fields are involved
         existing = {}
@@ -495,6 +506,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             else:
                 print("⚠️ Could not load existing fields for merge")
 
+        original_specials = [x.strip().lower() for x in existing.get("special_requests", "").split(",") if x.strip()]
+        original_min = int(existing.get("special_request_minutes_min", 0))
+        original_max = int(existing.get("special_request_minutes_max", 0))
+
         for p in props:
             if isinstance(p, dict):
                 if "property" in p and "value" in p:
@@ -502,24 +517,77 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     value = p["value"]
 
                     if key == "special_requests":
-                        prev = existing.get("special_requests", "").strip()
-                        new = str(value).strip()
+                        new_clean = [item.strip() for item in str(value).split(",") if item.strip()]
+                        banned_keywords = [
+                            "pressure wash", "pressure washing", "roof clean", "bbq", "bbq hood",
+                            "external window", "external windows", "lawn", "garden", "shed", "driveway",
+                            "mowing", "rubbish removal", "furniture removal", "sauna", "pool"
+                        ]
+                        filtered = [item for item in new_clean if all(bad not in item.lower() for bad in banned_keywords)]
 
-                        if prev == new:
-                            field_updates[key] = new  # No change
-                        elif all(item.strip() in prev for item in new.split(",")):
-                            field_updates[key] = prev  # Already included
-                        elif all(item.strip() in new for item in prev.split(",")):
-                            field_updates[key] = new  # Full overwrite (items removed)
-                        else:
-                            # Genuinely new extras
-                            field_updates[key] = f"{prev}\n+ {new}".strip()
+                        if not filtered:
+                            print("🚫 All special requests were rejected as banned — skipping field.")
+                            continue
 
-                    elif key == "special_request_minutes_min":
-                        field_updates[key] = int(value)
+                        # Final cleanup
+                        cleaned = []
+                        for item in filtered:
+                            item = item.replace("+", "").replace("\n", "").strip()
+                            if item and item.lower() not in [c.lower() for c in cleaned]:
+                                cleaned.append(item)
 
-                    elif key == "special_request_minutes_max":
-                        field_updates[key] = int(value)
+                        final_string = ", ".join(cleaned)
+                        print("🧼 Final cleaned specials:", final_string)
+                        field_updates[key] = final_string
+
+                        # Calculate what was removed
+                        removed = [item for item in original_specials if item not in [f.lower() for f in cleaned]]
+                        print("🧾 Removed specials:", removed)
+
+                        deduction_min = deduction_max = 0
+                        for r in removed:
+                            if "microwave" in r:
+                                deduction_min += 10; deduction_max += 15
+                            elif "balcony door track" in r:
+                                deduction_min += 20; deduction_max += 40
+                            elif "cobweb" in r:
+                                deduction_min += 20; deduction_max += 30
+                            elif "drawer" in r:
+                                deduction_min += 15; deduction_max += 25
+                            elif "light mould" in r:
+                                deduction_min += 30; deduction_max += 45
+                            elif "wall" in r:
+                                deduction_min += 20; deduction_max += 30
+                            elif "pet hair" in r:
+                                deduction_min += 30; deduction_max += 60
+                            elif "dishes" in r:
+                                deduction_min += 10; deduction_max += 20
+                            elif "mattress" in r:
+                                deduction_min += 30; deduction_max += 45
+                            elif "stick" in r or "residue" in r:
+                                deduction_min += 10; deduction_max += 30
+                            elif "balcony rail" in r:
+                                deduction_min += 20; deduction_max += 30
+                            elif "rangehood" in r:
+                                deduction_min += 20; deduction_max += 40
+
+                        new_min = max(original_min - deduction_min, 0)
+                        new_max = max(original_max - deduction_max, 0)
+                        field_updates["special_request_minutes_min"] = new_min
+                        field_updates["special_request_minutes_max"] = new_max
+
+                    elif key in ["special_request_minutes_min", "special_request_minutes_max"]:
+                        try:
+                            val = int(value)
+                            if val < 5:
+                                print(f"⚠️ Rejected unrealistic time value for {key}: {val}")
+                                continue
+                            if time_guess and val < time_guess:
+                                print(f"⚠️ GPT {key} = {val} < user guess {time_guess} — using {time_guess}")
+                                val = time_guess
+                            field_updates[key] = val
+                        except:
+                            print(f"⚠️ Invalid format for {key}: {value}")
 
                     else:
                         field_updates[key] = value
@@ -532,18 +600,23 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
             print("📞 Detected referral to office. Applying escalation flags.")
             field_updates["quote_stage"] = "Referred to Office"
-
-            referral_note = (
-                f"Brendan referred the customer to the office — unsure how to handle request.\n\n"
-                f"📩 Customer said: “{message.strip()}”"
-            )
+            referral_note = f"Brendan referred the customer to the office — unsure how to handle request.\n\n📩 Customer said: “{message.strip()}”"
             field_updates["quote_notes"] = referral_note[:10000]
 
             if quote_id:
-                # Replace all variations of dummy quote numbers with real one
+                if all(token not in reply for token in ["VC-123456", "123456", "{{quote_id}}", quote_id]):
+                    reply = f"Quote Number: {quote_id}. " + reply.strip().capitalize()
                 for token in ["VC-123456", "123456", "{{quote_id}}"]:
-                    if token in reply:
-                        reply = reply.replace(token, quote_id)
+                    reply = reply.replace(token, quote_id)
+                if quote_id not in reply:
+                    reply += f" Your quote number is {quote_id} in case you need to reference it."
+
+        if "give us a call" in reply.lower() or "would you like to finish" in reply.lower():
+            if "give us a call" in log.lower() or "would you like to finish" in log.lower():
+                print("🧼 Cleaning duplicate escalation prompt from reply...")
+                reply = reply.split("Would you like to")[0].strip()
+                reply = reply.split("give us a call")[0].strip()
+                reply = reply.rstrip(".").strip() + "."
 
         return field_updates, reply
 
@@ -559,7 +632,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
 
 
 def generate_next_actions():
@@ -614,9 +686,9 @@ async def filter_response_entry(request: Request):
         print(f"📇 Airtable Record ID: {record_id}")
         print(f"📜 Stage: {stage}")
 
-        # 🚧 Prevent updates once quote is finalized
-        if stage != "Gathering Info":
-            print(f"🚫 Cannot update — quote_stage is '{stage}'")
+        # 🚧 Prevent updates once quote is finalized (except "Referred to Office")
+        if stage not in ["Gathering Info", "Referred to Office"]:
+             print(f"🚫 Cannot update — quote_stage is '{stage}'")
             return JSONResponse(content={
                 "properties": [],
                 "response": "That quote's already been calculated. You’ll need to start a new one if anything’s changed.",
