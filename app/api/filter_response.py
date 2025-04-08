@@ -441,7 +441,7 @@ def send_gpt_error_email(error_msg: str):
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import re
     import random
-    from .location_utils import get_suburb_postcode_pair, is_valid_region
+    from .location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
 
     try:
         print("🧠 Calling GPT-4 to extract properties...")
@@ -463,7 +463,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
         clean_json = raw[start:end+1]
-
         print("\n📦 Clean JSON block before parsing:\n", clean_json)
 
         parsed = json.loads(clean_json)
@@ -521,19 +520,34 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                         combined = f"{original_notes.strip()}\n\n---\n{str(value).strip()}"
                         field_updates[key] = combined[:10000]
                         print("📝 Merged quote_notes into existing notes.")
-                        continue
                     else:
                         field_updates[key] = value
-                        continue
+                    continue
 
                 if key == "suburb":
-                    suburb, postcode = get_suburb_postcode_pair(value)
-                    if not is_valid_region(suburb, postcode):
-                        print(f"🚫 Suburb/Postcode not in valid region: {suburb}, {postcode}")
-                        reply = "Sorry, we only service the Perth Metro and Mandurah region. Could you double check the suburb or postcode?"
-                        return {}, reply
-                    field_updates[key] = suburb
-                    field_updates["postcode"] = postcode
+                    value = str(value).strip()
+                    if value.isdigit() and len(value) in [4, 5]:
+                        postcode = value
+                        suburbs = get_suburbs_from_postcode(postcode)
+                        if not suburbs:
+                            reply = "Sorry, I couldn’t find any suburbs for that postcode. Can you double check it?"
+                            return {}, reply
+                        if len(suburbs) == 1:
+                            suburb = suburbs[0]
+                            if not is_valid_region(suburb, postcode):
+                                reply = "Sorry, we only service the Perth Metro and Mandurah region. Could you double check the suburb or postcode?"
+                                return {}, reply
+                            field_updates["suburb"] = suburb
+                        else:
+                            suburb_list = ", ".join(suburbs[:5])
+                            reply = f"Thanks legend — just confirming, which suburb is it? That postcode matches: {suburb_list}."
+                            return {}, reply
+                    else:
+                        suburb, postcode = get_suburb_postcode_pair(value)
+                        if not is_valid_region(suburb, postcode):
+                            reply = "Sorry, we only service the Perth Metro and Mandurah region. Could you double check the suburb or postcode?"
+                            return {}, reply
+                        field_updates["suburb"] = suburb
 
                 elif key == "special_requests":
                     new_raw = [item.strip() for item in str(value).split(",") if item.strip()]
@@ -603,8 +617,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                                 print(f"⚠️ GPT min {val} < user guess {time_guess}, using {time_guess}")
                                 val = time_guess
                             field_updates[key] = original_min + added_min
-                        else:
-                            print(f"⚠️ Rejected min time: {val}")
                     except:
                         print(f"⚠️ Invalid min time format: {value}")
 
@@ -616,8 +628,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                                 print(f"⚠️ GPT max {val} < user guess {time_guess}, using {time_guess}")
                                 val = time_guess
                             field_updates[key] = original_max + added_max
-                        else:
-                            print(f"⚠️ Rejected max time: {val}")
                     except:
                         print(f"⚠️ Invalid max time format: {value}")
 
@@ -650,12 +660,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 if quote_id not in reply:
                     reply = f"{reply.strip().rstrip('.')} Your quote number is {quote_id} in case you need to reference it."
             else:
-                print("⚠️ No quote_id provided — could not insert into reply.")
                 reply = f"{reply.strip().rstrip('.')} Just mention your quote when you call so we can look it up for you."
 
         if "give us a call" in reply.lower() or "would you like to finish" in reply.lower():
             if "give us a call" in log.lower() or "would you like to finish" in log.lower():
-                print("🧼 Cleaning duplicate escalation prompt from reply...")
                 reply = reply.split("Would you like to")[0].strip()
                 reply = reply.split("give us a call")[0].strip()
                 reply = reply.rstrip(".").strip()
@@ -684,8 +692,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
-
 
 def generate_next_actions():
     return [
