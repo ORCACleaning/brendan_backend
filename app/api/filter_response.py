@@ -440,7 +440,6 @@ def send_gpt_error_email(error_msg: str):
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import re
     import random
-    from app.api.location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
     try:
         from app.api.location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
     except ImportError:
