@@ -434,6 +434,8 @@ def send_gpt_error_email(error_msg: str):
     except Exception as e:
         print("⚠️ Could not send GPT error alert:", e)
 
+# ✅ Full fixed version: extract_properties_from_gpt4
+
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import re
     import random
@@ -464,7 +466,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        for field in ["quote_stage", "quote_notes"]:
+        for field in ["quote_stage", "quote_notes", "status"]:
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
 
@@ -472,8 +474,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         print("✅ Parsed reply:", reply)
 
         field_updates = {}
-
         time_guess = None
+
         match = re.search(r"(?:take|about|around|roughly)?\s*(\d{1,3})\s*(?:minutes|min)", message.lower())
         if match:
             try:
@@ -536,8 +538,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                         if clean and clean.lower() not in [m.lower() for m in merged]:
                             merged.append(clean)
 
-                    final_string = ", ".join(merged)
-                    field_updates[key] = final_string
+                    field_updates[key] = ", ".join(merged)
 
                     for new_item in filtered:
                         li = new_item.lower()
@@ -590,6 +591,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates[key] = value
 
+        # 🧭 Reject out-of-area suburbs
+        if field_updates.get("status") == "out_of_area":
+            field_updates["quote_stage"] = "Referred to Office"
+            if "quote_notes" not in field_updates:
+                field_updates["quote_notes"] = f"Brendan ended chat due to out-of-area suburb.\n\nCustomer said: “{message.strip()}”"
+            if quote_id and "quote number" not in reply.lower():
+                reply += f"\nQuote Number: {quote_id}"
+            return field_updates, reply.strip()
+
+        # 🆘 Escalation: Manual office referral
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
             if current_stage != "Referred to Office":
                 field_updates["quote_stage"] = "Referred to Office"
@@ -598,36 +609,26 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             referral_note = f"Brendan referred the customer to the office.\n\n📩 Customer said: “{message.strip()}”"
             referral_note += f"\n\nQuote ID: {quote_id}" if quote_id else ""
 
-            previous_notes = existing.get("quote_notes", "").strip()
-            if "referred the customer to the office" not in previous_notes.lower():
-                if "quote_notes" in field_updates:
-                    merged = f"{previous_notes}\n\n---\n{referral_note}".strip()
-                    field_updates["quote_notes"] = merged[:10000]
-                elif previous_notes:
-                    field_updates["quote_notes"] = f"{previous_notes}\n\n---\n{referral_note}"[:10000]
-                else:
-                    field_updates["quote_notes"] = referral_note[:10000]
+            if "quote_notes" in field_updates:
+                field_updates["quote_notes"] = f"{existing.get('quote_notes', '').strip()}\n\n---\n{referral_note}"[:10000]
+            elif existing.get("quote_notes", ""):
+                field_updates["quote_notes"] = f"{existing['quote_notes'].strip()}\n\n---\n{referral_note}"[:10000]
+            else:
+                field_updates["quote_notes"] = referral_note[:10000]
 
-            # 🔁 Replace placeholder quote number with actual one
-            if quote_id:
-                if "123456" in reply or "{{quote_id}}" in reply:
-                    reply = reply.replace("123456", quote_id)
-                    reply = reply.replace("{{quote_id}}", quote_id)
-                elif "quote number" not in reply.lower():
-                    reply = f"Quote Number: {quote_id}. Phone: 1300 918 388. Email: info@orcacleaning.com.au. " + reply
-
+            if quote_id and "quote number" not in reply.lower():
+                reply = f"Quote Number: {quote_id}. Phone: 1300 918 388. Email: info@orcacleaning.com.au. " + reply
 
         if "referred to the office" in reply.lower():
-            choices = [
+            reply += " " + random.choice([
                 "Would you like to keep going here, or give us a bell instead?",
                 "Happy to finish the quote here — or would you rather call us?",
                 "I can help you here if you'd like, or feel free to call the office.",
                 "Want to keep going here, or give us a buzz instead?",
                 "No worries if you’d rather call — otherwise I can help you right here."
-            ]
-            reply += " " + random.choice(choices)
+            ])
 
-        return field_updates, reply
+        return field_updates, reply.strip()
 
     except Exception as e:
         raw_fallback = raw if "raw" in locals() else "[No raw GPT output]"
