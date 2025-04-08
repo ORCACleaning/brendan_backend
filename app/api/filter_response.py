@@ -542,14 +542,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     ]
                     filtered = [item for item in new_raw if all(bad not in item.lower() for bad in banned_keywords)]
 
-                      if not filtered and value.strip() == "":
-                          # 🧼 Special request REMOVAL
-                          print("🧼 Customer removed all special requests. Resetting fields.")
-                          field_updates["special_requests"] = ""
-                          field_updates["special_request_minutes_min"] = 0
-                          field_updates["special_request_minutes_max"] = 0
-                          added_min = added_max = 0
-                          continue
+                    if not filtered and value.strip() == "":
+                        # 🧼 Special request REMOVAL
+                        print("🧼 Customer removed all special requests. Resetting fields.")
+                        field_updates["special_requests"] = ""
+                        field_updates["special_request_minutes_min"] = 0
+                        field_updates["special_request_minutes_max"] = 0
+                        added_min = added_max = 0
+                        continue
 
                     if not filtered:
                         print("🚫 All special requests were rejected as banned — skipping field.")
