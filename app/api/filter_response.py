@@ -741,12 +741,13 @@ async def filter_response_entry(request: Request):
 
         # 🚧 Prevent updates once quote is finalized (except "Referred to Office")
         if stage not in ["Gathering Info", "Referred to Office"]:
-             print(f"🚫 Cannot update — quote_stage is '{stage}'")
+            print(f"🚫 Cannot update — quote_stage is '{stage}'")
             return JSONResponse(content={
                 "properties": [],
                 "response": "That quote's already been calculated. You’ll need to start a new one if anything’s changed.",
                 "next_actions": []
             })
+
 
         # --- Stage: Gathering Info ---
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
