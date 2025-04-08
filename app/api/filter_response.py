@@ -438,13 +438,7 @@ def send_gpt_error_email(error_msg: str):
         print("⚠️ Could not send GPT error alert:", e)
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
-    import re
-    import random
-    try:
-        from app.api.location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
-    except ImportError:
-        from .location_utils import get_suburb_postcode_pair, is_valid_region, get_suburbs_from_postcode
-
+    import re, random
 
     try:
         print("🧠 Calling GPT-4 to extract properties...")
@@ -466,21 +460,15 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
         clean_json = raw[start:end+1]
-        print("\n📦 Clean JSON block before parsing:\n", clean_json)
-
         parsed = json.loads(clean_json)
+
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
-
         for field in ["quote_stage", "quote_notes"]:
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
 
-        print("✅ Parsed props:", props)
-        print("✅ Parsed reply:", reply)
-
         field_updates = {}
-
         time_guess = None
         match = re.search(r"(?:take|about|around|roughly)?\s*(\d{1,3})\s*(?:minutes|min)", message.lower())
         if match:
@@ -512,44 +500,17 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 value = p["value"]
 
                 if key == "quote_stage" and current_stage == "Referred to Office":
-                    print("⚠️ Skipping quote_stage update — already referred to office.")
                     continue
 
                 if key == "quote_notes":
                     if current_stage == "Referred to Office" and original_notes:
                         combined = f"{original_notes.strip()}\n\n---\n{str(value).strip()}"
                         field_updates[key] = combined[:10000]
-                        print("📝 Merged quote_notes into existing notes.")
                     else:
                         field_updates[key] = value
                     continue
 
-                if key == "suburb":
-                    value = str(value).strip()
-                    if value.isdigit() and len(value) in [4, 5]:
-                        postcode = value
-                        suburbs = get_suburbs_from_postcode(postcode)
-                        if not suburbs:
-                            reply = "Sorry, I couldn’t find any suburbs for that postcode. Can you double check it?"
-                            return {}, reply
-                        if len(suburbs) == 1:
-                            suburb = suburbs[0]
-                            if not is_valid_region(suburb, postcode):
-                                reply = "Sorry, we only service the Perth Metro and Mandurah region. Could you double check the suburb or postcode?"
-                                return {}, reply
-                            field_updates["suburb"] = suburb
-                        else:
-                            suburb_list = ", ".join(suburbs[:5])
-                            reply = f"Thanks legend — just confirming, which suburb is it? That postcode matches: {suburb_list}."
-                            return {}, reply
-                    else:
-                        suburb, postcode = get_suburb_postcode_pair(value)
-                        if not is_valid_region(suburb, postcode):
-                            reply = "Sorry, we only service the Perth Metro and Mandurah region. Could you double check the suburb or postcode?"
-                            return {}, reply
-                        field_updates["suburb"] = suburb
-
-                elif key == "special_requests":
+                if key == "special_requests":
                     new_raw = [item.strip() for item in str(value).split(",") if item.strip()]
                     banned_keywords = [
                         "pressure wash", "pressure washing", "roof clean", "bbq", "bbq hood",
@@ -559,14 +520,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     filtered = [item for item in new_raw if all(bad not in item.lower() for bad in banned_keywords)]
 
                     if not filtered and value.strip() == "":
-                        print("🧼 Customer removed all special requests. Resetting fields.")
                         field_updates["special_requests"] = ""
                         field_updates["special_request_minutes_min"] = 0
                         field_updates["special_request_minutes_max"] = 0
                         continue
 
                     if not filtered:
-                        print("🚫 All special requests were rejected as banned — skipping field.")
                         continue
 
                     all_items = existing_specials_raw.split(",") + filtered
@@ -577,120 +536,85 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                             merged.append(clean)
 
                     final_string = ", ".join(merged)
-                    print("➕ Merged cumulative specials:", final_string)
                     field_updates[key] = final_string
 
                     for new_item in filtered:
                         li = new_item.lower()
                         if li not in original_specials:
-                            if "microwave" in li:
-                                added_min += 10; added_max += 15
-                            elif "balcony door track" in li:
-                                added_min += 20; added_max += 40
-                            elif "cobweb" in li:
-                                added_min += 20; added_max += 30
-                            elif "drawer" in li:
-                                added_min += 15; added_max += 25
-                            elif "light mould" in li:
-                                added_min += 30; added_max += 45
-                            elif "wall" in li:
-                                added_min += 20; added_max += 30
-                            elif "pet hair" in li:
-                                added_min += 30; added_max += 60
-                            elif "dishes" in li:
-                                added_min += 10; added_max += 20
-                            elif "mattress" in li:
-                                added_min += 30; added_max += 45
-                            elif "stick" in li or "residue" in li:
-                                added_min += 10; added_max += 30
-                            elif "balcony rail" in li:
-                                added_min += 20; added_max += 30
-                            elif "rangehood" in li:
-                                added_min += 20; added_max += 40
+                            if "microwave" in li: added_min += 10; added_max += 15
+                            elif "balcony door track" in li: added_min += 20; added_max += 40
+                            elif "cobweb" in li: added_min += 20; added_max += 30
+                            elif "drawer" in li: added_min += 15; added_max += 25
+                            elif "light mould" in li: added_min += 30; added_max += 45
+                            elif "wall" in li: added_min += 20; added_max += 30
+                            elif "pet hair" in li: added_min += 30; added_max += 60
+                            elif "dishes" in li: added_min += 10; added_max += 20
+                            elif "mattress" in li: added_min += 30; added_max += 45
+                            elif "stick" in li or "residue" in li: added_min += 10; added_max += 30
+                            elif "balcony rail" in li: added_min += 20; added_max += 30
+                            elif "rangehood" in li: added_min += 20; added_max += 40
 
                 elif key == "special_request_minutes_min":
                     try:
                         val = int(value)
                         if val >= 5:
                             if time_guess and val < time_guess:
-                                print(f"⚠️ GPT min {val} < user guess {time_guess}, using {time_guess}")
                                 val = time_guess
                             field_updates[key] = val + added_min
                     except:
-                        print(f"⚠️ Invalid min time format: {value}")
+                        pass
 
                 elif key == "special_request_minutes_max":
                     try:
                         val = int(value)
                         if val >= 5:
                             if time_guess and val < time_guess:
-                                print(f"⚠️ GPT max {val} < user guess {time_guess}, using {time_guess}")
                                 val = time_guess
                             field_updates[key] = val + added_max
                     except:
-                        print(f"⚠️ Invalid max time format: {value}")
+                        pass
 
                 else:
                     field_updates[key] = value
 
+        # Escalation logic
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
-            print("📞 Detected referral to office. Applying escalation flags.")
             if current_stage != "Referred to Office":
                 field_updates["quote_stage"] = "Referred to Office"
                 field_updates["status"] = "referred_to_office"
 
-            referral_note = f"Brendan referred the customer to the office — unsure how to handle request.\n\n📩 Customer said: “{message.strip()}”"
+            referral_note = f"Brendan referred the customer to the office.\n\n📩 Customer said: “{message.strip()}”"
             referral_note += f"\n\nQuote ID: {quote_id}" if quote_id else ""
+            prev = existing.get("quote_notes", "").strip()
+            if "referred the customer" not in prev.lower():
+                field_updates["quote_notes"] = (f"{prev}\n\n---\n{referral_note}" if prev else referral_note)[:10000]
 
-            previous_notes = existing.get("quote_notes", "").strip()
-            if "referred the customer to the office" not in previous_notes.lower():
-                if "quote_notes" in field_updates:
-                    merged = f"{previous_notes}\n\n---\n{referral_note}".strip()
-                    field_updates["quote_notes"] = merged[:10000]
-                elif previous_notes:
-                    field_updates["quote_notes"] = f"{previous_notes}\n\n---\n{referral_note}"[:10000]
-                else:
-                    field_updates["quote_notes"] = referral_note[:10000]
-
-            if quote_id:
-                quote_id_lower = quote_id.lower()
-                if all(q not in reply.lower() for q in ["vc-123456", "123456", "{{quote_id}}", quote_id_lower]):
-                    reply += f" Your quote number is {quote_id}."
-            else:
-                if "quote" not in reply.lower():
-                    reply += " Just mention your quote when you call so we can look it up for you."
+            if quote_id and all(x not in reply.lower() for x in ["vc-123456", "{{quote_id}}", quote_id.lower()]):
+                reply += f" Your quote number is {quote_id}."
 
         if "give us a call" in reply.lower() or "would you like to finish" in reply.lower():
             if "give us a call" in log.lower() or "would you like to finish" in log.lower():
-                reply = reply.split("Would you like to")[0].strip()
-                reply = reply.split("give us a call")[0].strip()
-                reply = reply.rstrip(".").strip()
+                reply = reply.split("Would you like to")[0].split("give us a call")[0].rstrip(".").strip()
 
         if "referred to the office" in reply.lower():
-            choices = [
+            reply += " " + random.choice([
                 "Would you like to keep going here, or give us a bell instead?",
                 "Happy to finish the quote here — or would you rather call us?",
                 "I can help you here if you'd like, or feel free to call the office.",
                 "Want to keep going here, or give us a buzz instead?",
                 "No worries if you’d rather call — otherwise I can help you right here."
-            ]
-            reply += " " + random.choice(choices)
+            ])
 
         return field_updates, reply
 
     except Exception as e:
         raw_fallback = raw if "raw" in locals() else "[No raw GPT output]"
-        error_msg = f"GPT EXTRACT ERROR: {str(e)}\nRAW fallback:\n{raw_fallback}"
-        print("🔥", error_msg)
-
+        print("🔥 GPT EXTRACT ERROR:", str(e))
         if record_id:
             try:
-                update_quote_record(record_id, {"gpt_error_log": error_msg[:10000]})
-            except Exception as airtable_err:
-                print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
-
+                update_quote_record(record_id, {"gpt_error_log": f"{str(e)}\n\n{raw_fallback}"[:10000]})
+            except: pass
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
 
 
 def generate_next_actions():
