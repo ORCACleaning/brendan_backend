@@ -657,16 +657,19 @@ async def filter_response_entry(request: Request):
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
         # ✅ Blocked: Escalation detected → Banned
-        if props_dict.get("quote_stage") == "Chat Banned":
+        # ✅ Abuse escalation: warning or ban
+        if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
+
             return JSONResponse(content={
                 "properties": list(props_dict.keys()),
                 "response": reply,
                 "next_actions": [],
                 "session_id": session_id
-            })
+    })
+
 
         # 🚧 Prevent regular updates if quote is finished — except abuse
         if stage not in ["Gathering Info", "Referred to Office"]:
