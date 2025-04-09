@@ -466,7 +466,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
 
-        for field in ["quote_stage", "quote_notes", "status"]:
+        for field in ["quote_stage", "quote_notes"]:
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
 
@@ -507,7 +507,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     continue
 
                 if key == "quote_notes":
-                    if current_stage == "Referred to Office" and original_notes:
+                    if current_stage in ["Referred to Office", "Out of Area"] and original_notes:
                         merged = f"{original_notes.strip()}\n\n---\n{str(value).strip()}"
                         field_updates[key] = merged[:10000]
                     else:
@@ -592,8 +592,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     field_updates[key] = value
 
         # 🧭 Reject out-of-area suburbs
-        if field_updates.get("status") == "out_of_area":
-            field_updates["quote_stage"] = "Referred to Office"
+        if field_updates.get("quote_stage") == "Out of Area":
             if "quote_notes" not in field_updates:
                 field_updates["quote_notes"] = f"Brendan ended chat due to out-of-area suburb.\n\nCustomer said: “{message.strip()}”"
             if quote_id and "quote number" not in reply.lower():
@@ -604,7 +603,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
             if current_stage != "Referred to Office":
                 field_updates["quote_stage"] = "Referred to Office"
-                field_updates["status"] = "referred_to_office"
 
             referral_note = f"Brendan referred the customer to the office.\n\n📩 Customer said: “{message.strip()}”"
             referral_note += f"\n\nQuote ID: {quote_id}" if quote_id else ""
