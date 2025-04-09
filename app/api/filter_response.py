@@ -556,10 +556,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         abuse_already_warned = str(existing.get("abuse_warning_issued", "")).strip().lower() in ["true", "1", "yes"]
 
-        if abuse_detected and not abuse_already_warned:
+        if abuse_detected and not existing.get("abuse_warning_issued"):
             warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
             reply = f"{warning}\n\n{reply}"
             field_updates["abuse_warning_issued"] = True
+            field_updates["quote_stage"] = "Abuse Warning"
+
 
         elif abuse_detected and abuse_already_warned:
             reply = random.choice([
