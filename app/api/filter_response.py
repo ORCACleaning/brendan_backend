@@ -647,6 +647,17 @@ async def filter_response_entry(request: Request):
         stage = quote_data["stage"]
         log = fields.get("message_log", "")
 
+        # ⛔️ Stop all replies if chat is banned
+        if stage == "Chat Banned":
+            print("🚫 Chat is banned. No further replies allowed.")
+            return JSONResponse(content={
+                "properties": [],
+                "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.",
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+
         print(f"\n🧾 Session ID: {session_id}")
         print(f"🔗 Quote ID: {quote_id}")
         print(f"📇 Airtable Record ID: {record_id}")
