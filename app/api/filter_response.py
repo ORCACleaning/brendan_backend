@@ -652,14 +652,30 @@ async def filter_response_entry(request: Request):
         print(f"📇 Airtable Record ID: {record_id}")
         print(f"📜 Stage: {stage}")
 
-        # 🚧 Prevent updates after quote is calculated (except escalation)
+        # 🚧 Prevent updates after quote is calculated — EXCEPT for abuse handling
         if stage not in ["Gathering Info", "Referred to Office"]:
+            # still allow message log + GPT call to detect and ban
+            abuse_check_log = f"{log}\nUSER: {message}".strip()[-5000:]
+            props_dict, reply = extract_properties_from_gpt4(message, abuse_check_log, record_id, quote_id)
+
+            if props_dict.get("quote_stage") == "Chat Banned":
+                update_quote_record(record_id, props_dict)
+                append_message_log(record_id, message, "user")
+                append_message_log(record_id, reply, "brendan")
+                return JSONResponse(content={
+                    "properties": list(props_dict.keys()),
+                    "response": reply,
+                    "next_actions": [],
+                    "session_id": session_id
+                })
+
             print(f"🚫 Cannot update — quote_stage is '{stage}'")
             return JSONResponse(content={
                 "properties": [],
                 "response": "That quote's already been calculated. You’ll need to start a new one if anything’s changed.",
                 "next_actions": []
             })
+
 
         # --- Process message normally ---
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
