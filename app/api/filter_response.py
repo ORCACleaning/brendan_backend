@@ -554,7 +554,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         # 🚨 Abuse detection and escalation
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
-        abuse_already_warned = str(existing.get("abuse_warning_issued", "")).lower() in ["true", "1"]
+        abuse_already_warned = str(existing.get("abuse_warning_issued", "")).strip().lower() in ["true", "1", "yes"]
 
         if abuse_detected and not abuse_already_warned:
             warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
