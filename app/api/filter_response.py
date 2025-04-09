@@ -113,7 +113,7 @@ Only accept `"Furnished"` or `"Unfurnished"`. If user says “semi-furnished”,
 
 If only appliances are left, treat it as `"Unfurnished"`.
 
-If `"Unfurnished"`: skip `blind_cleaning` and `upholstery_cleaning`.
+✅ Do **not** skip blind cleaning — even if unfurnished.
 
 ---
 
@@ -125,92 +125,9 @@ Never ask yes/no for carpet. Ask how many rooms have carpet:
 
 Always populate the `carpet_*` fields individually.
 
----
-
-## ✳️ SPECIAL REQUEST RULES
-
-If confident, extract:
-
-- `special_requests` (comma-separated)
-- `special_request_minutes_min`
-- `special_request_minutes_max`
-
-🧠 Always overwrite the full list — unless the user explicitly says “also add…” or “keep existing”.
-
-Do NOT trust the customer’s time estimate.  
-Do NOT set GPT time estimate **below** their guess — only equal or above.
-
----
-
-## ❌ BANNED SERVICES
-
-These are NOT allowed:
-
-- BBQ hood deep scrubs  
-- Rugs  
-- Furniture removal / rubbish  
-- Pressure washing  
-- External apartment windows  
-- Lawns, gardens, sheds, driveways  
-- Mowing  
-- Sauna or pool cleaning  
-- Anything requiring ladders, polishers, tools
-
-If asked, reply:
-> “We’re not set up for anything involving hand tools, ladders, saunas, pools, or polishing machines. Those need specialist help — best to call our office if you need that sort of work.”
-
-Then ask:
-> “Would you like to keep going with the quote here, or give us a buzz instead?”
-
-Then set:
-- `"quote_stage": "Referred to Office"`  
-- `"quote_notes"` = Brendan ended chat due to banned service  
-- Mention: `"Quote Number: {{quote_id}}"` in your reply
-
----
-
-## 🌍 SUBURB + POSTCODE VALIDATION
-
-Only accept real **suburbs in Perth Metro or Mandurah**.
-
-If a postcode is given (e.g. "6005") or a nickname ("Freo", "North Perth area"):
-- Lookup the correct suburb.
-- Confirm with the customer.
-
-If the location is outside the service area:
-- Kindly end the chat.
-- Set:
-  - `"quote_stage": "Referred to Office"`
-  - `"status": "out_of_area"`
-  - `"quote_notes"` = Brendan ended chat due to out-of-area suburb
-  - Include `"Quote Number: {{quote_id}}"` in the reply
-
----
-
-## 📞 CONTACT / ESCALATION
-
-If the user asks for a phone, email, or to speak to someone:
-
-Reply with:
-> “Phone: 1300 918 388. Email: info@orcacleaning.com.au.”
-
-Then follow with:
-> “Would you like to keep going with the quote here, or call us instead?”
-
-Also set:
-- `"quote_stage": "Referred to Office"`
-
----
-
-## ✅ FINAL CHECKLIST
-
-- ✅ Use JSON format only  
-- ✅ Ask 2–4 missing fields at a time  
-- ✅ Friendly, warm Aussie tone — not robotic  
-- ✅ Never re-ask for fields already collected  
-- ✅ Never ask for personal info  
-- ✅ Always confirm location validity  
-- ✅ Never quote until all 27 fields are collected  
+✅ If any `carpet_*` field has a value > 0, also set:
+```json
+{ "property": "carpet_cleaning", "value": true }
 
 """
 
@@ -375,16 +292,16 @@ def update_quote_record(record_id: str, fields: dict):
     # 💡 Normalize dropdowns
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
-        if val == "furnished":
-            fields["furnished"] = "Furnished"
-        elif val == "unfurnished":
+        if "unfurnished" in val:
             fields["furnished"] = "Unfurnished"
+        elif "furnished" in val:
+            fields["furnished"] = "Furnished"
 
     # ✅ Boolean checkbox fields in Airtable
     BOOLEAN_FIELDS = {
         "oven_cleaning", "window_cleaning", "blind_cleaning", "garage_cleaning",
         "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", 
-        "wall_cleaning", "mandurah_property"
+        "wall_cleaning", "mandurah_property", "carpet_cleaning"
     }
 
     normalized_fields = {}
@@ -392,7 +309,7 @@ def update_quote_record(record_id: str, fields: dict):
         mapped_key = FIELD_MAP.get(key, key)
 
         if mapped_key not in VALID_AIRTABLE_FIELDS:
-            print(f"❌ Skipped field '{mapped_key}' — not in Airtable schema")
+            print(f"🔕 Skipping unmapped field: {key} → {mapped_key}")
             continue
 
         # 🧠 Normalize booleans
@@ -440,6 +357,7 @@ def update_quote_record(record_id: str, fields: dict):
 
 
 
+
 def append_message_log(record_id: str, message: str, sender: str):
     if not record_id:
         print("❌ Cannot append log — missing record ID")
@@ -448,7 +366,7 @@ def append_message_log(record_id: str, message: str, sender: str):
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     current = requests.get(url, headers=headers).json()
     old_log = current.get("fields", {}).get("message_log", "")
-    new_log = f"{old_log}\n{sender.upper()}: {message}".strip()[-5000:]
+    new_log = f"{old_log}\n{sender.upper()}: {message}".strip()[-10000:]
     update_quote_record(record_id, {"message_log": new_log})
 
 import smtplib
@@ -472,6 +390,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     import re
     import random
 
+    ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
     try:
         print("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
@@ -623,38 +542,26 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates[key] = value
 
-        if field_updates.get("quote_stage") == "Out of Area":
-            if "quote_notes" not in field_updates:
-                field_updates["quote_notes"] = f"Brendan ended chat due to out-of-area suburb.\n\nCustomer said: “{message.strip()}”"
-            if quote_id and "quote number" not in reply.lower():
-                reply += f"\nQuote Number: {quote_id}"
-            return field_updates, reply.strip()
+        # 🧼 Set carpet_cleaning checkbox if any carpet rooms present
+        carpet_fields = [
+            "carpet_bedroom_count", "carpet_mainroom_count",
+            "carpet_study_count", "carpet_halway_count",
+            "carpet_stairs_count", "carpet_other_count"
+        ]
+        if any(field_updates.get(f, 0) > 0 for f in carpet_fields):
+            field_updates["carpet_cleaning"] = True
 
-        if any(x in reply.lower() for x in ["contact our office", "call the office", "ring the office"]):
-            if current_stage != "Referred to Office":
-                field_updates["quote_stage"] = "Referred to Office"
+        # 🚨 Abuse detection and warning
+        abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
+        if abuse_detected and not existing.get("abuse_warning_issued"):
+            warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
+            reply = f"{warning}\n\n{reply}"
+            field_updates["abuse_warning_issued"] = True
 
-            referral_note = f"Brendan referred the customer to the office.\n\n📩 Customer said: “{message.strip()}”"
-            referral_note += f"\n\nQuote ID: {quote_id}" if quote_id else ""
-
-            if "quote_notes" in field_updates:
-                field_updates["quote_notes"] = f"{existing.get('quote_notes', '').strip()}\n\n---\n{referral_note}"[:10000]
-            elif existing.get("quote_notes", ""):
-                field_updates["quote_notes"] = f"{existing['quote_notes'].strip()}\n\n---\n{referral_note}"[:10000]
-            else:
-                field_updates["quote_notes"] = referral_note[:10000]
-
-            if quote_id and "quote number" not in reply.lower():
-                reply = f"Quote Number: {quote_id}. Phone: 1300 918 388. Email: info@orcacleaning.com.au. " + reply
-
-        if "referred to the office" in reply.lower():
-            reply += " " + random.choice([
-                "Would you like to keep going here, or give us a bell instead?",
-                "Happy to finish the quote here — or would you rather call us?",
-                "I can help you here if you'd like, or feel free to call the office.",
-                "Want to keep going here, or give us a buzz instead?",
-                "No worries if you’d rather call — otherwise I can help you right here."
-            ])
+        elif abuse_detected and existing.get("abuse_warning_issued"):
+            reply = "Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {{quote_id}}"
+            field_updates["quote_stage"] = "Chat Banned"
+            return field_updates, reply.replace("{{quote_id}}", quote_id or "N/A")
 
         return field_updates, reply.strip()
 
@@ -670,6 +577,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 
 def generate_next_actions():
