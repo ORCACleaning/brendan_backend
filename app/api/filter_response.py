@@ -692,10 +692,21 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # Handle __init__ → Always start a new quote
+        # --- Reconnect or create new quote on __init__ ---
         if message.lower() == "__init__":
-            print("🧪 DEBUG — FORCING NEW QUOTE")
-            quote_id, record_id, session_id = create_new_quote(session_id, force_new=True)
+            existing = get_quote_by_session(session_id)
+
+            if existing:
+                print(f"🔁 Reconnecting to existing quote: {existing['quote_id']}")
+                quote_id = existing["quote_id"]
+                record_id = existing["record_id"]
+                stage = existing["stage"]
+                fields = existing["fields"]
+                log = fields.get("message_log", "")
+            else:
+                print("🆕 No existing session found — starting fresh quote")
+                quote_id, record_id, session_id = create_new_quote(session_id, force_new=True)
+                log = ""
 
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -705,10 +716,10 @@ async def filter_response_entry(request: Request):
                 "properties": [],
                 "response": intro,
                 "next_actions": [],
-                "session_id": session_id  # ✅ Already correct
+                "session_id": session_id
             })
 
-        # Otherwise, get existing quote
+        # --- Continue chat after __init__ ---
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Session expired or not initialized.")
@@ -724,7 +735,7 @@ async def filter_response_entry(request: Request):
         print(f"📇 Airtable Record ID: {record_id}")
         print(f"📜 Stage: {stage}")
 
-        # 🚧 Prevent updates once quote is finalized (except "Referred to Office")
+        # 🚧 Prevent updates after quote is calculated (except escalation)
         if stage not in ["Gathering Info", "Referred to Office"]:
             print(f"🚫 Cannot update — quote_stage is '{stage}'")
             return JSONResponse(content={
@@ -733,38 +744,31 @@ async def filter_response_entry(request: Request):
                 "next_actions": []
             })
 
-
-        # --- Stage: Gathering Info ---
+        # --- Process message normally ---
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
-
-        # Call GPT
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
-
-        print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_dict, indent=2)}")
         updates = props_dict
 
+        print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_dict, indent=2)}")
         print(f"\n🛠 Structured updates ready for Airtable:\n{json.dumps(updates, indent=2)}")
 
         if not updates:
             print("⚠️ WARNING: No valid fields parsed — double check GPT output or field map.")
 
         if updates:
-            # 🔁 Replace fake quote number in reply with actual quote_id
             if "123456" in reply or "{{quote_id}}" in reply:
                 reply = reply.replace("123456", quote_id)
                 reply = reply.replace("{{quote_id}}", quote_id)
-
-            # ✅ Make sure we update quote_stage and quote_notes if present
             update_quote_record(record_id, updates)
 
-        # Append convo log
         append_message_log(record_id, message, "user")
         append_message_log(record_id, reply, "brendan")
 
         return JSONResponse(content={
             "properties": list(updates.keys()),
             "response": reply or "Got that. Anything else I should know?",
-            "next_actions": []
+            "next_actions": [],
+            "session_id": session_id  # 💾 Always send back updated session ID
         })
 
     except Exception as e:
