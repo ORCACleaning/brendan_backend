@@ -552,24 +552,24 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if any(field_updates.get(f, 0) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
 
-        # 🚨 Abuse detection and escalation logic
+        # 🚨 Abuse escalation logic using only quote_stage
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
-        abuse_already_warned = str(existing.get("abuse_warning_issued", "")).strip().lower() in ["true", "1", "yes"]
 
-        if abuse_detected and not abuse_already_warned:
-            warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
-            reply = f"{warning}\n\n{reply}"
-            field_updates["abuse_warning_issued"] = True
-            field_updates["quote_stage"] = "Abuse Warning"
-
-        elif abuse_detected and abuse_already_warned:
-            final_message = random.choice([
-                f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id or 'N/A'}. This chat is now closed.",
-                f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id or 'N/A'}.",
-                f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id or 'N/A'}. This chat is now closed."
-            ])
-            field_updates["quote_stage"] = "Chat Banned"
-            return field_updates, final_message
+        if abuse_detected:
+            if current_stage == "Abuse Warning":
+                # Already warned — now ban
+                field_updates["quote_stage"] = "Chat Banned"
+                final_message = random.choice([
+                    f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id or 'N/A'}. This chat is now closed.",
+                    f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id or 'N/A'}.",
+                    f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id or 'N/A'}. This chat is now closed."
+                ])
+                return field_updates, final_message
+            else:
+                # First offence — warn
+                field_updates["quote_stage"] = "Abuse Warning"
+                warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
+                reply = f"{warning}\n\n{reply}"
 
         return field_updates, reply.strip()
 
