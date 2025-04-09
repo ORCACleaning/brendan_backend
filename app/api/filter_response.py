@@ -169,6 +169,7 @@ FIELD_MAP = {
     "oven_cleaning": "oven_cleaning",
     "window_cleaning": "window_cleaning",
     "window_count": "window_count",
+    "carpet_cleaning": "carpet_cleaning",
     "carpet_bedroom_count": "carpet_bedroom_count",
     "carpet_mainroom_count": "carpet_mainroom_count",
     "carpet_study_count": "carpet_study_count",
