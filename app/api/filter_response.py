@@ -154,7 +154,7 @@ VALID_AIRTABLE_FIELDS = {
     "message_log", "session_id", "privacy_acknowledged", "abuse_warning_issued",
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count",
     "carpet_stairs_count", "carpet_other_count", "balcony_cleaning", "after_hours_cleaning",
-    "weekend_cleaning", "is_property_manager", "real_estate_name",
+    "weekend_cleaning", "is_property_manager", "real_estate_name", "carpet_cleaning",
     "special_request_minutes_min", "special_request_minutes_max", "upholstery_cleaning", 
     "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning", "mandurah_property",
 
