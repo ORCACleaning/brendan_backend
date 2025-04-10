@@ -605,6 +605,51 @@ def generate_next_actions():
         {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
     ]
 
+def get_inline_quote_summary(data: dict) -> str:
+    """
+    Generates a short summary of the quote to show in chat.
+    """
+    price = data.get("total_price", 0)
+    time_est = data.get("estimated_time_mins", 0)
+    note = data.get("note", "")
+
+    summary = (
+        f"All done! Here's your quote:\n\n"
+        f"💰 Total Price (incl. GST): ${price:.2f}\n"
+        f"⏰ Estimated Time: {time_est} minutes\n"
+    )
+    if note:
+        summary += f"📝 Note: {note}\n"
+    summary += "\nIf you'd like this in a PDF or want to make any changes, just let me know!"
+
+    return summary
+
+def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
+    from app.services.pdf_generator import generate_pdf
+    from app.services.email_sender import send_quote_email
+
+    # Generate PDF
+    pdf_url = generate_pdf(quote_id, fields)
+
+    # Generate Booking URL
+    booking_url = f"https://orcacleaning.com.au/schedule?quote_id={quote_id}"
+
+    # Send Email
+    send_quote_email(
+        to_email=fields.get("email"),
+        customer_name=fields.get("customer_name", "Customer"),
+        quote_id=quote_id,
+        pdf_url=pdf_url,
+        booking_url=booking_url
+    )
+
+    # Update Airtable
+    update_quote_record(record_id, {
+        "pdf_link": pdf_url,
+        "booking_url": booking_url
+    })
+
+    print(f"✅ PDF generated and email sent for {quote_id}")
 
 # --- Route ---
 @router.post("/filter-response")
@@ -617,19 +662,13 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # --- Reconnect or create new quote on __init__ ---
+        # __init__ → Create or Reconnect Quote
         if message.lower() == "__init__":
             existing = get_quote_by_session(session_id)
-
             if existing:
-                print(f"🔁 Reconnecting to existing quote: {existing['quote_id']}")
-                quote_id = existing["quote_id"]
-                record_id = existing["record_id"]
-                stage = existing["stage"]
-                fields = existing["fields"]
+                quote_id, record_id, stage, fields = existing["quote_id"], existing["record_id"], existing["stage"], existing["fields"]
                 log = fields.get("message_log", "")
             else:
-                print("🆕 No existing session found — starting fresh quote")
                 quote_id, record_id, session_id = create_new_quote(session_id, force_new=True)
                 log = ""
 
@@ -644,20 +683,14 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # --- Continue chat after __init__ ---
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Session expired or not initialized.")
 
-        quote_id = quote_data["quote_id"]
-        record_id = quote_data["record_id"]
-        fields = quote_data["fields"]
-        stage = quote_data["stage"]
+        quote_id, record_id, stage, fields = quote_data["quote_id"], quote_data["record_id"], quote_data["stage"], quote_data["fields"]
         log = fields.get("message_log", "")
 
-        # ⛔️ Stop all replies if chat is banned
         if stage == "Chat Banned":
-            print("🚫 Chat is banned. No further replies allowed.")
             return JSONResponse(content={
                 "properties": [],
                 "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.",
@@ -665,18 +698,9 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-
-        print(f"\n🧾 Session ID: {session_id}")
-        print(f"🔗 Quote ID: {quote_id}")
-        print(f"📇 Airtable Record ID: {record_id}")
-        print(f"📜 Stage: {stage}")
-
-        # --- Run GPT to detect abuse escalation (even if stage is locked)
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
-        # ✅ Blocked: Escalation detected → Banned
-        # ✅ Abuse escalation: warning or ban
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
@@ -687,40 +711,114 @@ async def filter_response_entry(request: Request):
                 "response": reply,
                 "next_actions": [],
                 "session_id": session_id
-    })
+            })
 
+        # Gathering Info Stage
+        if stage == "Gathering Info":
+            if props_dict:
+                reply = reply.replace("123456", quote_id).replace("{{quote_id}}", quote_id)
+                update_quote_record(record_id, props_dict)
 
-        # 🚧 Prevent regular updates if quote is finished — except abuse
-        if stage not in ["Gathering Info", "Referred to Office"]:
+            merged = fields.copy()
+            merged.update(props_dict)
+
+            required_fields = [
+                "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
+                "window_cleaning", "window_count", "blind_cleaning", "carpet_bedroom_count",
+                "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count",
+                "carpet_stairs_count", "carpet_other_count", "deep_cleaning", "fridge_cleaning",
+                "range_hood_cleaning", "wall_cleaning", "balcony_cleaning", "garage_cleaning",
+                "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning",
+                "mandurah_property", "is_property_manager", "real_estate_name",
+                "special_requests", "special_request_minutes_min", "special_request_minutes_max"
+            ]
+
+            filled = [f for f in required_fields if f in merged]
+
+            if len(filled) >= 27:
+                from app.services.quote_logic import QuoteRequest, calculate_quote
+                quote_request = QuoteRequest(**merged)
+                quote_response = calculate_quote(quote_request)
+
+                update_quote_record(record_id, {
+                    "quote_stage": "Quote Calculated",
+                    "quote_total": quote_response.total_price,
+                    "quote_time_estimate": quote_response.estimated_time_mins,
+                    "hourly_rate": quote_response.base_hourly_rate,
+                    "discount_percent": quote_response.discount_applied,
+                    "gst_amount": quote_response.gst_applied,
+                    "final_price": quote_response.total_price
+                })
+
+                summary = get_inline_quote_summary(quote_response.dict())
+                reply = f"Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n{summary}"
+
+                append_message_log(record_id, message, "user")
+                append_message_log(record_id, reply, "brendan")
+
+                return JSONResponse(content={
+                    "properties": list(props_dict.keys()),
+                    "response": reply,
+                    "next_actions": generate_next_actions(),
+                    "session_id": session_id
+                })
+
+        # Quote Calculated Stage → Ask for Personal Info
+        elif stage == "Quote Calculated":
+            reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
+            update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # Gathering Personal Info Stage
+        elif stage == "Gathering Personal Info":
+            required_personal_fields = ["customer_name", "email", "phone"]
+            if all(f in props_dict for f in required_personal_fields):
+                update_quote_record(record_id, props_dict)
+                update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
+                handle_pdf_and_email(record_id, quote_id, fields)
+
+                reply = "Thanks! I’ll email your full quote shortly. Let me know if you'd like to book it in!"
+
+                append_message_log(record_id, message, "user")
+                append_message_log(record_id, reply, "brendan")
+
+                return JSONResponse(content={
+                    "properties": list(props_dict.keys()),
+                    "response": reply,
+                    "next_actions": generate_next_actions(),
+                    "session_id": session_id
+                })
+
+            else:
+                missing = [f for f in required_personal_fields if f not in props_dict]
+                reply = "Could I just grab your " + ", ".join(missing) + " to send your quote over?"
+                append_message_log(record_id, message, "user")
+                append_message_log(record_id, reply, "brendan")
+
+                return JSONResponse(content={
+                    "properties": list(props_dict.keys()),
+                    "response": reply,
+                    "next_actions": [],
+                    "session_id": session_id
+                })
+
+        # Block updates for completed quotes
+        else:
             print(f"🚫 Cannot update — quote_stage is '{stage}'")
             return JSONResponse(content={
                 "properties": [],
                 "response": "That quote's already been calculated. You’ll need to start a new one if anything’s changed.",
-                "next_actions": []
+                "next_actions": [],
+                "session_id": session_id
             })
-
-        # --- Proceed with normal GPT-driven update
-        print(f"\n🧠 Raw GPT Properties:\n{json.dumps(props_dict, indent=2)}")
-        print(f"\n🛠 Structured updates ready for Airtable:\n{json.dumps(props_dict, indent=2)}")
-
-        if not props_dict:
-            print("⚠️ WARNING: No valid fields parsed — double check GPT output or field map.")
-
-        if props_dict:
-            if "123456" in reply or "{{quote_id}}" in reply:
-                reply = reply.replace("123456", quote_id)
-                reply = reply.replace("{{quote_id}}", quote_id)
-            update_quote_record(record_id, props_dict)
-
-        append_message_log(record_id, message, "user")
-        append_message_log(record_id, reply, "brendan")
-
-        return JSONResponse(content={
-            "properties": list(props_dict.keys()),
-            "response": reply or "Got that. Anything else I should know?",
-            "next_actions": [],
-            "session_id": session_id
-        })
 
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
