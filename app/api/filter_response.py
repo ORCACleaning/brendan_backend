@@ -652,6 +652,10 @@ def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
     print(f"✅ PDF generated and email sent for {quote_id}")
 
 # --- Route ---
+from app.services.quote_logic import QuoteRequest, calculate_quote
+from app.services.pdf_generator import generate_quote_pdf
+from app.services.email_sender import send_quote_email
+
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -662,7 +666,7 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # __init__ → Create or Reconnect Quote
+        # --- __init__ → Create or Reconnect Quote ---
         if message.lower() == "__init__":
             existing = get_quote_by_session(session_id)
             if existing:
@@ -701,6 +705,7 @@ async def filter_response_entry(request: Request):
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
+        # Handle Abuse Escalation
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
@@ -713,7 +718,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # Gathering Info Stage
+        # --- Stage: Gathering Info ---
         if stage == "Gathering Info":
             if props_dict:
                 reply = reply.replace("123456", quote_id).replace("{{quote_id}}", quote_id)
@@ -722,21 +727,11 @@ async def filter_response_entry(request: Request):
             merged = fields.copy()
             merged.update(props_dict)
 
-            required_fields = [
-                "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
-                "window_cleaning", "window_count", "blind_cleaning", "carpet_bedroom_count",
-                "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count",
-                "carpet_stairs_count", "carpet_other_count", "deep_cleaning", "fridge_cleaning",
-                "range_hood_cleaning", "wall_cleaning", "balcony_cleaning", "garage_cleaning",
-                "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning",
-                "mandurah_property", "is_property_manager", "real_estate_name",
-                "special_requests", "special_request_minutes_min", "special_request_minutes_max"
-            ]
+            required_fields = [ ... ]  # your list of 27 fields
 
             filled = [f for f in required_fields if f in merged]
 
             if len(filled) >= 27:
-                from app.services.quote_logic import QuoteRequest, calculate_quote
                 quote_request = QuoteRequest(**merged)
                 quote_response = calculate_quote(quote_request)
 
@@ -763,8 +758,8 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-        # Quote Calculated Stage → Ask for Personal Info
-        elif stage == "Quote Calculated":
+        # --- Stage: Quote Calculated ---
+        if stage == "Quote Calculated":
             reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
             update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
             append_message_log(record_id, message, "user")
@@ -777,15 +772,21 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # Gathering Personal Info Stage
-        elif stage == "Gathering Personal Info":
+        # --- Stage: Gathering Personal Info ---
+        if stage == "Gathering Personal Info":
             required_personal_fields = ["customer_name", "email", "phone"]
             if all(f in props_dict for f in required_personal_fields):
                 update_quote_record(record_id, props_dict)
                 update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
-                handle_pdf_and_email(record_id, quote_id, fields)
 
-                reply = "Thanks! I’ll email your full quote shortly. Let me know if you'd like to book it in!"
+                merged = fields.copy()
+                merged.update(props_dict)
+
+                # Generate PDF + Send Email
+                pdf_path = generate_quote_pdf(merged)
+                send_quote_email(merged["email"], merged["customer_name"], pdf_path, quote_id)
+
+                reply = "Thanks! I’ve emailed your full quote. Let me know if you'd like to book it in."
 
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
@@ -810,15 +811,14 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-        # Block updates for completed quotes
-        else:
-            print(f"🚫 Cannot update — quote_stage is '{stage}'")
-            return JSONResponse(content={
-                "properties": [],
-                "response": "That quote's already been calculated. You’ll need to start a new one if anything’s changed.",
-                "next_actions": [],
-                "session_id": session_id
-            })
+        # --- Final Else: No Updates Allowed ---
+        print(f"🚫 Cannot update — quote_stage is '{stage}'")
+        return JSONResponse(content={
+            "properties": [],
+            "response": "That quote's already been calculated. You’ll need to start a new one if anything’s changed.",
+            "next_actions": [],
+            "session_id": session_id
+        })
 
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
