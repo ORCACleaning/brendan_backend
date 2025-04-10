@@ -2,6 +2,8 @@ import os
 import requests
 import base64
 from dotenv import load_dotenv
+from app.services.pdf_generator import generate_quote_pdf
+from app.filter_response import update_quote_record
 
 load_dotenv()
 
@@ -10,6 +12,7 @@ MS_TENANT_ID = os.getenv("MS_TENANT_ID")
 MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET")
 
 SENDER_EMAIL = "info@orcacleaning.com.au"
+
 
 def get_ms_access_token():
     url = f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token"
@@ -110,3 +113,19 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
         print(f"✅ Quote email sent to {to_email}")
     else:
         print("❌ Failed to send quote email:", res.status_code, res.text)
+
+
+# --- NEW FUNCTION ---
+def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
+    pdf_path = generate_quote_pdf(fields)
+    customer_name = fields.get("customer_name", "there")
+    email = fields.get("email")
+
+    if not email:
+        print("❌ No customer email found — skipping send.")
+        return
+
+    send_quote_email(email, customer_name, pdf_path, quote_id)
+
+    pdf_url = f"https://orcacleaning.com.au/static/quotes/{os.path.basename(pdf_path)}"
+    update_quote_record(record_id, {"pdf_link": pdf_url})
