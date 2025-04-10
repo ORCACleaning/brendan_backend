@@ -655,8 +655,6 @@ def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
 
 # --- Route ---
 from app.services.quote_logic import QuoteRequest, calculate_quote
-from app.services.pdf_generator import generate_quote_pdf
-from app.services.email_sender import send_quote_email
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -775,6 +773,9 @@ async def filter_response_entry(request: Request):
             })
 
         # --- Stage: Gathering Personal Info ---
+        required_personal_fields = ["customer_name", "email", "phone"]
+
+        # Gathering Personal Info Stage
         if all(f in props_dict for f in required_personal_fields):
             update_quote_record(record_id, props_dict)
             update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
@@ -785,36 +786,17 @@ async def filter_response_entry(request: Request):
 
             handle_pdf_and_email(record_id, quote_id, fields)
 
+            reply = "Thanks! I’ve emailed your full quote. Let me know if you'd like to book it in."
 
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, reply, "brendan")
 
-                # Generate PDF + Send Email
-                pdf_path = generate_quote_pdf(merged)
-                send_quote_email(merged["email"], merged["customer_name"], pdf_path, quote_id)
-
-                reply = "Thanks! I’ve emailed your full quote. Let me know if you'd like to book it in."
-
-                append_message_log(record_id, message, "user")
-                append_message_log(record_id, reply, "brendan")
-
-                return JSONResponse(content={
-                    "properties": list(props_dict.keys()),
-                    "response": reply,
-                    "next_actions": generate_next_actions(),
-                    "session_id": session_id
-                })
-
-            else:
-                missing = [f for f in required_personal_fields if f not in props_dict]
-                reply = "Could I just grab your " + ", ".join(missing) + " to send your quote over?"
-                append_message_log(record_id, message, "user")
-                append_message_log(record_id, reply, "brendan")
-
-                return JSONResponse(content={
-                    "properties": list(props_dict.keys()),
-                    "response": reply,
-                    "next_actions": [],
-                    "session_id": session_id
-                })
+            return JSONResponse(content={
+                "properties": list(props_dict.keys()),
+                "response": reply,
+                "next_actions": generate_next_actions(),
+                "session_id": session_id
+            })
 
         # --- Final Else: No Updates Allowed ---
         print(f"🚫 Cannot update — quote_stage is '{stage}'")
