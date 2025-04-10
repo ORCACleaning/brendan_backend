@@ -3,7 +3,7 @@ import requests
 import base64
 from dotenv import load_dotenv
 from app.services.pdf_generator import generate_quote_pdf
-from app.api.filter_response import update_quote_record
+from app.api import filter_response
 
 
 load_dotenv()
