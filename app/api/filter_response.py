@@ -779,10 +779,12 @@ async def filter_response_entry(request: Request):
             update_quote_record(record_id, props_dict)
             update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
 
-            merged = fields.copy()
-            merged.update(props_dict)
+            # Refresh latest fields after updating personal info
+            quote_data = get_quote_by_session(session_id)
+            fields = quote_data["fields"]
 
-            handle_pdf_and_email(record_id, quote_id, merged)
+            handle_pdf_and_email(record_id, quote_id, fields)
+
 
 
                 # Generate PDF + Send Email
