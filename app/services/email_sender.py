@@ -13,7 +13,7 @@ MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET")
 
 SENDER_EMAIL = "info@orcacleaning.com.au"
 
-
+# --- Microsoft Auth ---
 def get_ms_access_token():
     url = f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token"
     data = {
@@ -26,7 +26,7 @@ def get_ms_access_token():
     res.raise_for_status()
     return res.json()["access_token"]
 
-
+# --- Basic Email Sending ---
 def send_email_outlook(to_email: str, subject: str, body_html: str):
     access_token = get_ms_access_token()
     url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
@@ -50,13 +50,12 @@ def send_email_outlook(to_email: str, subject: str, body_html: str):
     }
 
     res = requests.post(url, json=payload, headers=headers)
-
     if res.status_code == 202:
         print(f"✅ Email sent to {to_email}")
     else:
         print("❌ Failed to send email:", res.status_code, res.text)
 
-
+# --- Quote Email with PDF ---
 def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id: str):
     access_token = get_ms_access_token()
     url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
@@ -108,24 +107,23 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
     }
 
     res = requests.post(url, json=payload, headers=headers)
-
     if res.status_code == 202:
         print(f"✅ Quote email sent to {to_email}")
     else:
         print("❌ Failed to send quote email:", res.status_code, res.text)
 
-
-# --- NEW FUNCTION ---
+# --- PDF Generation + Email Sending Handler ---
 def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
     pdf_path = generate_quote_pdf(fields)
     customer_name = fields.get("customer_name", "there")
-    email = fields.get("email")
+    to_email = fields.get("email")
 
-    if not email:
-        print("❌ No customer email found — skipping send.")
+    if not to_email:
+        print("❌ No customer email found — skipping PDF + Email sending.")
         return
 
-    send_quote_email(email, customer_name, pdf_path, quote_id)
+    print(f"📧 Generating PDF & Sending Email to {to_email} for Quote {quote_id}")
+    send_quote_email(to_email, customer_name, pdf_path, quote_id)
 
     pdf_url = f"https://orcacleaning.com.au/static/quotes/{os.path.basename(pdf_path)}"
     update_quote_record(record_id, {"pdf_link": pdf_url})
