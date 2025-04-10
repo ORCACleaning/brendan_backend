@@ -6,6 +6,8 @@ import inflect
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+from app.services.email_sender import handle_pdf_and_email
+
 
 load_dotenv()
 router = APIRouter()
@@ -773,14 +775,15 @@ async def filter_response_entry(request: Request):
             })
 
         # --- Stage: Gathering Personal Info ---
-        if stage == "Gathering Personal Info":
-            required_personal_fields = ["customer_name", "email", "phone"]
-            if all(f in props_dict for f in required_personal_fields):
-                update_quote_record(record_id, props_dict)
-                update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
+        if all(f in props_dict for f in required_personal_fields):
+            update_quote_record(record_id, props_dict)
+            update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
 
-                merged = fields.copy()
-                merged.update(props_dict)
+            merged = fields.copy()
+            merged.update(props_dict)
+
+            handle_pdf_and_email(record_id, quote_id, merged)
+
 
                 # Generate PDF + Send Email
                 pdf_path = generate_quote_pdf(merged)
