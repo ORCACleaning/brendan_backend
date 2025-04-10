@@ -127,4 +127,4 @@ def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
     send_quote_email(to_email, customer_name, pdf_path, quote_id)
 
     pdf_url = f"https://orcacleaning.com.au/static/quotes/{os.path.basename(pdf_path)}"
-    update_quote_record(record_id, {"pdf_link": pdf_url})
+    filter_response.update_quote_record(record_id, {"pdf_link": pdf_url})
