@@ -653,7 +653,16 @@ def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
     print(f"✅ PDF generated and email sent for {quote_id}")
 
 # --- Route ---
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from app.services.quote_logic import QuoteRequest, calculate_quote
+from app.services.utils import (
+    get_quote_by_session, create_new_quote, update_quote_record,
+    append_message_log, extract_properties_from_gpt4,
+    generate_next_actions, get_inline_quote_summary
+)
+
+router = APIRouter()
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -665,15 +674,14 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # --- __init__ → Create or Reconnect Quote ---
+        # --- __init__ : Start a New Quote ---
         if message.lower() == "__init__":
             existing = get_quote_by_session(session_id)
             if existing:
                 quote_id, record_id, stage, fields = existing["quote_id"], existing["record_id"], existing["stage"], existing["fields"]
-                log = fields.get("message_log", "")
             else:
                 quote_id, record_id, session_id = create_new_quote(session_id, force_new=True)
-                log = ""
+                fields = {}
 
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -686,7 +694,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # --- Retrieve Quote ---
+        # --- Retrieve Existing Quote ---
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Session expired or not initialized.")
@@ -718,7 +726,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # --- Stage: Quote Calculated → Ask for Personal Info ---
+        # --- Stage: Quote Calculated (Ask for Name, Email, Phone) ---
         if stage == "Quote Calculated":
             reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
             update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
@@ -750,13 +758,7 @@ async def filter_response_entry(request: Request):
                 "is_property_manager", "special_requests", "special_request_minutes_min", "special_request_minutes_max"
             ]
 
-            filled = []
-            for f in required_fields:
-                val = merged.get(f)
-                if f == "special_requests":
-                    filled.append(f)  # Always count special_requests as filled
-                elif val not in [None, "", False]:
-                    filled.append(f)
+            filled = [f for f in required_fields if merged.get(f) not in [None, "", False] or f == "special_requests"]
 
             # --- If All Required Fields Filled → Calculate Quote ---
             if len(filled) >= 28:
@@ -787,9 +789,8 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-            # --- Else Partial Update While Gathering Info ---
+            # --- Partial Update While Gathering Info ---
             update_quote_record(record_id, props_dict)
-
             return JSONResponse(content={
                 "properties": list(props_dict.keys()),
                 "response": reply,
@@ -797,7 +798,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # --- Final Else: No Update Allowed ---
+        # --- Final Fallback ---
         print(f"🚫 Cannot update — quote_stage is '{stage}'")
         return JSONResponse(content={
             "properties": [],
@@ -809,4 +810,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
         return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
-
