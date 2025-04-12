@@ -718,7 +718,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # --- Stage: Quote Calculated (Ask for Personal Info) ---
+        # --- Stage: Quote Calculated → Ask for Personal Info ---
         if stage == "Quote Calculated":
             reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
             update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
@@ -758,8 +758,8 @@ async def filter_response_entry(request: Request):
                 elif val not in [None, "", False]:
                     filled.append(f)
 
+            # --- If All Required Fields Filled → Calculate Quote ---
             if len(filled) >= 28:
-                # Final update with all fields and stage change
                 update_quote_record(record_id, {**props_dict, "quote_stage": "Quote Calculated"})
 
                 quote_request = QuoteRequest(**merged)
@@ -787,16 +787,15 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-            else:
-                # Partial Update
-                update_quote_record(record_id, props_dict)
+            # --- Else Partial Update While Gathering Info ---
+            update_quote_record(record_id, props_dict)
 
-                return JSONResponse(content={
-                    "properties": list(props_dict.keys()),
-                    "response": reply,
-                    "next_actions": [],
-                    "session_id": session_id
-                })
+            return JSONResponse(content={
+                "properties": list(props_dict.keys()),
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         # --- Final Else: No Update Allowed ---
         print(f"🚫 Cannot update — quote_stage is '{stage}'")
@@ -810,3 +809,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         print("🔥 UNEXPECTED ERROR:", e)
         return JSONResponse(status_code=500, content={"error": "Server issue. Try again in a moment."})
+
