@@ -598,10 +598,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
-
-
-
-
 def generate_next_actions():
     return [
         {"action": "proceed_booking", "label": "Proceed to Booking"},
@@ -709,7 +705,7 @@ async def filter_response_entry(request: Request):
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
-        # --- Handle Abuse ---
+        # --- Handle Abuse Escalation ---
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
@@ -754,10 +750,16 @@ async def filter_response_entry(request: Request):
                 "is_property_manager", "special_requests", "special_request_minutes_min", "special_request_minutes_max"
             ]
 
-            filled = [f for f in required_fields if merged.get(f) not in [None, "", False]]
+            filled = []
+            for f in required_fields:
+                val = merged.get(f)
+                if f == "special_requests":
+                    filled.append(f)  # Always count special_requests as filled
+                elif val not in [None, "", False]:
+                    filled.append(f)
 
             if len(filled) >= 28:
-                # Final update with all fields
+                # Final update with all fields and stage change
                 update_quote_record(record_id, {**props_dict, "quote_stage": "Quote Calculated"})
 
                 quote_request = QuoteRequest(**merged)
