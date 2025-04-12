@@ -921,7 +921,7 @@ async def filter_response_entry(request: Request):
             if existing:
                 quote_id, record_id, stage, fields = existing["quote_id"], existing["record_id"], existing["stage"], existing["fields"]
             else:
-                quote_id, record_id, fields = create_new_quote(session_id, force_new=True)
+                quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
 
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
