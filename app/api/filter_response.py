@@ -687,6 +687,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
+        # --- Retrieve Quote ---
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Session expired or not initialized.")
@@ -705,7 +706,7 @@ async def filter_response_entry(request: Request):
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
-        # Handle Abuse Escalation
+        # --- Handle Abuse ---
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
@@ -718,7 +719,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # --- Stage: Quote Calculated ---
+        # --- Stage: Quote Calculated (Ask for Personal Info) ---
         if stage == "Quote Calculated":
             reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
             update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
@@ -748,12 +749,12 @@ async def filter_response_entry(request: Request):
                 "range_hood_cleaning", "wall_cleaning", "balcony_cleaning", "garage_cleaning",
                 "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
                 "is_property_manager", "special_requests", "special_request_minutes_min", "special_request_minutes_max"
-            ]  # Total = 28 fields
+            ]
 
             filled = [f for f in required_fields if merged.get(f) not in [None, "", False]]
 
             if len(filled) >= 28:
-                # Final update with all gathered fields + stage change
+                # Final update with all fields
                 update_quote_record(record_id, {**props_dict, "quote_stage": "Quote Calculated"})
 
                 quote_request = QuoteRequest(**merged)
@@ -782,7 +783,7 @@ async def filter_response_entry(request: Request):
                 })
 
             else:
-                # Partial update while collecting data
+                # Partial Update
                 update_quote_record(record_id, props_dict)
 
                 return JSONResponse(content={
