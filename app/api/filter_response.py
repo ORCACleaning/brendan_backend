@@ -465,6 +465,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 key = p["property"]
                 value = p["value"]
 
+                # CLEAN special_requests if False or None
+                if key == "special_requests" and (value is False or value is None):
+                    value = ""
+
                 if key == "quote_stage" and current_stage == "Referred to Office":
                     continue
 
@@ -567,7 +571,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         if abuse_detected:
             if current_stage == "Abuse Warning":
-                # Already warned — now ban
                 field_updates["quote_stage"] = "Chat Banned"
                 final_message = random.choice([
                     f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id or 'N/A'}. This chat is now closed.",
@@ -576,7 +579,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 ])
                 return field_updates, final_message
             else:
-                # First offence — warn
                 field_updates["quote_stage"] = "Abuse Warning"
                 warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
                 reply = f"{warning}\n\n{reply}"
@@ -595,6 +597,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 
 
