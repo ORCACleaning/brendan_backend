@@ -718,25 +718,48 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
+        # --- Stage: Quote Calculated ---
+        if stage == "Quote Calculated":
+            reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
+            update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
         # --- Stage: Gathering Info ---
         if stage == "Gathering Info":
             if props_dict:
                 reply = reply.replace("123456", quote_id).replace("{{quote_id}}", quote_id)
-                update_quote_record(record_id, props_dict)
 
             merged = fields.copy()
             merged.update(props_dict)
 
-            required_fields = [ ... ]  # your list of 27 fields
+            required_fields = [
+                "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
+                "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
+                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count",
+                "carpet_stairs_count", "carpet_other_count", "deep_cleaning", "fridge_cleaning",
+                "range_hood_cleaning", "wall_cleaning", "balcony_cleaning", "garage_cleaning",
+                "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+                "is_property_manager", "special_requests", "special_request_minutes_min", "special_request_minutes_max"
+            ]  # Total = 28 fields
 
-            filled = [f for f in required_fields if f in merged]
+            filled = [f for f in required_fields if merged.get(f) not in [None, "", False]]
 
-            if len(filled) >= 27:
+            if len(filled) >= 28:
+                # Final update with all gathered fields + stage change
+                update_quote_record(record_id, {**props_dict, "quote_stage": "Quote Calculated"})
+
                 quote_request = QuoteRequest(**merged)
                 quote_response = calculate_quote(quote_request)
 
                 update_quote_record(record_id, {
-                    "quote_stage": "Quote Calculated",
                     "quote_total": quote_response.total_price,
                     "quote_time_estimate": quote_response.estimated_time_mins,
                     "hourly_rate": quote_response.base_hourly_rate,
@@ -758,47 +781,18 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-        # --- Stage: Quote Calculated ---
-        if stage == "Quote Calculated":
-            reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
-            update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
+            else:
+                # Partial update while collecting data
+                update_quote_record(record_id, props_dict)
 
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
+                return JSONResponse(content={
+                    "properties": list(props_dict.keys()),
+                    "response": reply,
+                    "next_actions": [],
+                    "session_id": session_id
+                })
 
-        # --- Stage: Gathering Personal Info ---
-        required_personal_fields = ["customer_name", "email", "phone"]
-
-        # Gathering Personal Info Stage
-        if all(f in props_dict for f in required_personal_fields):
-            update_quote_record(record_id, props_dict)
-            update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
-
-            # Refresh latest fields after updating personal info
-            quote_data = get_quote_by_session(session_id)
-            fields = quote_data["fields"]
-
-            handle_pdf_and_email(record_id, quote_id, fields)
-
-            reply = "Thanks! I’ve emailed your full quote. Let me know if you'd like to book it in."
-
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-
-            return JSONResponse(content={
-                "properties": list(props_dict.keys()),
-                "response": reply,
-                "next_actions": generate_next_actions(),
-                "session_id": session_id
-            })
-
-        # --- Final Else: No Updates Allowed ---
+        # --- Final Else: No Update Allowed ---
         print(f"🚫 Cannot update — quote_stage is '{stage}'")
         return JSONResponse(content={
             "properties": [],
