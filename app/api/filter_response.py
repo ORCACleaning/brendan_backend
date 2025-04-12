@@ -789,8 +789,8 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-            # --- Partial Update While Gathering Info ---
             update_quote_record(record_id, props_dict)
+
             return JSONResponse(content={
                 "properties": list(props_dict.keys()),
                 "response": reply,
@@ -798,7 +798,6 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # --- Final Fallback ---
         print(f"🚫 Cannot update — quote_stage is '{stage}'")
         return JSONResponse(content={
             "properties": [],
