@@ -309,9 +309,11 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
+        # Booleans
         if key in BOOLEAN_FIELDS:
             value = bool(value)
 
+        # Integers
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -322,7 +324,8 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        else:  # Text Fields
+        # Text Fields
+        else:
             if value is None:
                 value = ""
             else:
@@ -363,7 +366,6 @@ def update_quote_record(record_id: str, fields: dict):
 
     logger.info(f"✅ Field-by-field update complete. Success fields: {successful_fields}")
     return successful_fields
-
 
 # === Inline Quote Summary Helper ===
 
