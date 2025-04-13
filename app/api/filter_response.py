@@ -500,7 +500,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             temperature=0.4
         )
 
-        # Check if 'choices' exists and is not empty
         if not response.choices or len(response.choices) == 0:
             raise ValueError("No choices returned from GPT-4 response.")
 
@@ -555,7 +554,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 if isinstance(value, str):
                     value = value.strip()
 
-                # Special Request Merging Logic
                 if key == "special_requests":
                     old = existing.get("special_requests", "")
                     if old and value:
@@ -621,7 +619,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
 
 def generate_next_actions():
     return [
