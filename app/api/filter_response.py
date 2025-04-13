@@ -13,6 +13,7 @@ import pytz
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
+from pydantic import BaseSettings
 
 from app.services.email_sender import handle_pdf_and_email
 from app.services.quote_id_utils import get_next_quote_id
@@ -20,20 +21,28 @@ from app.services.quote_id_utils import get_next_quote_id
 # === Load Environment Variables ===
 load_dotenv()
 
-# === API Keys & Config ===
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-TABLE_NAME = "Vacate Quotes"
-BOOKING_URL_BASE = os.getenv("BOOKING_URL_BASE", "https://orcacleaning.com.au/schedule")
-SMTP_PASS = os.getenv("SMTP_PASS")
+# === Settings Class for ENV Vars ===
+class Settings(BaseSettings):
+    OPENAI_API_KEY: str
+    AIRTABLE_API_KEY: str
+    AIRTABLE_BASE_ID: str
+    BOOKING_URL_BASE: str = "https://orcacleaning.com.au/schedule"
+    SMTP_PASS: str
+
+    class Config:
+        env_file = ".env"
+
+settings = Settings()
 
 # === Setup Logging ===
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger("brendan")
 
 # === ENV Safety Check ===
-if not OPENAI_API_KEY or not AIRTABLE_API_KEY or not AIRTABLE_BASE_ID:
+if not settings.OPENAI_API_KEY or not settings.AIRTABLE_API_KEY or not settings.AIRTABLE_BASE_ID:
     logger.error("❌ Critical ENV variables missing.")
     raise RuntimeError("Missing critical ENV variables.")
 
@@ -45,8 +54,8 @@ LOG_TRUNCATE_LENGTH = 5000   # Max length of log passed to GPT-4 for context
 # === FastAPI Router ===
 router = APIRouter()
 
-# === OpenAI Client Setup ===
-client = openai.OpenAI(api_key=OPENAI_API_KEY)
+# === OpenAI API Key Setup ===
+openai.api_key = settings.OPENAI_API_KEY
 
 # === Inflect Engine Setup ===
 inflector = inflect.engine()
@@ -239,10 +248,6 @@ BOOLEAN_FIELDS = {
 # Trigger Words for Abuse Detection (Escalation Logic)
 ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
 
-# === Generate Next Quote ID ===
-
-from app.services.quote_id_utils import get_next_quote_id
-
 # === Get Quote by Session ID ===
 
 def get_quote_by_session(session_id: str):
@@ -392,17 +397,16 @@ def append_message_log(record_id: str, message: str, sender: str):
 
     old_log = current.get("fields", {}).get("message_log", "")
 
-    if len(new_log) > MAX_LOG_LENGTH:
-
-    # Clean up sender format
     sender_clean = sender.strip().upper()
+
+    new_log = f"{old_log}\n{sender_clean}: {message}".strip()
+
+    if len(new_log) > MAX_LOG_LENGTH:
+        new_log = new_log[-MAX_LOG_LENGTH:]
+
 
     # Append new log entry
     new_log = f"{old_log}\n{sender_clean}: {message}".strip()
-
-    # Truncate from start if too long
-    if len(new_log) > max_log_length:
-        new_log = new_log[-max_log_length:]
 
     logger.info(f"📚 Appending to message log for record {record_id}")
     logger.debug(f"📝 New message_log length: {len(new_log)} characters")
@@ -471,7 +475,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
     try:
         logger.info("🧠 Calling GPT-4 to extract properties...")
-        response = client.chat.completions.create(
+        response = client.ChatCompletion.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
@@ -676,7 +680,7 @@ def send_gpt_error_email(error_msg: str):
         msg["From"] = "info@orcacleaning.com.au"
         msg["To"] = "admin@orcacleaning.com.au"
 
-        smtp_pass = os.getenv("SMTP_PASS")
+        smtp_pass = settings.SMTP_PASS
 
         if not smtp_pass:
             logger.error("❌ SMTP password is missing in environment variables.")
