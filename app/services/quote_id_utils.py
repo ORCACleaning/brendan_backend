@@ -2,11 +2,15 @@ import uuid
 from datetime import datetime
 import pytz
 import requests
-from fastapi import HTTPException
-from app.api.filter_response import logger, settings
 
+from fastapi import HTTPException
+
+from app.config import logger, settings  # Correct import - No circular import
+
+# Airtable Credentials from Settings
 AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
 AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
+
 
 def get_next_quote_id(prefix: str = "VC") -> str:
     """
@@ -35,7 +39,7 @@ def get_next_manual_quote_id() -> str:
     res = requests.get(url, headers=headers)
     res.raise_for_status()
 
-    records = res.json()["records"]
+    records = res.json().get("records", [])
     if not records:
         raise Exception("No counter record found in Quote ID Counter table.")
 
