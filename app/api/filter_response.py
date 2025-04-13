@@ -551,23 +551,20 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
             key, value = p["property"], p["value"]
 
+            # Skip stage overwrite unless allowed
             if key == "quote_stage" and current_stage in [
                 "Quote Calculated", "Gathering Personal Info",
                 "Personal Info Received", "Booking Confirmed", "Referred to Office"
             ]:
                 continue
 
-            if key in ["special_requests", "special_request_minutes_min", "special_request_minutes_max"]:
-                if current_stage != "Gathering Info" and (value in ["", None, 0, False]):
-                    continue
-
+            # Special Requests Handling
             if key == "special_requests":
                 old = existing.get("special_requests", "")
                 if old and value:
                     value = f"{old}\n{value}".strip()
-
-            if key == "special_requests" and not value:
-                value = ""
+                if not value:
+                    value = ""
 
             if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                 old = existing.get(key, 0)
@@ -581,6 +578,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
             field_updates[key] = value
 
+        # Required Fields
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -593,17 +591,40 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "special_request_minutes_min", "special_request_minutes_max"
         ]
 
+        # Auto-fill missing required fields
+        for f in required_fields:
+            if f not in field_updates:
+                existing_val = existing.get(f)
+                if existing_val is not None and existing_val != "":
+                    continue
+                # Safe default values
+                if f in [
+                    "suburb", "furnished", "window_count", "special_requests"
+                ]:
+                    field_updates[f] = ""
+                elif f in [
+                    "bedrooms_v2", "bathrooms_v2", "carpet_bedroom_count", "carpet_mainroom_count",
+                    "carpet_study_count", "carpet_halway_count", "carpet_stairs_count",
+                    "carpet_other_count", "special_request_minutes_min", "special_request_minutes_max"
+                ]:
+                    field_updates[f] = 0
+                else:
+                    field_updates[f] = False
+
+        # Determine if all required fields are filled
         all_filled = all(
             (field_updates.get(f) is not None and field_updates.get(f) != "")
             or (existing.get(f) is not None and existing.get(f) != "")
             for f in required_fields
         )
 
+        # Set quote_stage accordingly
         if all_filled:
             field_updates["quote_stage"] = "Quote Calculated"
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
+        # Carpet Cleaning Auto-Flag
         carpet_fields = [
             "carpet_bedroom_count", "carpet_mainroom_count",
             "carpet_study_count", "carpet_halway_count",
@@ -613,6 +634,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
 
+        # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
 
         if abuse_detected:
@@ -646,6 +668,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 # === GPT Error Email Notification Helper ===
 
