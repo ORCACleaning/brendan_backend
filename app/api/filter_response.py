@@ -7,14 +7,30 @@ import requests
 import inflect
 import openai
 
+from datetime import datetime, timedelta
+import pytz
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
 from app.services.email_sender import handle_pdf_and_email
+from app.services.quote_id_utils import get_next_quote_id
 
 # === Load Environment Variables ===
 load_dotenv()
+
+# === API Keys & Config ===
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
+AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
+TABLE_NAME = "Vacate Quotes"
+BOOKING_URL_BASE = os.getenv("BOOKING_URL_BASE", "https://orcacleaning.com.au/schedule")
+SMTP_PASS = os.getenv("SMTP_PASS")
+
+# === Setup Logging ===
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger("brendan")
 
 # === ENV Safety Check ===
 if not OPENAI_API_KEY or not AIRTABLE_API_KEY or not AIRTABLE_BASE_ID:
@@ -26,29 +42,17 @@ MAX_LOG_LENGTH = 10000        # Airtable message_log field limit
 QUOTE_EXPIRY_DAYS = 7        # Quote expiry in days
 LOG_TRUNCATE_LENGTH = 5000   # Max length of log passed to GPT-4 for context
 
-updated_log = f"{log}\nUSER: {message}".strip()[-LOG_TRUNCATE_LENGTH:]
-expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
-
-# === Setup Logging ===
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("brendan")
-
 # === FastAPI Router ===
 router = APIRouter()
-
-# === API Keys & Config ===
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
-TABLE_NAME = "Vacate Quotes"
-BOOKING_URL_BASE = os.getenv("BOOKING_URL_BASE", "https://orcacleaning.com.au/schedule")
-SMTP_PASS = os.getenv("SMTP_PASS")
 
 # === OpenAI Client Setup ===
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 # === Inflect Engine Setup ===
 inflector = inflect.engine()
+
+# === Boolean Value True Equivalents ===
+TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
 
 # === GPT PROMPT ===
 GPT_PROMPT = """
@@ -235,30 +239,9 @@ BOOLEAN_FIELDS = {
 # Trigger Words for Abuse Detection (Escalation Logic)
 ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
 
-# === Airtable Helpers ===
-
-from datetime import datetime
-import pytz
-
 # === Generate Next Quote ID ===
 
 from app.services.quote_id_utils import get_next_quote_id
-
-def get_next_quote_id(prefix: str = "VC") -> str:
-    """
-    Generates a new quote_id in the format:
-    VC-YYMMDD-HHMMSS-XXX
-    Safe for both Brendan and manual admin entry.
-    """
-    now = datetime.now(pytz.timezone("Australia/Perth"))
-    timestamp = now.strftime("%y%m%d-%H%M%S")
-    random_suffix = str(uuid.uuid4().int)[:3]  # Random 3-digit number
-
-    quote_id = f"{prefix}-{timestamp}-{random_suffix}"
-
-    logger.info(f"✅ Generated new quote_id: {quote_id}")
-
-    return quote_id
 
 # === Get Quote by Session ID ===
 
@@ -334,8 +317,7 @@ def update_quote_record(record_id: str, fields: dict):
             value = value.strip()
 
         if key in BOOLEAN_FIELDS:
-            value = bool(value) if isinstance(value, bool) else str(value).lower() in ["yes", "true", "1", "on", "checked", "t"]
-
+            value = str(value).strip().lower() in TRUE_VALUES
 
         if key in INTEGER_FIELDS:
             try:
@@ -410,7 +392,7 @@ def append_message_log(record_id: str, message: str, sender: str):
 
     old_log = current.get("fields", {}).get("message_log", "")
 
-    max_log_length = 10000  # Airtable field limit safety
+    if len(new_log) > MAX_LOG_LENGTH:
 
     # Clean up sender format
     sender_clean = sender.strip().upper()
@@ -444,7 +426,6 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info("🔁 Force creating new quote despite duplicate session ID.")
         session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
 
-    from app.services.quote_id_utils import get_next_quote_id
     quote_id = get_next_quote_id()
 
 
@@ -571,10 +552,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         # Auto set carpet_cleaning = True if any carpet count > 0
         if any(
-            field_updates.get(f, existing.get(f, 0)) > 0
+            int(field_updates.get(f, existing.get(f, 0) or 0)) > 0
             for f in [
-                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
+                "carpet_bedroom_count",
+                "carpet_mainroom_count",
+                "carpet_study_count",
+                "carpet_halway_count",
+                "carpet_stairs_count",
+                "carpet_other_count",
             ]
         ):
             field_updates["carpet_cleaning"] = True
@@ -715,9 +700,6 @@ def send_gpt_error_email(error_msg: str):
 
     except Exception as e:
         logger.error(f"⚠️ Could not send GPT error alert: {e}")
-
-from datetime import datetime, timedelta
-import pytz
 
 # === Brendan Main Route Handler ===
 
