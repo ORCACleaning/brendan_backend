@@ -665,8 +665,6 @@ def get_inline_quote_summary(data: dict) -> str:
 
 # === GPT Extraction (Production-Grade) ===
 
-# paste this directly into filter_response.py
-
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
     import json
@@ -699,6 +697,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 props.append({"property": field, "value": parsed[field]})
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
+
         field_updates = {}
         existing = {}
         if record_id:
@@ -707,12 +706,17 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             res = requests.get(url, headers=headers)
             if res.ok:
                 existing = res.json().get("fields", {})
+
         current_stage = existing.get("quote_stage", "")
+
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key = p["property"]
                 value = p["value"]
-                if key == "quote_stage" and current_stage in ["Quote Calculated", "Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"]:
+                if key == "quote_stage" and current_stage in [
+                    "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
+                    "Booking Confirmed", "Referred to Office"
+                ]:
                     continue
                 if key == "special_requests":
                     if str(value).lower().strip() in ["no", "none", "false", "no special requests", "n/a"]:
@@ -729,6 +733,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 if isinstance(value, str):
                     value = value.strip()
                 field_updates[key] = value
+
         force_int_fields = [
             "bedrooms_v2", "bathrooms_v2", "window_count",
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
@@ -741,12 +746,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     field_updates[f] = int(field_updates[f])
                 except:
                     field_updates[f] = 0
+
         carpet_fields = [
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
             "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
+
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -758,6 +765,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "is_property_manager", "special_requests",
             "special_request_minutes_min", "special_request_minutes_max"
         ]
+
         for field in required_fields:
             if field not in field_updates and field not in existing:
                 if field in force_int_fields:
@@ -766,13 +774,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     field_updates[field] = ""
                 else:
                     field_updates[field] = False
+
         missing_fields = [f for f in required_fields if field_updates.get(f) in [None, ""] and existing.get(f) in [None, ""]]
+
         if missing_fields:
             logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
         if not missing_fields:
             field_updates["quote_stage"] = "Quote Calculated"
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
+
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -789,7 +800,9 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 field_updates["quote_stage"] = "Abuse Warning"
                 warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
                 reply = f"{warning}\n\n{reply}"
+
         return field_updates, reply.strip()
+
     except Exception as e:
         raw_fallback = raw if "raw" in locals() else "[No raw GPT output]"
         error_msg = f"GPT EXTRACT ERROR: {str(e)}\nRAW fallback:\n{raw_fallback}"
