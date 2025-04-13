@@ -14,15 +14,15 @@ from fastapi.responses import JSONResponse
 
 from app.services.email_sender import handle_pdf_and_email
 from app.services.quote_id_utils import get_next_quote_id
-from app.config import logger, settings  # Import logger + settings from config.py
+from app.config import logger, settings  # Logger and Settings loaded from config.py
 
 # === Airtable Table Name ===
-TABLE_NAME = "Vacate Quotes"
+TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
 
 # === System Constants ===
-MAX_LOG_LENGTH = 10000        # Airtable message_log field limit
-QUOTE_EXPIRY_DAYS = 7        # Quote expiry in days
-LOG_TRUNCATE_LENGTH = 5000   # Max length of log passed to GPT-4 for context
+MAX_LOG_LENGTH = 10000        # Max character limit for message_log in Airtable
+QUOTE_EXPIRY_DAYS = 7        # Number of days after which quote expires
+LOG_TRUNCATE_LENGTH = 5000   # Max length of message log passed to GPT context
 
 # === FastAPI Router ===
 router = APIRouter()
