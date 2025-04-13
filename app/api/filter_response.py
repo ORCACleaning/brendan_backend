@@ -275,6 +275,7 @@ def get_quote_by_session(session_id: str):
 
 # === Update Quote Record ===
 
+# Update the handling of balcony_cleaning and other similar fields
 def update_quote_record(record_id: str, fields: dict):
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
@@ -284,7 +285,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     MAX_REASONABLE_INT = 100
 
-    # Furnished value processing
+    # Handle 'furnished' field more gracefully
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -295,27 +296,25 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
+    # Normalize fields
     normalized_fields = {}
-
-    # Iterate through fields to normalize values
     for key, value in fields.items():
-        key = FIELD_MAP.get(key, key)  # Use field map to normalize key
+        key = FIELD_MAP.get(key, key)
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Handle boolean fields
+        # Normalize Boolean Fields
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass  # Already a boolean
             elif value is None:
                 value = False  # Treat None as False
             else:
-                # Normalize the value to boolean (True or False)
                 value = str(value).strip().lower() in {"true", "1", "yes"}
 
-        # Handle integer fields with clamping
+        # Normalize Integer Fields
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -326,16 +325,15 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Handle general string fields, ensuring safe defaults
+        # Normalize other fields
         else:
             if value is None:
                 value = ""  # Use empty string for missing values
             elif isinstance(value, bool):
-                value = "true" if value else "false"  # Convert boolean to string
+                value = "true" if value else "false"
             else:
-                value = str(value).strip()  # Ensure value is a trimmed string
+                value = str(value).strip()
 
-        # Store normalized value
         normalized_fields[key] = value
 
     if not normalized_fields:
@@ -345,33 +343,27 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Send update request to Airtable
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
+    # If update fails, retry each field individually to identify the problematic ones
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
         return list(normalized_fields.keys())
+    else:
+        logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
+        logger.error(f"🧾 Error response: {res.json()}")
 
-    logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
-    try:
-        logger.error("🧾 Error response: %s", json.dumps(res.json(), indent=2))
-    except Exception as e:
-        logger.warning(f"⚠️ Failed to decode Airtable error: {e}")
-
-    # Attempt field-by-field update if bulk update fails
-    logger.info("🔍 Attempting field-by-field update fallback...")
-    successful_fields = []
-
-    for key, value in normalized_fields.items():
-        single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
-        if single_res.ok:
-            logger.info(f"✅ Field '{key}' updated successfully.")
-            successful_fields.append(key)
-        else:
-            logger.error(f"❌ Field '{key}' failed to update.")
-
-    logger.info(f"✅ Field-by-field update complete. Success fields: {successful_fields}")
-    return successful_fields
+        # Retry field-by-field update if bulk update fails
+        successful_fields = []
+        for key, value in normalized_fields.items():
+            single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
+            if single_res.ok:
+                logger.info(f"✅ Field '{key}' updated successfully.")
+                successful_fields.append(key)
+            else:
+                logger.error(f"❌ Field '{key}' failed to update.")
+        
+        return successful_fields
 
 
 # === Inline Quote Summary Helper ===
