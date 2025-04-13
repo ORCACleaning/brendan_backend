@@ -952,7 +952,7 @@ async def filter_response_entry(request: Request):
             })
 
         updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
-        props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
+        props_dict, reply = extract_properties_from_gpt4(log, updated_log, record_id, quote_id)
 
         # --- Handle Abuse Escalation ---
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
