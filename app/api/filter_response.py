@@ -312,7 +312,7 @@ def update_quote_record(record_id: str, fields: dict):
         # Boolean Field Handling
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
-                pass  # Already correct
+                pass  # Correct type
             elif value is None:
                 value = False
             else:
@@ -331,9 +331,12 @@ def update_quote_record(record_id: str, fields: dict):
 
         # Text Field Handling
         else:
-            if value is None or isinstance(value, bool):
+            if value is None:
                 value = ""
-            value = str(value).strip()
+            elif isinstance(value, bool):
+                value = "true" if value else "false"
+            else:
+                value = str(value).strip()
 
         normalized_fields[key] = value
 
