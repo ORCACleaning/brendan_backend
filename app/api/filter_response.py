@@ -12,7 +12,6 @@ import pytz
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from dotenv import load_dotenv
 from pydantic import BaseSettings
 
 from app.services.email_sender import handle_pdf_and_email
@@ -201,7 +200,7 @@ VALID_AIRTABLE_FIELDS = {
     "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
 
     # Carpet Cleaning Breakdown
-    "carpet_steam_clean",  # Legacy Field
+    "carpet_steam_clean",  # Legacy Field — auto-filled from carpet_* counts
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
     "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
     "carpet_cleaning",  # Auto-calculated Checkbox
@@ -252,6 +251,9 @@ def get_quote_by_session(session_id: str):
     Retrieves latest quote record from Airtable by session_id.
     Returns: (quote_id, record_id, quote_stage, fields) or None.
     """
+
+    import traceback
+    
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     params = {
@@ -293,10 +295,14 @@ def update_quote_record(record_id: str, fields: dict):
     Auto-normalizes all fields.
     Returns: List of successfully updated field names.
     """
+    import traceback
+    
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
-    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
+    headers = {
+        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
+
 
     # Normalize furnished for dropdown
     if "furnished" in fields:
@@ -371,6 +377,9 @@ def append_message_log(record_id: str, message: str, sender: str):
     Appends a new message to the existing message_log field in Airtable.
     Truncates from the start if log exceeds max length.
     """
+
+    import traceback 
+    
     if not record_id:
         logger.error("❌ Cannot append log — missing record ID")
         return
@@ -395,7 +404,6 @@ def append_message_log(record_id: str, message: str, sender: str):
     old_log = current.get("fields", {}).get("message_log", "")
 
     sender_clean = sender.strip().upper()
-
     new_log = f"{old_log}\n{sender_clean}: {message}".strip()
 
     if len(new_log) > MAX_LOG_LENGTH:
@@ -462,11 +470,11 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
 
 # === GPT Extraction (Production-Grade) ===
-import traceback
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
     import json
+    import traceback
 
     try:
         logger.info("🧠 Calling GPT-4 to extract properties...")
