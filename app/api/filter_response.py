@@ -16,6 +16,19 @@ from app.services.email_sender import handle_pdf_and_email
 # === Load Environment Variables ===
 load_dotenv()
 
+# === ENV Safety Check ===
+if not OPENAI_API_KEY or not AIRTABLE_API_KEY or not AIRTABLE_BASE_ID:
+    logger.error("❌ Critical ENV variables missing.")
+    raise RuntimeError("Missing critical ENV variables.")
+
+# === System Constants ===
+MAX_LOG_LENGTH = 10000        # Airtable message_log field limit
+QUOTE_EXPIRY_DAYS = 7        # Quote expiry in days
+LOG_TRUNCATE_LENGTH = 5000   # Max length of log passed to GPT-4 for context
+
+updated_log = f"{log}\nUSER: {message}".strip()[-LOG_TRUNCATE_LENGTH:]
+expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
+
 # === Setup Logging ===
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("brendan")
@@ -789,6 +802,10 @@ async def filter_response_entry(request: Request):
                 "final_price": quote_response.total_price,
                 "quote_expiry_date": expiry_str
             })
+
+            if not quote_response:
+                logger.error("❌ Quote Response missing during summary generation.")
+                raise HTTPException(status_code=500, detail="Failed to calculate quote.")
 
             summary = get_inline_quote_summary(quote_response.dict())
 
