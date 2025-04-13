@@ -896,12 +896,10 @@ def send_gpt_error_email(error_msg: str):
     except Exception as e:
         logger.error(f"⚠️ Could not send GPT error alert: {e}")
 
-
 # --- Route ---
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from app.services.quote_logic import QuoteRequest, calculate_quote
-
 
 router = APIRouter()
 
@@ -922,6 +920,7 @@ async def filter_response_entry(request: Request):
                 quote_id, record_id, stage, fields = existing["quote_id"], existing["record_id"], existing["stage"], existing["fields"]
             else:
                 quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
+                session_id = fields.get("session_id", session_id)  # CRITICAL FIX
 
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -931,7 +930,7 @@ async def filter_response_entry(request: Request):
                 "properties": [],
                 "response": intro,
                 "next_actions": [],
-                "session_id": session_id
+                "session_id": session_id  # Always return latest session_id
             })
 
         # --- Retrieve Existing Quote ---
@@ -967,10 +966,10 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # --- Stage: Quote Calculated (Ask for Name, Email, Phone) ---
+        # --- Stage: Quote Calculated (Ask for Personal Info) ---
         if stage == "Quote Calculated":
             reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
-            logger.info(f"📤 Updating Airtable Record to Gathering Personal Info: {{'quote_stage': 'Gathering Personal Info'}}")
+            logger.info(f"📤 Updating Airtable Record to Gathering Personal Info")
             update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
@@ -1002,15 +1001,15 @@ async def filter_response_entry(request: Request):
 
             filled = [f for f in required_fields if merged.get(f) not in [None, "", False] or f == "special_requests"]
 
-            # --- If All Required Fields Filled → Calculate Quote ---
+            # --- All Required Fields Filled → Calculate Quote ---
             if len(filled) >= 28:
-                logger.info(f"📤 Updating Airtable Record to Quote Calculated: {json.dumps({**props_dict, 'quote_stage': 'Quote Calculated'}, indent=2)}")
+                logger.info(f"📤 Updating Airtable Record to Quote Calculated")
                 update_quote_record(record_id, {**props_dict, "quote_stage": "Quote Calculated"})
 
                 quote_request = QuoteRequest(**merged)
                 quote_response = calculate_quote(quote_request)
 
-                logger.info(f"📤 Updating Airtable Record with Quote Details: {json.dumps(quote_response.dict(), indent=2)}")
+                logger.info(f"📤 Updating Airtable Record with Quote Details")
                 update_quote_record(record_id, {
                     "quote_total": quote_response.total_price,
                     "quote_time_estimate": quote_response.estimated_time_mins,
@@ -1033,7 +1032,7 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-            logger.info(f"📤 Updating Airtable Record while Gathering Info: {json.dumps(props_dict, indent=2)}")
+            logger.info(f"📤 Updating Airtable Record while Gathering Info")
             update_quote_record(record_id, props_dict)
 
             return JSONResponse(content={
