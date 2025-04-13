@@ -284,6 +284,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     MAX_REASONABLE_INT = 100
 
+    # Normalize 'furnished' field
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -303,14 +304,16 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
+        # Handle Boolean fields
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
-                pass
+                pass  # Already a boolean, keep it
             elif value is None:
-                value = False
+                value = False  # If None, treat as False
             else:
-                value = str(value).strip().lower() in TRUE_VALUES
+                value = str(value).strip().lower() in TRUE_VALUES  # Convert string to boolean
 
+        # Handle Integer fields
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -321,13 +324,14 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
+        # Handle Text fields
         else:
             if value is None:
-                value = ""
+                value = ""  # If None, treat as empty string
             elif isinstance(value, bool):
-                value = "true" if value else "false"
+                value = "true" if value else "false"  # If boolean, convert to string
             else:
-                value = str(value).strip()
+                value = str(value).strip()  # Otherwise, treat as string
 
         normalized_fields[key] = value
 
@@ -364,6 +368,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     logger.info(f"✅ Field-by-field update complete. Success fields: {successful_fields}")
     return successful_fields
+
 
 # === Inline Quote Summary Helper ===
 
