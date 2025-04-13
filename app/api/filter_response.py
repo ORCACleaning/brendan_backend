@@ -492,12 +492,12 @@ def create_new_quote(session_id: str, force_new: bool = False):
 # === Extract Properties from GPT-4 ===
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
-    import random
     import json
+    import random
+
+    logger.info("🧠 Calling GPT-4 to extract properties...")
 
     try:
-        logger.info("🧠 Calling GPT-4 to extract properties...")
-
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -545,24 +545,26 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         current_stage = existing.get("quote_stage", "")
 
-        # Process extracted properties
+        # Apply extracted properties
         for p in props:
             if not isinstance(p, dict) or "property" not in p or "value" not in p:
                 continue
 
             key, value = p["property"], p["value"]
 
+            # Skip quote_stage overwrite unless allowed
             if key == "quote_stage" and current_stage in [
                 "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
                 "Booking Confirmed", "Referred to Office"
             ]:
                 continue
 
+            # Merge special_requests
             if key == "special_requests":
                 old = existing.get("special_requests", "")
                 if old and value:
                     value = f"{old}\n{value}".strip()
-                if not value or str(value).lower().strip() in ["no", "none", "false", "n/a"]:
+                if not value or value is False:
                     value = ""
 
             if key in ["special_request_minutes_min", "special_request_minutes_max"]:
@@ -590,53 +592,44 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "special_request_minutes_min", "special_request_minutes_max"
         ]
 
-        int_fields = [
-            "bedrooms_v2", "bathrooms_v2", "window_count",
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-            "special_request_minutes_min", "special_request_minutes_max"
-        ]
-
-        text_fields = ["suburb", "furnished", "special_requests"]
-
-        # Fill missing required fields with safe defaults
+        # Auto-fill missing required fields
         for f in required_fields:
             if f not in field_updates:
                 existing_val = existing.get(f)
                 if existing_val is not None and existing_val != "":
                     continue
-                if f in text_fields:
+                if f in ["suburb", "furnished", "window_count", "special_requests"]:
                     field_updates[f] = ""
-                elif f in int_fields:
+                elif f in [
+                    "bedrooms_v2", "bathrooms_v2", "carpet_bedroom_count", "carpet_mainroom_count",
+                    "carpet_study_count", "carpet_halway_count", "carpet_stairs_count",
+                    "carpet_other_count", "special_request_minutes_min", "special_request_minutes_max"
+                ]:
                     field_updates[f] = 0
                 else:
                     field_updates[f] = False
 
-        # Auto-flag carpet cleaning
+        # Determine if all required fields are filled
+        missing_fields = [
+            f for f in required_fields
+            if (field_updates.get(f) in [None, ""] and existing.get(f) in [None, ""])
+        ]
+
+        if missing_fields:
+            logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
+            if current_stage == "Gathering Info" and "quote_stage" not in field_updates:
+                field_updates["quote_stage"] = "Gathering Info"
+        else:
+            field_updates["quote_stage"] = "Quote Calculated"
+
+        # Auto-flag carpet_cleaning
         carpet_fields = [
-            "carpet_bedroom_count", "carpet_mainroom_count",
-            "carpet_study_count", "carpet_halway_count",
-            "carpet_stairs_count", "carpet_other_count"
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]
 
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
-
-        # Determine if all required fields are filled
-        all_filled = all(
-            (field_updates.get(f) is not None and field_updates.get(f) != "")
-            or (existing.get(f) is not None and existing.get(f) != "")
-            for f in required_fields
-        )
-
-        if all_filled:
-            logger.info("🎯 All required fields filled. Advancing to Quote Calculated stage.")
-            field_updates["quote_stage"] = "Quote Calculated"
-        elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
-            field_updates["quote_stage"] = "Gathering Info"
-        else:
-            missing = [f for f in required_fields if (field_updates.get(f) in [None, ""] and existing.get(f) in [None, ""])]
-            logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing}")
 
         # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
@@ -672,7 +665,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
 
 
 # === GPT Error Email Notification Helper ===
