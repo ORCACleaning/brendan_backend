@@ -433,7 +433,9 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info("🔁 Force creating new quote despite duplicate session ID.")
         session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
 
+    from app.services.quote_id_utils import get_next_quote_id
     quote_id = get_next_quote_id()
+
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {
