@@ -225,35 +225,37 @@ ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
 # === Airtable Helpers ===
 
 from datetime import datetime
+import pytz
+
+# === Generate Next Quote ID ===
+
+from app.services.quote_id_utils import get_next_quote_id
 
 def get_next_quote_id(prefix: str = "VC") -> str:
     """
-    Generates a unique quote_id using timestamp to avoid concurrency issues.
-    Format: VC-YYMMDD-HHMMSS-RANDOM
-    Example: VC-250413-174512-837
+    Generates a new quote_id in the format:
+    VC-YYMMDD-HHMMSS-XXX
+    Safe for both Brendan and manual admin entry.
     """
     now = datetime.now(pytz.timezone("Australia/Perth"))
     timestamp = now.strftime("%y%m%d-%H%M%S")
-    random_suffix = str(uuid.uuid4().int)[:3]  # Random 3-digit suffix
+    random_suffix = str(uuid.uuid4().int)[:3]  # Random 3-digit number
 
-    next_quote_id = f"{prefix}-{timestamp}-{random_suffix}"
+    quote_id = f"{prefix}-{timestamp}-{random_suffix}"
 
-    logger.info(f"✅ Generated new quote_id: {next_quote_id}")
+    logger.info(f"✅ Generated new quote_id: {quote_id}")
 
-    return next_quote_id
+    return quote_id
 
-
-# === Airtable Helpers ===
+# === Get Quote by Session ID ===
 
 def get_quote_by_session(session_id: str):
     """
-    Retrieves the latest quote record from Airtable based on the session_id.
-    Returns: (quote_id, record_id, quote_stage, fields) or None if not found.
+    Retrieves latest quote record from Airtable by session_id.
+    Returns: (quote_id, record_id, quote_stage, fields) or None.
     """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}"
-    }
+    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
     params = {
         "filterByFormula": f"{{session_id}}='{session_id}'",
         "sort[0][field]": "timestamp",
@@ -273,7 +275,7 @@ def get_quote_by_session(session_id: str):
         record = data["records"][0]
         fields = record.get("fields", {})
 
-        logger.info(f"✅ Found existing quote for session_id: {session_id} | Quote ID: {fields.get('quote_id')}")
+        logger.info(f"✅ Found quote for session_id: {session_id} | Quote ID: {fields.get('quote_id')}")
 
         return (
             fields.get("quote_id"),
@@ -283,14 +285,14 @@ def get_quote_by_session(session_id: str):
         )
 
     except Exception as e:
-        logger.error(f"❌ Error fetching quote by session_id {session_id}: {e}")
+        logger.error(f"❌ Error fetching quote for session_id {session_id}: {e}")
         return None
-
+# === Update Quote Record ===
 
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a quote record in Airtable.
-    Normalizes all fields before sending to Airtable.
+    Auto-normalizes all fields.
     Returns: List of successfully updated field names.
     """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -299,7 +301,7 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # Normalize furnished field for dropdown
+    # Normalize furnished for dropdown
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -313,17 +315,15 @@ def update_quote_record(record_id: str, fields: dict):
         key = FIELD_MAP.get(key, key)
 
         if key not in VALID_AIRTABLE_FIELDS:
-            continue  # Skip invalid fields silently
+            continue  # Skip unknown fields
 
-        # Trim strings
         if isinstance(value, str):
             value = value.strip()
 
-        # Handle boolean fields
         if key in BOOLEAN_FIELDS:
-            value = str(value).lower() in ["yes", "true", "1", "on", "checked", "t"]
+            value = bool(value) if isinstance(value, bool) else str(value).lower() in ["yes", "true", "1", "on", "checked", "t"]
 
-        # Handle integer fields
+
         if key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -333,42 +333,40 @@ def update_quote_record(record_id: str, fields: dict):
         normalized_fields[key] = value
 
     if not normalized_fields:
-        logger.info(f"⏩ No valid fields to update for record {record_id}. Skipping Airtable update.")
+        logger.info(f"⏩ No valid fields to update for record {record_id}")
         return []
 
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Bulk Update Attempt
+    # Attempt Bulk Update
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
     if res.ok:
-        logger.info("✅ Airtable updated successfully.")
+        logger.info("✅ Airtable bulk update success.")
         return list(normalized_fields.keys())
 
-    # Bulk Failed — Fallback to Field-by-Field Update
     logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
     try:
-        logger.error("🧾 Error message: %s", json.dumps(res.json(), indent=2))
+        logger.error("🧾 Error response: %s", json.dumps(res.json(), indent=2))
     except Exception as e:
-        logger.warning(f"⚠️ Could not decode Airtable error: {str(e)}")
+        logger.warning(f"⚠️ Failed to decode Airtable error: {e}")
 
-    logger.info("🔍 Trying individual field updates...")
+    logger.info("🔍 Attempting field-by-field update fallback...")
 
     successful_fields = []
 
     for key, value in normalized_fields.items():
-        payload = {"fields": {key: value}}
-        single_res = requests.patch(url, headers=headers, json=payload)
-
+        single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
         if single_res.ok:
             logger.info(f"✅ Field '{key}' updated successfully.")
             successful_fields.append(key)
         else:
             logger.error(f"❌ Field '{key}' failed to update.")
 
-    logger.info(f"✅ Partial update complete. Fields updated: {successful_fields}")
+    logger.info(f"✅ Field-by-field update complete. Success fields: {successful_fields}")
     return successful_fields
+
 
 # === Append Message Log ===
 
