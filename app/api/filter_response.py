@@ -917,10 +917,10 @@ async def filter_response_entry(request: Request):
         if message.lower() == "__init__":
             existing = get_quote_by_session(session_id)
             if existing:
-                quote_id, record_id, stage, fields = existing["quote_id"], existing["record_id"], existing["stage"], existing["fields"]
+                quote_id, record_id, stage, fields = existing[0], existing[1], existing[2], existing[3]
             else:
                 quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
-                session_id = fields.get("session_id", session_id)  # CRITICAL FIX
+                session_id = fields.get("session_id", session_id)
 
             intro = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
@@ -930,7 +930,7 @@ async def filter_response_entry(request: Request):
                 "properties": [],
                 "response": intro,
                 "next_actions": [],
-                "session_id": session_id  # Always return latest session_id
+                "session_id": session_id
             })
 
         # --- Retrieve Existing Quote ---
@@ -938,7 +938,7 @@ async def filter_response_entry(request: Request):
         if not quote_data:
             raise HTTPException(status_code=404, detail="Session expired or not initialized.")
 
-        quote_id, record_id, stage, fields = quote_data["quote_id"], quote_data["record_id"], quote_data["stage"], quote_data["fields"]
+        quote_id, record_id, stage, fields = quote_data[0], quote_data[1], quote_data[2], quote_data[3]
         log = fields.get("message_log", "")
 
         if stage == "Chat Banned":
@@ -954,7 +954,7 @@ async def filter_response_entry(request: Request):
 
         # --- Handle Abuse Escalation ---
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
-            logger.info(f"📤 Updating Airtable Record for Abuse Escalation: {json.dumps(props_dict, indent=2)}")
+            logger.info(f"📤 Updating Airtable Record for Abuse Escalation")
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
