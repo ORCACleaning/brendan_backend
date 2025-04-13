@@ -489,180 +489,6 @@ def create_new_quote(session_id: str, force_new: bool = False):
     }
 
 
-# === Extract Properties from GPT-4 ===
-
-def extract_properties_from_gpt4(existing: dict, properties: list, reply: str) -> dict:
-    updated = {}
-    required_fields = [
-        "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
-        "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
-        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-        "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-        "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-        "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
-        "is_property_manager", "special_requests",
-        "special_request_minutes_min", "special_request_minutes_max"
-    ]
-
-    # Normalise + merge
-    for prop in properties:
-        key = prop["property"]
-        value = prop["value"]
-
-        if key == "special_requests":
-            old = existing.get("special_requests", "")
-            if old and value and old != value:
-                value = f"{old}\n{value}".strip()
-            if not value or str(value).lower() in ["none", "false"]:
-                value = ""
-
-        if key in ["special_request_minutes_min", "special_request_minutes_max"]:
-            old = existing.get(key, 0)
-            try:
-                value = int(value) + int(old)
-            except:
-                value = int(value) if value else 0
-
-        if isinstance(value, str):
-            value = value.strip()
-
-        updated[key] = value
-
-    # Carpet Cleaning Auto Toggle
-    carpet_fields = [
-        "carpet_bedroom_count", "carpet_mainroom_count",
-        "carpet_study_count", "carpet_halway_count",
-        "carpet_stairs_count", "carpet_other_count"
-    ]
-    if any(int(updated.get(field, existing.get(field, 0)) or 0) > 0 for field in carpet_fields):
-        updated["carpet_cleaning"] = True
-
-    # Fill Missing Required Fields
-    missing_fields = []
-    for field in required_fields:
-        if field not in updated:
-            if isinstance(existing.get(field), bool):
-                updated[field] = existing.get(field, False)
-            elif isinstance(existing.get(field), (int, float)):
-                updated[field] = existing.get(field, 0)
-            else:
-                updated[field] = existing.get(field, "")
-
-        if updated[field] in ["", None, False] and field not in ["special_requests"]:
-            missing_fields.append(field)
-
-    # Force Quote Stage Progression
-    response_lower = reply.lower()
-    if (
-        "hang tight" in response_lower
-        or "whip up your quote" in response_lower
-        or "calculate the quote" in response_lower
-        or "i'll calculate" in response_lower
-    ):
-        updated["quote_stage"] = "Quote Calculated"
-        logger.info("🚀 Forcing quote_stage = Quote Calculated based on GPT reply trigger")
-    elif not missing_fields:
-        updated["quote_stage"] = "Quote Calculated"
-        logger.info("🚀 All required fields filled — progressing quote_stage = Quote Calculated")
-    else:
-        logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
-
-    return updated
-
-
-# === GPT Error Email Notification Helper ===
-
-import smtplib
-from email.mime.text import MIMEText
-from time import sleep
-
-
-def send_gpt_error_email(error_msg: str):
-    """
-    Sends an email notification to admin when GPT extraction fails.
-    """
-
-    msg = MIMEText(error_msg)
-    msg["Subject"] = "🚨 Brendan GPT Extraction Error"
-    msg["From"] = "info@orcacleaning.com.au"
-    msg["To"] = "admin@orcacleaning.com.au"
-
-    smtp_pass = os.getenv("SMTP_PASS")
-
-    if not smtp_pass:
-        logger.error("❌ SMTP password is missing in environment variables.")
-        return
-
-    try:
-        with smtplib.SMTP("smtp.office365.com", 587) as server:
-            server.starttls()
-            server.login(msg["From"], smtp_pass)
-            server.sendmail(
-                from_addr=msg["From"],
-                to_addrs=[msg["To"]],
-                msg=msg.as_string()
-            )
-        logger.info("✅ GPT error email sent successfully.")
-
-    except smtplib.SMTPException as e:
-        logger.error(f"⚠️ SMTP error occurred: {e}")
-        sleep(5)  # Retry after short delay
-        try:
-            with smtplib.SMTP("smtp.office365.com", 587) as server:
-                server.starttls()
-                server.login(msg["From"], smtp_pass)
-                server.sendmail(
-                    from_addr=msg["From"],
-                    to_addrs=[msg["To"]],
-                    msg=msg.as_string()
-                )
-            logger.info("✅ GPT error email sent successfully after retry.")
-        except Exception as retry_err:
-            logger.error(f"❌ Failed to send GPT error email on retry: {retry_err}")
-
-    except Exception as e:
-        logger.error(f"⚠️ Could not send GPT error alert: {e}")
-
-# === Next Actions Helper ===
-
-def generate_next_actions() -> list:
-    """
-    Generates a list of next action buttons for the customer after quote calculation.
-    """
-    return [
-        {"action": "proceed_booking", "label": "Proceed to Booking"},
-        {"action": "download_pdf", "label": "Download PDF Quote"},
-        {"action": "email_pdf", "label": "Email PDF Quote"},
-        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
-    ]
-
-# === Inline Quote Summary Helper ===
-
-def get_inline_quote_summary(data: dict) -> str:
-    """
-    Generates a short, clean summary of the quote to show in chat.
-    """
-    price = data.get("total_price", 0)
-    time_est = data.get("estimated_time_mins", 0)
-    note = data.get("note", "")
-
-    summary = (
-        "All done! Here's your quote:\n\n"
-        f"💰 Total Price (incl. GST): ${price:.2f}\n"
-        f"⏰ Estimated Time: {time_est} minutes\n"
-    )
-
-    if note:
-        summary += f"📝 Note: {note}\n"
-
-    summary += (
-        "\nIf you'd like this in a PDF or want to make any changes, just let me know!"
-    )
-
-    return summary
-
-
 # === GPT Extraction (Production-Grade) ===
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
@@ -813,6 +639,99 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
+
+# === GPT Error Email Notification Helper ===
+
+import smtplib
+from email.mime.text import MIMEText
+from time import sleep
+
+
+def send_gpt_error_email(error_msg: str):
+    """
+    Sends an email notification to admin when GPT extraction fails.
+    """
+
+    msg = MIMEText(error_msg)
+    msg["Subject"] = "🚨 Brendan GPT Extraction Error"
+    msg["From"] = "info@orcacleaning.com.au"
+    msg["To"] = "admin@orcacleaning.com.au"
+
+    smtp_pass = os.getenv("SMTP_PASS")
+
+    if not smtp_pass:
+        logger.error("❌ SMTP password is missing in environment variables.")
+        return
+
+    try:
+        with smtplib.SMTP("smtp.office365.com", 587) as server:
+            server.starttls()
+            server.login(msg["From"], smtp_pass)
+            server.sendmail(
+                from_addr=msg["From"],
+                to_addrs=[msg["To"]],
+                msg=msg.as_string()
+            )
+        logger.info("✅ GPT error email sent successfully.")
+
+    except smtplib.SMTPException as e:
+        logger.error(f"⚠️ SMTP error occurred: {e}")
+        sleep(5)  # Retry after short delay
+        try:
+            with smtplib.SMTP("smtp.office365.com", 587) as server:
+                server.starttls()
+                server.login(msg["From"], smtp_pass)
+                server.sendmail(
+                    from_addr=msg["From"],
+                    to_addrs=[msg["To"]],
+                    msg=msg.as_string()
+                )
+            logger.info("✅ GPT error email sent successfully after retry.")
+        except Exception as retry_err:
+            logger.error(f"❌ Failed to send GPT error email on retry: {retry_err}")
+
+    except Exception as e:
+        logger.error(f"⚠️ Could not send GPT error alert: {e}")
+
+# === Next Actions Helper ===
+
+def generate_next_actions() -> list:
+    """
+    Generates a list of next action buttons for the customer after quote calculation.
+    """
+    return [
+        {"action": "proceed_booking", "label": "Proceed to Booking"},
+        {"action": "download_pdf", "label": "Download PDF Quote"},
+        {"action": "email_pdf", "label": "Email PDF Quote"},
+        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
+    ]
+
+# === Inline Quote Summary Helper ===
+
+def get_inline_quote_summary(data: dict) -> str:
+    """
+    Generates a short, clean summary of the quote to show in chat.
+    """
+    price = data.get("total_price", 0)
+    time_est = data.get("estimated_time_mins", 0)
+    note = data.get("note", "")
+
+    summary = (
+        "All done! Here's your quote:\n\n"
+        f"💰 Total Price (incl. GST): ${price:.2f}\n"
+        f"⏰ Estimated Time: {time_est} minutes\n"
+    )
+
+    if note:
+        summary += f"📝 Note: {note}\n"
+
+    summary += (
+        "\nIf you'd like this in a PDF or want to make any changes, just let me know!"
+    )
+
+    return summary
+
 
 
 # === GPT Error Email Notification ===
