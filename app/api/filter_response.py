@@ -1063,7 +1063,7 @@ async def filter_response_entry(request: Request):
         # Gathering Info → Check if ready to calculate
         if stage == "Gathering Info":
             if props_dict:
-                reply = reply.replace("123456", quote_id).replace("{{quote_id}}", quote_id)
+                 reply = reply.replace("123456", quote_id).replace("{{quote_id}}", quote_id)
 
             merged = fields.copy()
             merged.update(props_dict)
@@ -1080,15 +1080,22 @@ async def filter_response_entry(request: Request):
                 "special_request_minutes_max"
             ]
 
-            filled = [f for f in required_fields if merged.get(f) not in [None, "", False] or f == "special_requests"]
+              filled = [
+                f for f in required_fields
+                if merged.get(f) not in [None, "", False] or f == "special_requests"
+            ]
 
-            if len(filled) >= 28:
+            if len(filled) >= len(required_fields):
+                logger.info(f"✅ All required fields collected — calculating quote for record_id: {record_id}")
+
+                # Update stage to Quote Calculated
                 update_quote_record(record_id, {**props_dict, "quote_stage": "Quote Calculated"})
 
                 from app.services.quote_logic import QuoteRequest, calculate_quote
                 quote_request = QuoteRequest(**merged)
                 quote_response = calculate_quote(quote_request)
 
+                # Update Airtable with calculated quote details
                 update_quote_record(record_id, {
                     "quote_total": quote_response.total_price,
                     "quote_time_estimate": quote_response.estimated_time_mins,
@@ -1099,6 +1106,7 @@ async def filter_response_entry(request: Request):
                 })
 
                 summary = get_inline_quote_summary(quote_response.dict())
+
                 reply = f"Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n{summary}"
 
                 append_message_log(record_id, message, "user")
@@ -1111,8 +1119,9 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-            # Not ready yet → Continue Gathering Info
-            update_quote_record(record_id, props_dict)
+            # Not ready yet → Stay in Gathering Info stage
+            update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
+
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
@@ -1122,6 +1131,7 @@ async def filter_response_entry(request: Request):
                 "next_actions": [],
                 "session_id": session_id
             })
+
 
     except Exception as e:
         logger.error(f"❌ Exception in filter_response_entry: {e}")
