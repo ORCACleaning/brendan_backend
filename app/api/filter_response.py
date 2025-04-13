@@ -565,6 +565,9 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 old = existing.get("special_requests", "")
                 if old and value:
                     value = f"{old}\n{value}".strip()
+            # Force empty string for Airtable if False/None
+            if key == "special_requests" and not value:
+                value = ""
 
             if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                 old = existing.get(key, 0)
