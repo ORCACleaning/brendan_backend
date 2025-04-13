@@ -986,6 +986,9 @@ def send_gpt_error_email(error_msg: str):
     except Exception as e:
         logger.error(f"⚠️ Could not send GPT error alert: {e}")
 
+from datetime import datetime, timedelta
+import pytz
+
 # === Brendan Main Route Handler ===
 
 @router.post("/filter-response")
@@ -1066,7 +1069,7 @@ async def filter_response_entry(request: Request):
         # Gathering Info → Check if ready to calculate
         if stage == "Gathering Info":
             if props_dict:
-                 reply = reply.replace("123456", quote_id).replace("{{quote_id}}", quote_id)
+                reply = reply.replace("123456", quote_id).replace("{{quote_id}}", quote_id)
 
             merged = fields.copy()
             merged.update(props_dict)
@@ -1084,9 +1087,10 @@ async def filter_response_entry(request: Request):
             ]
 
             filled = [
-              f for f in required_fields
-              if merged.get(f) not in [None, "", False] or f == "special_requests"
+                f for f in required_fields
+                if merged.get(f) not in [None, "", False] or f == "special_requests"
             ]
+
             if len(filled) >= len(required_fields):
                 logger.info(f"✅ All required fields collected — calculating quote for record_id: {record_id}")
 
@@ -1097,6 +1101,11 @@ async def filter_response_entry(request: Request):
                 quote_request = QuoteRequest(**merged)
                 quote_response = calculate_quote(quote_request)
 
+                # Generate expiry date (7 days from now, Perth time)
+                perth_tz = pytz.timezone("Australia/Perth")
+                expiry_date = datetime.now(perth_tz) + timedelta(days=7)
+                expiry_str = expiry_date.strftime("%Y-%m-%d")
+
                 # Update Airtable with calculated quote details
                 update_quote_record(record_id, {
                     "quote_total": quote_response.total_price,
@@ -1104,12 +1113,17 @@ async def filter_response_entry(request: Request):
                     "hourly_rate": quote_response.base_hourly_rate,
                     "discount_percent": quote_response.discount_applied,
                     "gst_amount": quote_response.gst_applied,
-                    "final_price": quote_response.total_price
+                    "final_price": quote_response.total_price,
+                    "quote_expiry_date": expiry_str
                 })
 
                 summary = get_inline_quote_summary(quote_response.dict())
 
-                reply = f"Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n{summary}"
+                reply = (
+                    "Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n"
+                    f"{summary}\n\n"
+                    f"⚠️ This quote is valid until {expiry_str}. If it expires, just let me know your quote number and I’ll whip up a new one for you."
+                )
 
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
@@ -1133,7 +1147,6 @@ async def filter_response_entry(request: Request):
                 "next_actions": [],
                 "session_id": session_id
             })
-
 
     except Exception as e:
         logger.error(f"❌ Exception in filter_response_entry: {e}")
