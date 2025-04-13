@@ -1083,7 +1083,7 @@ async def filter_response_entry(request: Request):
             filled = [
               f for f in required_fields
               if merged.get(f) not in [None, "", False] or f == "special_requests"
-            
+            ]
             if len(filled) >= len(required_fields):
                 logger.info(f"✅ All required fields collected — calculating quote for record_id: {record_id}")
 
