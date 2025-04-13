@@ -284,6 +284,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     MAX_REASONABLE_INT = 100
 
+    # Furnished value processing
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -296,22 +297,25 @@ def update_quote_record(record_id: str, fields: dict):
 
     normalized_fields = {}
 
+    # Iterate through fields to normalize values
     for key, value in fields.items():
-        key = FIELD_MAP.get(key, key)
+        key = FIELD_MAP.get(key, key)  # Use field map to normalize key
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
+        # Handle boolean fields
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
-                pass  # It's already a boolean
+                pass  # Already a boolean
             elif value is None:
                 value = False  # Treat None as False
             else:
                 # Normalize the value to boolean (True or False)
                 value = str(value).strip().lower() in {"true", "1", "yes"}
 
+        # Handle integer fields with clamping
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -322,14 +326,16 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
+        # Handle general string fields, ensuring safe defaults
         else:
             if value is None:
-                value = ""
+                value = ""  # Use empty string for missing values
             elif isinstance(value, bool):
-                value = "true" if value else "false"
+                value = "true" if value else "false"  # Convert boolean to string
             else:
-                value = str(value).strip()
+                value = str(value).strip()  # Ensure value is a trimmed string
 
+        # Store normalized value
         normalized_fields[key] = value
 
     if not normalized_fields:
@@ -339,6 +345,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
+    # Send update request to Airtable
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
     if res.ok:
@@ -351,8 +358,8 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception as e:
         logger.warning(f"⚠️ Failed to decode Airtable error: {e}")
 
+    # Attempt field-by-field update if bulk update fails
     logger.info("🔍 Attempting field-by-field update fallback...")
-
     successful_fields = []
 
     for key, value in normalized_fields.items():
