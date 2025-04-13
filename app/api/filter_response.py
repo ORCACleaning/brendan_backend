@@ -224,56 +224,21 @@ ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
 
 # === Airtable Helpers ===
 
+from datetime import datetime
+
 def get_next_quote_id(prefix: str = "VC") -> str:
     """
-    Generates the next available quote_id from Airtable based on the highest existing number.
+    Generates a unique quote_id using timestamp to avoid concurrency issues.
+    Format: VC-YYMMDD-HHMMSS-RANDOM
+    Example: VC-250413-174512-837
     """
+    now = datetime.now(pytz.timezone("Australia/Perth"))
+    timestamp = now.strftime("%y%m%d-%H%M%S")
+    random_suffix = str(uuid.uuid4().int)[:3]  # Random 3-digit suffix
 
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}"
-    }
-    params = {
-        "filterByFormula": f"FIND('{prefix}-', {{quote_id}}) = 1",
-        "fields[]": ["quote_id"],
-        "pageSize": 100
-    }
+    next_quote_id = f"{prefix}-{timestamp}-{random_suffix}"
 
-    records = []
-    offset = None
-
-    while True:
-        if offset:
-            params["offset"] = offset
-
-        response = requests.get(url, headers=headers, params=params)
-
-        if not response.ok:
-            logger.error(f"❌ Failed to fetch quote IDs from Airtable: {response.status_code} - {response.text}")
-            raise HTTPException(status_code=500, detail="Failed to fetch quote IDs from Airtable.")
-
-        data = response.json()
-        records.extend(data.get("records", []))
-        offset = data.get("offset")
-
-        if not offset:
-            break
-
-    numbers = []
-
-    for record in records:
-        try:
-            quote_id = record["fields"].get("quote_id", "")
-            if quote_id and "-" in quote_id:
-                num = int(quote_id.split("-")[1])
-                numbers.append(num)
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to parse quote_id: {e}")
-
-    next_id = max(numbers) + 1 if numbers else 1
-    next_quote_id = f"{prefix}-{str(next_id).zfill(6)}"
-
-    logger.info(f"✅ Generated next quote_id: {next_quote_id}")
+    logger.info(f"✅ Generated new quote_id: {next_quote_id}")
 
     return next_quote_id
 
@@ -334,7 +299,7 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # Normalize furnished field
+    # Normalize furnished field for dropdown
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -374,14 +339,14 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Bulk Update First
+    # Bulk Update Attempt
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
     if res.ok:
         logger.info("✅ Airtable updated successfully.")
         return list(normalized_fields.keys())
 
-    # Handle Bulk Failure
+    # Bulk Failed — Fallback to Field-by-Field Update
     logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
     try:
         logger.error("🧾 Error message: %s", json.dumps(res.json(), indent=2))
@@ -404,7 +369,6 @@ def update_quote_record(record_id: str, fields: dict):
 
     logger.info(f"✅ Partial update complete. Fields updated: {successful_fields}")
     return successful_fields
-
 
 # === Append Message Log ===
 
@@ -436,15 +400,21 @@ def append_message_log(record_id: str, message: str, sender: str):
     old_log = current.get("fields", {}).get("message_log", "")
 
     max_log_length = 10000  # Airtable field limit safety
-    new_log = f"{old_log}\n{sender.upper()}: {message}".strip()
 
-    # Truncate from the start if too long
+    # Clean up sender format
+    sender_clean = sender.strip().upper()
+
+    # Append new log entry
+    new_log = f"{old_log}\n{sender_clean}: {message}".strip()
+
+    # Truncate from start if too long
     if len(new_log) > max_log_length:
         new_log = new_log[-max_log_length:]
 
     logger.info(f"📚 Appending to message log for record {record_id}")
-    update_quote_record(record_id, {"message_log": new_log})
+    logger.debug(f"📝 New message_log length: {len(new_log)} characters")
 
+    update_quote_record(record_id, {"message_log": new_log})
 
 
 # === Create New Quote ===
@@ -504,6 +474,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
     import json
+
     try:
         logger.info("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
@@ -515,6 +486,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             max_tokens=3000,
             temperature=0.4
         )
+
         if not response.choices:
             raise ValueError("No choices returned from GPT-4 response.")
 
@@ -525,6 +497,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
+
         clean_json = raw[start:end + 1]
         parsed = json.loads(clean_json)
 
@@ -533,7 +506,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
-        # Load existing fields from Airtable
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -548,48 +520,43 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key, value = p["property"], p["value"]
+
                 if key == "quote_stage" and current_stage in [
                     "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
                 ]:
                     continue
+
                 if key == "special_requests":
                     if str(value).lower().strip() in ["no", "none", "false", "no special requests", "n/a"]:
                         value = ""
                     old = existing.get("special_requests", "")
                     if old and value:
                         value = f"{old}\n{value}".strip()
+
                 if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                     old = existing.get(key, 0)
                     try:
                         value = int(value) + int(old)
                     except:
                         value = int(value) if value else 0
+
                 if isinstance(value, str):
                     value = value.strip()
+
                 field_updates[key] = value
 
         # Force safe defaults for missing required fields
-        for field in [
-            "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
-            "window_cleaning", "window_count", "blind_cleaning",
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-            "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-            "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-            "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
-            "is_property_manager", "special_requests",
-            "special_request_minutes_min", "special_request_minutes_max"
-        ]:
+        for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
                     field_updates[field] = 0
                 elif field == "special_requests":
                     field_updates[field] = ""
-                else:
+                elif field in BOOLEAN_FIELDS:
                     field_updates[field] = False
 
-        # Auto set carpet_cleaning = True if any carpet count is > 0
+        # Auto set carpet_cleaning = True if any carpet count > 0
         if any(
             field_updates.get(f, existing.get(f, 0)) > 0
             for f in [
@@ -599,19 +566,21 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         ):
             field_updates["carpet_cleaning"] = True
 
-        # Check for missing fields AFTER forcing defaults
+        # Determine if quote is ready
+        required_fields = [
+            "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
+            "window_cleaning", "window_count", "blind_cleaning",
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
+            "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
+            "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
+            "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+            "is_property_manager", "special_requests",
+            "special_request_minutes_min", "special_request_minutes_max"
+        ]
+
         missing_fields = [
-            f for f in [
-                "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
-                "window_cleaning", "window_count", "blind_cleaning",
-                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-                "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-                "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-                "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
-                "is_property_manager", "special_requests",
-                "special_request_minutes_min", "special_request_minutes_max"
-            ]
+            f for f in required_fields
             if field_updates.get(f) in [None, ""] and existing.get(f) in [None, ""]
         ]
 
@@ -638,8 +607,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 return field_updates, reply
             else:
                 field_updates["quote_stage"] = "Abuse Warning"
-                warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
-                reply = f"{warning}\n\n{reply}"
+                reply = f"Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍\n\n{reply}"
 
         return field_updates, reply.strip()
 
@@ -653,7 +621,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
 
 # === Next Actions Helper ===
 
@@ -674,9 +641,9 @@ def get_inline_quote_summary(data: dict) -> str:
     """
     Generates a short, clean summary of the quote to show in chat.
     """
-    price = data.get("total_price", 0)
-    time_est = data.get("estimated_time_mins", 0)
-    note = data.get("note", "")
+    price = float(data.get("total_price", 0) or 0)
+    time_est = int(data.get("estimated_time_mins", 0) or 0)
+    note = str(data.get("note", "") or "").strip()
 
     summary = (
         "All done! Here's your quote:\n\n"
@@ -692,7 +659,6 @@ def get_inline_quote_summary(data: dict) -> str:
     )
 
     return summary
-
 
 
 # === Quote Summary Generator ===
