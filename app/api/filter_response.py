@@ -289,9 +289,9 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    MAX_REASONABLE_INT = 100  # Clamp crazy GPT numbers
+    MAX_REASONABLE_INT = 100  # Clamp crazy GPT numbers for count fields
 
-    # Normalize dropdown for furnished
+    # Fix Furnished Dropdown Field
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -305,27 +305,19 @@ def update_quote_record(record_id: str, fields: dict):
     normalized_fields = {}
 
     for key, value in fields.items():
-        key = FIELD_MAP.get(key, key)  # Handle alias mapping if any
+        key = FIELD_MAP.get(key, key)
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Text Field Cleanup
-        if key not in BOOLEAN_FIELDS and key not in INTEGER_FIELDS:
-            if value is None or value is False:
-                value = ""  # Force empty string for Airtable text fields
-            value = str(value).strip()
-
-        # Boolean Normalization
+        # Checkbox Fields → Must Be Boolean
         if key in BOOLEAN_FIELDS:
             safe_value = str(value).strip().lower()
-            if safe_value not in TRUE_VALUES and safe_value not in {"no", "false", "0", "off", "f"}:
-                logger.warning(f"⚠️ Unexpected boolean value for {key}: {value}")
             value = safe_value in TRUE_VALUES
 
-        # Integer Normalization with Clamping
-        if key in INTEGER_FIELDS:
+        # Integer Fields
+        elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
                 if value > MAX_REASONABLE_INT:
@@ -334,6 +326,12 @@ def update_quote_record(record_id: str, fields: dict):
             except Exception:
                 logger.warning(f"⚠️ Failed to convert {key} to int, forcing 0")
                 value = 0
+
+        # Text Fields
+        else:
+            if value is None or value is False:
+                value = ""
+            value = str(value).strip()
 
         normalized_fields[key] = value
 
@@ -344,14 +342,13 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Attempt Bulk Update First
+    # Bulk Update Attempt
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
         return list(normalized_fields.keys())
 
-    # Bulk Failed — Fallback to Field-By-Field Update
     logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
     try:
         logger.error("🧾 Error response: %s", json.dumps(res.json(), indent=2))
