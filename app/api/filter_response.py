@@ -722,7 +722,7 @@ def get_inline_quote_summary(data: dict) -> str:
     return summary
 
 
-# === GPT Extraction ===
+# === GPT Extraction (Production-Grade) ===
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
@@ -751,7 +751,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             raise ValueError("JSON block not found.")
 
         clean_json = raw[start:end+1]
-        logger.debug("\n📦 Clean JSON block before parsing:\n", clean_json)
+        logger.debug(f"\n📦 Clean JSON block before parsing:\n{clean_json}")
 
         parsed = json.loads(clean_json)
         props = parsed.get("properties", [])
@@ -764,9 +764,9 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
+        # Load existing Airtable fields if record_id is given
         field_updates = {}
         existing = {}
-
         if record_id:
             url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
             headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -776,51 +776,57 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         current_stage = existing.get("quote_stage", "")
 
+        # Merge extracted properties
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key = p["property"]
                 value = p["value"]
 
-                # Prevent overwriting quote_stage during final stages
+                # Prevent overwriting critical stages
                 if key == "quote_stage" and current_stage in [
                     "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
                 ]:
                     continue
 
-                # Don't clear special requests after stage has changed
+                # Don't clear special_requests after stage progression
                 if key in ["special_requests", "special_request_minutes_min", "special_request_minutes_max"]:
-                    if current_stage not in ["Gathering Info"] and (value in ["", None, 0, False]):
+                    if current_stage not in ["Gathering Info"] and value in ["", None, 0, False]:
                         continue
 
-                # Merge special requests properly
+                # Proper merge for special_requests
                 if key == "special_requests":
                     old = existing.get("special_requests", "")
                     if old and value:
                         value = f"{old}\n{value}".strip()
 
-                if key == "special_request_minutes_min":
-                    old = existing.get("special_request_minutes_min", 0)
+                # Additive merge for special_request_minutes
+                if key in ["special_request_minutes_min", "special_request_minutes_max"]:
+                    old = existing.get(key, 0)
                     try:
                         value = int(value) + int(old)
                     except:
                         value = int(value) if value else 0
 
-                if key == "special_request_minutes_max":
-                    old = existing.get("special_request_minutes_max", 0)
-                    try:
-                        value = int(value) + int(old)
-                    except:
-                        value = int(value) if value else 0
-
+                # Trim strings
                 if isinstance(value, str):
                     value = value.strip()
 
                 field_updates[key] = value
 
-        # Always enforce Gathering Info stage if missing
-        if current_stage == "Gathering Info" and "quote_stage" not in field_updates:
-            field_updates["quote_stage"] = "Gathering Info"
+        # Force conversion for numeric fields
+        force_int_fields = [
+            "bedrooms_v2", "bathrooms_v2", "window_count",
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
+            "special_request_minutes_min", "special_request_minutes_max"
+        ]
+        for f in force_int_fields:
+            if f in field_updates:
+                try:
+                    field_updates[f] = int(field_updates[f])
+                except:
+                    field_updates[f] = 0
 
         # Auto-set carpet_cleaning if any carpet fields > 0
         carpet_fields = [
@@ -830,6 +836,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         ]
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
+
+        # Always enforce Gathering Info stage
+        if current_stage == "Gathering Info" and "quote_stage" not in field_updates:
+            field_updates["quote_stage"] = "Gathering Info"
 
         # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
