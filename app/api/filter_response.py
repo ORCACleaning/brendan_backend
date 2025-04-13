@@ -289,7 +289,7 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    MAX_REASONABLE_INT = 100  # Clamp crazy GPT numbers for count fields
+    MAX_REASONABLE_INT = 100  # Clamp crazy GPT numbers
 
     # Normalize dropdown for furnished
     if "furnished" in fields:
@@ -298,6 +298,9 @@ def update_quote_record(record_id: str, fields: dict):
             fields["furnished"] = "Unfurnished"
         elif "furnished" in val:
             fields["furnished"] = "Furnished"
+        else:
+            logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
+            fields["furnished"] = ""
 
     normalized_fields = {}
 
@@ -308,9 +311,11 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Text Fields Cleanup
-        if isinstance(value, str):
-            value = value.strip()
+        # Text Field Cleanup
+        if key not in BOOLEAN_FIELDS and key not in INTEGER_FIELDS:
+            if value is None or value is False:
+                value = ""  # Force empty string for Airtable text fields
+            value = str(value).strip()
 
         # Boolean Normalization
         if key in BOOLEAN_FIELDS:
@@ -319,7 +324,7 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Unexpected boolean value for {key}: {value}")
             value = safe_value in TRUE_VALUES
 
-        # Integer Normalization
+        # Integer Normalization with Clamping
         if key in INTEGER_FIELDS:
             try:
                 value = int(value)
