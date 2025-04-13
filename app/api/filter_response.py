@@ -641,59 +641,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
 
-# === GPT Error Email Notification Helper ===
-
-import smtplib
-from email.mime.text import MIMEText
-from time import sleep
-
-
-def send_gpt_error_email(error_msg: str):
-    """
-    Sends an email notification to admin when GPT extraction fails.
-    """
-
-    msg = MIMEText(error_msg)
-    msg["Subject"] = "🚨 Brendan GPT Extraction Error"
-    msg["From"] = "info@orcacleaning.com.au"
-    msg["To"] = "admin@orcacleaning.com.au"
-
-    smtp_pass = os.getenv("SMTP_PASS")
-
-    if not smtp_pass:
-        logger.error("❌ SMTP password is missing in environment variables.")
-        return
-
-    try:
-        with smtplib.SMTP("smtp.office365.com", 587) as server:
-            server.starttls()
-            server.login(msg["From"], smtp_pass)
-            server.sendmail(
-                from_addr=msg["From"],
-                to_addrs=[msg["To"]],
-                msg=msg.as_string()
-            )
-        logger.info("✅ GPT error email sent successfully.")
-
-    except smtplib.SMTPException as e:
-        logger.error(f"⚠️ SMTP error occurred: {e}")
-        sleep(5)  # Retry after short delay
-        try:
-            with smtplib.SMTP("smtp.office365.com", 587) as server:
-                server.starttls()
-                server.login(msg["From"], smtp_pass)
-                server.sendmail(
-                    from_addr=msg["From"],
-                    to_addrs=[msg["To"]],
-                    msg=msg.as_string()
-                )
-            logger.info("✅ GPT error email sent successfully after retry.")
-        except Exception as retry_err:
-            logger.error(f"❌ Failed to send GPT error email on retry: {retry_err}")
-
-    except Exception as e:
-        logger.error(f"⚠️ Could not send GPT error alert: {e}")
-
 # === Next Actions Helper ===
 
 def generate_next_actions() -> list:
