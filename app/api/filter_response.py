@@ -384,7 +384,6 @@ def get_inline_quote_summary(data: dict) -> str:
     time_est = int(data.get("estimated_time_mins", 0) or 0)
     note = str(data.get("note", "") or "").strip()
 
-    # Dynamic opening line based on price/time
     if price > 800:
         opening = "Looks like a big job! Here's your quote:\n\n"
     elif price < 300:
@@ -404,7 +403,8 @@ def get_inline_quote_summary(data: dict) -> str:
         summary += f"📝 Note: {note}\n"
 
     summary += (
-        "\nIf you'd like this in a PDF or want to make any changes, just let me know!"
+        "\nThis quote is valid for 7 days.\n"
+        "If you'd like this in a PDF or want to make any changes, just let me know!"
     )
 
     return summary
@@ -573,23 +573,12 @@ def generate_next_actions() -> list[dict]:
     Generates a list of next action buttons for the customer after quote calculation.
     """
     return [
-        {
-            "action": "proceed_booking",
-            "label": "Proceed to Booking"
-        },
-        {
-            "action": "download_pdf",
-            "label": "Download PDF Quote"
-        },
-        {
-            "action": "email_pdf",
-            "label": "Email PDF Quote"
-        },
-        {
-            "action": "ask_questions",
-            "label": "Ask Questions or Change Parameters"
-        }
+        {"action": "proceed_booking", "label": "Proceed to Booking"},
+        {"action": "download_pdf", "label": "Download PDF Quote"},
+        {"action": "email_pdf", "label": "Email PDF Quote"},
+        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"},
     ]
+
 
 # === Create New Quote ===
 
