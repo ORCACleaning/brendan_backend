@@ -622,19 +622,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
-# === Next Actions Helper ===
-
-def generate_next_actions() -> list:
-    """
-    Generates a list of next action buttons for the customer after quote calculation.
-    """
-    return [
-        {"action": "proceed_booking", "label": "Proceed to Booking"},
-        {"action": "download_pdf", "label": "Download PDF Quote"},
-        {"action": "email_pdf", "label": "Email PDF Quote"},
-        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
-    ]
-
 # === Inline Quote Summary Helper ===
 
 def get_inline_quote_summary(data: dict) -> str:
@@ -660,29 +647,6 @@ def get_inline_quote_summary(data: dict) -> str:
 
     return summary
 
-
-# === Quote Summary Generator ===
-
-def get_inline_quote_summary(data: dict) -> str:
-    """
-    Generates a short summary of the quote to show in chat.
-    """
-    price = data.get("total_price", 0)
-    time_est = data.get("estimated_time_mins", 0)
-    note = data.get("note", "")
-
-    summary = (
-        f"All done! Here's your quote:\n\n"
-        f"💰 Total Price (incl. GST): ${price:.2f}\n"
-        f"⏰ Estimated Time: {time_est} minutes\n"
-    )
-
-    if note:
-        summary += f"📝 Note: {note}\n"
-
-    summary += "\nIf you'd like this in a PDF or want to make any changes, just let me know!"
-
-    return summary
 
 # === Next Action Buttons Generator ===
 
