@@ -291,7 +291,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     MAX_REASONABLE_INT = 100  # Clamp crazy GPT numbers for count fields
 
-    # Fix Furnished Dropdown Field
+    # Normalize Furnished Dropdown Field
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -305,7 +305,8 @@ def update_quote_record(record_id: str, fields: dict):
     normalized_fields = {}
 
     for key, value in fields.items():
-        key = FIELD_MAP.get(key, key)  # Apply alias mapping if exists
+        # Map internal keys to Airtable field names
+        key = FIELD_MAP.get(key, key)
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
@@ -314,9 +315,9 @@ def update_quote_record(record_id: str, fields: dict):
         # Checkbox Fields → Must Be Boolean
         if key in BOOLEAN_FIELDS:
             safe_value = str(value).strip().lower()
-            value = safe_value in TRUE_VALUES  # True or False only
+            value = safe_value in TRUE_VALUES  # Converts to True or False
 
-        # Integer Fields
+        # Integer Fields → Must Be String for Airtable
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -327,7 +328,9 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int, forcing 0")
                 value = 0
 
-        # Text Fields
+            value = str(value)  # Force string for Airtable Text Field
+
+        # Text Fields → Normalize All Other Fields
         else:
             if value is None or isinstance(value, bool):
                 value = ""
@@ -369,65 +372,6 @@ def update_quote_record(record_id: str, fields: dict):
 
     logger.info(f"✅ Field-by-field update complete. Success fields: {successful_fields}")
     return successful_fields
-
-
-# === Append Message Log ===
-
-def append_message_log(record_id: str, message: str, sender: str):
-    """
-    Appends a new message to the existing message_log field in Airtable.
-    Truncates from the start if log exceeds MAX_LOG_LENGTH.
-    """
-    from time import sleep
-    import traceback
-
-    if not record_id:
-        logger.error("❌ Cannot append log — missing record ID")
-        return
-
-    message = str(message or "").strip()
-    if not message:
-        logger.info("⏩ Empty message after stripping — skipping log update")
-        return
-
-    sender_clean = str(sender or "").strip().upper()
-
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-    headers = {
-        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
-    }
-
-    # --- Fetch Current Record ---
-    current = {}
-
-    for attempt in range(3):
-        try:
-            res = requests.get(url, headers=headers)
-            res.raise_for_status()
-            current = res.json()
-            break
-        except Exception as e:
-            logger.warning(f"⚠️ Airtable fetch failed (attempt {attempt + 1}/3): {e}")
-            if attempt == 2:
-                logger.error(f"❌ Failed to fetch message log for record {record_id} after 3 attempts.")
-                return
-            sleep(1)
-
-    old_log = str(current.get("fields", {}).get("message_log", "")).strip()
-
-    combined_log = f"{old_log}\n{sender_clean}: {message}".strip()
-
-    # --- Enforce Log Truncation ---
-    if len(combined_log) > MAX_LOG_LENGTH:
-        combined_log = combined_log[-MAX_LOG_LENGTH:]
-
-    logger.info(f"📚 Appending to message log for record {record_id}")
-    logger.debug(f"📝 New message_log length: {len(combined_log)} characters")
-
-    # --- Push Update ---
-    update_quote_record(record_id, {
-        "message_log": combined_log
-    })
 
 
 # === Inline Quote Summary Helper ===
@@ -757,6 +701,58 @@ def send_gpt_error_email(error_msg: str):
 
     except Exception as e:
         logger.error(f"⚠️ Could not send GPT error alert: {e}")
+
+# === Append Message Log ===
+
+def append_message_log(record_id: str, message: str, sender: str):
+    """
+    Appends a new message to the existing message_log field in Airtable.
+    Truncates from the start if log exceeds MAX_LOG_LENGTH.
+    """
+    from time import sleep
+
+    if not record_id:
+        logger.error("❌ Cannot append log — missing record ID")
+        return
+
+    message = str(message or "").strip()
+    if not message:
+        logger.info("⏩ Empty message after stripping — skipping log update")
+        return
+
+    sender_clean = str(sender or "user").strip().upper()
+
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
+    }
+
+    # Fetch Current Record
+    for attempt in range(3):
+        try:
+            res = requests.get(url, headers=headers)
+            res.raise_for_status()
+            current = res.json()
+            break
+        except Exception as e:
+            logger.warning(f"⚠️ Airtable fetch failed (attempt {attempt + 1}/3): {e}")
+            if attempt == 2:
+                logger.error(f"❌ Failed to fetch message log for record {record_id} after 3 attempts.")
+                return
+            sleep(1)
+
+    old_log = str(current.get("fields", {}).get("message_log", "")).strip()
+
+    combined_log = f"{old_log}\n{sender_clean}: {message}".strip()
+
+    if len(combined_log) > MAX_LOG_LENGTH:
+        combined_log = combined_log[-MAX_LOG_LENGTH:]
+
+    logger.info(f"📚 Appending to message log for record {record_id}")
+    logger.debug(f"📝 New message_log length: {len(combined_log)} characters")
+
+    update_quote_record(record_id, {"message_log": combined_log})
+
 
 # === Brendan Main Route Handler ===
 @router.post("/filter-response")
