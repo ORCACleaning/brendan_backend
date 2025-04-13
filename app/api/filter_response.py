@@ -11,38 +11,13 @@ import pytz
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic_settings import BaseSettings
 
 from app.services.email_sender import handle_pdf_and_email
 from app.services.quote_id_utils import get_next_quote_id
-
-# === Settings Class for ENV Vars ===
-class Settings(BaseSettings):
-    OPENAI_API_KEY: str
-    AIRTABLE_API_KEY: str
-    AIRTABLE_BASE_ID: str
-    BOOKING_URL_BASE: str = "https://orcacleaning.com.au/schedule"
-    SMTP_PASS: str
-
-    class Config:
-        env_file = ".env"
-
-settings = Settings()
+from app.config import logger, settings  # Import logger + settings from config.py
 
 # === Airtable Table Name ===
-TABLE_NAME = "Vacate Quotes"  # or whatever your exact Airtable table name is
-
-# === Setup Logging ===
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger("brendan")
-
-# === ENV Safety Check ===
-if not settings.OPENAI_API_KEY or not settings.AIRTABLE_API_KEY or not settings.AIRTABLE_BASE_ID:
-    logger.error("❌ Critical ENV variables missing.")
-    raise RuntimeError("Missing critical ENV variables.")
+TABLE_NAME = "Vacate Quotes"
 
 # === System Constants ===
 MAX_LOG_LENGTH = 10000        # Airtable message_log field limit
@@ -57,6 +32,7 @@ openai.api_key = settings.OPENAI_API_KEY
 
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
+
 
 # === GPT PROMPT ===
 GPT_PROMPT = """
