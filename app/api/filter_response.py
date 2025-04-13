@@ -496,7 +496,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     import json
 
     try:
-        logger.info("🧠 Calling GPT-4 to extract properties...")
+        logger.info("🧐 Calling GPT-4 to extract properties...")
 
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -565,7 +565,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 old = existing.get("special_requests", "")
                 if old and value:
                     value = f"{old}\n{value}".strip()
-            # Force empty string for Airtable if False/None
+
             if key == "special_requests" and not value:
                 value = ""
 
@@ -581,20 +581,38 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
             field_updates[key] = value
 
-        # Always enforce quote_stage if still gathering info
-        if current_stage == "Gathering Info" and "quote_stage" not in field_updates:
+        required_fields = [
+            "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
+            "window_cleaning", "window_count", "blind_cleaning",
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
+            "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
+            "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
+            "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+            "is_property_manager", "special_requests",
+            "special_request_minutes_min", "special_request_minutes_max"
+        ]
+
+        all_filled = all(
+            (field_updates.get(f) is not None and field_updates.get(f) != "")
+            or (existing.get(f) is not None and existing.get(f) != "")
+            for f in required_fields
+        )
+
+        if all_filled:
+            field_updates["quote_stage"] = "Quote Calculated"
+        elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # Enforce carpet cleaning flag
         carpet_fields = [
             "carpet_bedroom_count", "carpet_mainroom_count",
             "carpet_study_count", "carpet_halway_count",
-            "carpet_stairs_count", "carpet_other_count",
+            "carpet_stairs_count", "carpet_other_count"
         ]
+
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
 
-        # Abuse detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
 
         if abuse_detected:
@@ -628,7 +646,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
 
 # === GPT Error Email Notification Helper ===
 
