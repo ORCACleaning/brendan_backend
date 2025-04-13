@@ -272,8 +272,6 @@ def get_next_quote_id(prefix: str = "VC") -> str:
 
 # === Airtable Helpers ===
 
-# === Airtable Helpers ===
-
 def get_quote_by_session(session_id: str):
     """
     Retrieves the latest quote record from Airtable based on the session_id.
@@ -292,7 +290,7 @@ def get_quote_by_session(session_id: str):
 
     try:
         res = requests.get(url, headers=headers, params=params)
-        res.raise_for_status()  # Raises an error for bad status codes
+        res.raise_for_status()
         data = res.json()
 
         if not data.get("records"):
@@ -344,7 +342,7 @@ def update_quote_record(record_id: str, fields: dict):
             value = value.strip()
 
         if key in BOOLEAN_FIELDS:
-            value = str(value).lower() in ["yes", "true", "1", "on", "checked", "t", "true"]  # Force boolean
+            value = str(value).lower() in ["yes", "true", "1", "on", "checked", "t", "true"]
 
         if key in INTEGER_FIELDS:
             try:
@@ -393,6 +391,10 @@ def update_quote_record(record_id: str, fields: dict):
 # === Append Message Log ===
 
 def append_message_log(record_id: str, message: str, sender: str):
+    """
+    Appends a new message to the existing message_log field in Airtable.
+    Truncates from the start if log exceeds max length.
+    """
     if not record_id:
         logger.error("❌ Cannot append log — missing record ID")
         return
@@ -404,19 +406,21 @@ def append_message_log(record_id: str, message: str, sender: str):
 
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-    res = requests.get(url, headers=headers)
 
-    if not res.ok:
-        logger.error(f"❌ Failed to fetch existing log from Airtable: {res.status_code}")
+    try:
+        res = requests.get(url, headers=headers)
+        res.raise_for_status()
+        current = res.json()
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch existing log from Airtable: {e}")
         return
 
-    current = res.json()
     old_log = current.get("fields", {}).get("message_log", "")
 
     max_log_length = 10000  # Airtable field limit safety
     new_log = f"{old_log}\n{sender.upper()}: {message}".strip()
 
-    # Truncate log from the start if too long
+    # Truncate from the start if too long
     if len(new_log) > max_log_length:
         new_log = new_log[-max_log_length:]
 
@@ -424,16 +428,19 @@ def append_message_log(record_id: str, message: str, sender: str):
     update_quote_record(record_id, {"message_log": new_log})
 
 
+
 # === Create New Quote ===
 
 def create_new_quote(session_id: str, force_new: bool = False):
     logger.info(f"🚨 Checking for existing session: {session_id}")
 
+    # Check if quote already exists
     existing = get_quote_by_session(session_id)
     if existing and not force_new:
         logger.warning("⚠️ Duplicate session detected. Returning existing quote.")
         return existing
 
+    # Force create new session ID
     if force_new:
         logger.info("🔁 Force creating new quote despite duplicate session ID.")
         session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
@@ -449,7 +456,8 @@ def create_new_quote(session_id: str, force_new: bool = False):
         "fields": {
             "session_id": session_id,
             "quote_id": quote_id,
-            "quote_stage": "Gathering Info"
+            "quote_stage": "Gathering Info",
+            "message_log": "",
         }
     }
 
@@ -463,6 +471,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
     logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
 
+    # Append system log
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
     return quote_id, record_id, "Gathering Info", {
@@ -472,11 +481,13 @@ def create_new_quote(session_id: str, force_new: bool = False):
     }
 
 
+# === Extract Properties from GPT-4 ===
+
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
 
     try:
-        print("🧠 Calling GPT-4 to extract properties...")
+        logger.info("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -491,15 +502,15 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             raise ValueError("No choices returned from GPT-4 response.")
 
         raw = response.choices[0].message.content.strip()
-        print("\n🔍 RAW GPT OUTPUT:\n", raw)
+        logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
 
         raw = raw.replace("```json", "").replace("```", "").strip()
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
 
-        clean_json = raw[start:end + 1]
-        print("\n📦 Clean JSON block before parsing:\n", clean_json)
+        clean_json = raw[start:end+1]
+        logger.debug(f"📦 Clean JSON block before parsing:\n{clean_json}")
 
         parsed = json.loads(clean_json)
         props = parsed.get("properties", [])
@@ -509,8 +520,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
 
-        print("✅ Parsed props:", props)
-        print("✅ Parsed reply:", reply)
+        logger.debug(f"✅ Parsed props: {props}")
+        logger.debug(f"✅ Parsed reply: {reply}")
 
         field_updates = {}
         existing = {}
@@ -529,47 +540,36 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 key = p["property"]
                 value = p["value"]
 
-                # Prevent overwriting final quote stages
                 if key == "quote_stage" and current_stage in [
                     "Quote Calculated", "Gathering Personal Info",
                     "Personal Info Received", "Booking Confirmed", "Referred to Office"
                 ]:
                     continue
 
-                # Prevent clearing special requests in later stages
                 if key in ["special_requests", "special_request_minutes_min", "special_request_minutes_max"]:
                     if current_stage not in ["Gathering Info"] and (value in ["", None, 0, False]):
                         continue
-
-                if isinstance(value, str):
-                    value = value.strip()
 
                 if key == "special_requests":
                     old = existing.get("special_requests", "")
                     if old and value:
                         value = f"{old}\n{value}".strip()
 
-                if key == "special_request_minutes_min":
-                    old = existing.get("special_request_minutes_min", 0)
+                if key in ["special_request_minutes_min", "special_request_minutes_max"]:
+                    old = existing.get(key, 0)
                     try:
                         value = int(value) + int(old)
                     except:
                         value = int(value) if value else 0
 
-                if key == "special_request_minutes_max":
-                    old = existing.get("special_request_minutes_max", 0)
-                    try:
-                        value = int(value) + int(old)
-                    except:
-                        value = int(value) if value else 0
+                if isinstance(value, str):
+                    value = value.strip()
 
                 field_updates[key] = value
 
-        # Enforce quote_stage Gathering Info if missing
         if current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # Auto-set carpet_cleaning if any carpet rooms entered
         carpet_fields = [
             "carpet_bedroom_count", "carpet_mainroom_count",
             "carpet_study_count", "carpet_halway_count",
@@ -578,7 +578,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
 
-        # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
 
         if abuse_detected:
@@ -603,15 +602,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     except Exception as e:
         raw_fallback = raw if "raw" in locals() else "[No raw GPT output]"
         error_msg = f"GPT EXTRACT ERROR: {str(e)}\nRAW fallback:\n{raw_fallback}"
-        print("🔥", error_msg)
+        logger.error(error_msg)
 
         if record_id:
             try:
                 update_quote_record(record_id, {"gpt_error_log": error_msg[:10000]})
             except Exception as airtable_err:
-                print("⚠️ Failed to log GPT error to Airtable:", airtable_err)
+                logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 # === GPT Error Email Notification Helper ===
 
