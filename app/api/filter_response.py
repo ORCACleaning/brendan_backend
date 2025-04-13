@@ -494,7 +494,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
-                {"role": "user", "content": message}
+                {"role": "user", "content": log}
             ],
             max_tokens=3000,
             temperature=0.4
