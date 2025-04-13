@@ -279,8 +279,11 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
-    return quote_id, record_id, "Gathering Info", {"quote_stage": "Gathering Info", "message_log": ""}
-
+    return quote_id, record_id, "Gathering Info", {
+        "quote_stage": "Gathering Info",
+        "message_log": "",
+        "session_id": session_id
+    }
 
 def get_quote_by_session(session_id: str):
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}"
