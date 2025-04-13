@@ -1,5 +1,4 @@
 # === Imports ===
-import os
 import json
 import uuid
 import logging
@@ -52,9 +51,6 @@ router = APIRouter()
 
 # === OpenAI API Key Setup ===
 openai.api_key = settings.OPENAI_API_KEY
-
-# === Inflect Engine Setup ===
-inflector = inflect.engine()
 
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
@@ -296,15 +292,14 @@ def update_quote_record(record_id: str, fields: dict):
     Returns: List of successfully updated field names.
     """
     import traceback
-    
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{settings.TABLE_NAME}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
 
-
-    # Normalize furnished for dropdown
+    # Normalize furnished for dropdown single select
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -314,22 +309,34 @@ def update_quote_record(record_id: str, fields: dict):
 
     normalized_fields = {}
 
+    MAX_REASONABLE_INT = 100  # Safety clamp for crazy GPT numbers
+
     for key, value in fields.items():
         key = FIELD_MAP.get(key, key)
 
         if key not in VALID_AIRTABLE_FIELDS:
-            continue  # Skip unknown fields
+            logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
+            continue
 
         if isinstance(value, str):
             value = value.strip()
 
+        # Boolean fields normalisation
         if key in BOOLEAN_FIELDS:
-            value = str(value).strip().lower() in TRUE_VALUES
+            safe_value = str(value).strip().lower()
+            if safe_value not in TRUE_VALUES and safe_value not in {"no", "false", "0", "off", "f"}:
+                logger.warning(f"⚠️ Unexpected boolean value for {key}: {value}")
+            value = safe_value in TRUE_VALUES
 
+        # Integer fields normalisation + clamping
         if key in INTEGER_FIELDS:
             try:
                 value = int(value)
+                if value > MAX_REASONABLE_INT:
+                    logger.warning(f"⚠️ Clamping large value for {key}: {value}")
+                    value = MAX_REASONABLE_INT
             except Exception:
+                logger.warning(f"⚠️ Failed to convert {key} to int, forcing 0")
                 value = 0
 
         normalized_fields[key] = value
@@ -368,6 +375,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     logger.info(f"✅ Field-by-field update complete. Success fields: {successful_fields}")
     return successful_fields
+
 
 
 # === Append Message Log ===
@@ -714,8 +722,8 @@ def send_gpt_error_email(error_msg: str):
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
-        message = body.get("message", "").strip()
-        session_id = body.get("session_id")
+        message = str(body.get("message", "")).strip()
+        session_id = str(body.get("session_id", "")).strip()
 
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
@@ -741,7 +749,11 @@ async def filter_response_entry(request: Request):
             })
 
         # Existing Quote
-        quote_id, record_id, stage, fields = get_quote_by_session(session_id)
+        quote_info = get_quote_by_session(session_id)
+        if not quote_info:
+            raise HTTPException(status_code=404, detail="Quote not found.")
+
+        quote_id, record_id, stage, fields = quote_info
         log = fields.get("message_log", "")
 
         if stage == "Chat Banned":
@@ -752,10 +764,11 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        updated_log = f"{log}\nUSER: {message}".strip()[-5000:]
+        updated_log = f"{log}\nUSER: {message}".strip()[-LOG_TRUNCATE_LENGTH:]
+
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
-        # Abuse Handling
+        # Abuse Handling Escalation
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
@@ -767,18 +780,21 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # If GPT says all info is collected, force stage to Quote Calculated
+        # Quote Calculation Triggered
         if props_dict.get("quote_stage") == "Quote Calculated":
             from app.services.quote_logic import QuoteRequest, calculate_quote
 
-            merged = fields.copy()
-            merged.update(props_dict)
+            merged_fields = {**fields, **props_dict}
 
-            quote_request = QuoteRequest(**merged)
+            quote_request = QuoteRequest(**merged_fields)
             quote_response = calculate_quote(quote_request)
 
+            if not quote_response:
+                logger.error("❌ Quote Response missing during summary generation.")
+                raise HTTPException(status_code=500, detail="Failed to calculate quote.")
+
             perth_tz = pytz.timezone("Australia/Perth")
-            expiry_date = datetime.now(perth_tz) + timedelta(days=7)
+            expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
             expiry_str = expiry_date.strftime("%Y-%m-%d")
 
             update_quote_record(record_id, {
@@ -791,10 +807,6 @@ async def filter_response_entry(request: Request):
                 "final_price": quote_response.total_price,
                 "quote_expiry_date": expiry_str
             })
-
-            if not quote_response:
-                logger.error("❌ Quote Response missing during summary generation.")
-                raise HTTPException(status_code=500, detail="Failed to calculate quote.")
 
             summary = get_inline_quote_summary(quote_response.dict())
 
@@ -814,7 +826,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # Stay in Gathering Info
+        # Still Gathering Info
         update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
         append_message_log(record_id, message, "user")
         append_message_log(record_id, reply, "brendan")
