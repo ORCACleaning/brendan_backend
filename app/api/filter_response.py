@@ -276,20 +276,14 @@ def get_quote_by_session(session_id: str):
 # === Update Quote Record ===
 
 def update_quote_record(record_id: str, fields: dict):
-    """
-    Updates a quote record in Airtable.
-    Auto-normalizes all fields for Airtable schema.
-    Returns: List of successfully updated field names.
-    """
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    MAX_REASONABLE_INT = 100  # Clamp crazy GPT numbers for count fields
+    MAX_REASONABLE_INT = 100
 
-    # Normalize Furnished Field
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -309,11 +303,14 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Booleans
         if key in BOOLEAN_FIELDS:
-            value = bool(value)
+            if isinstance(value, bool):
+                pass
+            elif value is None:
+                value = False
+            else:
+                value = str(value).strip().lower() in TRUE_VALUES
 
-        # Integers
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -324,10 +321,11 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Text Fields
         else:
             if value is None:
                 value = ""
+            elif isinstance(value, bool):
+                value = "true" if value else "false"
             else:
                 value = str(value).strip()
 
