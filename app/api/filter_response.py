@@ -281,7 +281,7 @@ def update_quote_record(record_id: str, fields: dict):
     Auto-normalizes all fields for Airtable schema.
     Returns: List of successfully updated field names.
     """
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
@@ -309,16 +309,9 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Boolean Field Handling
         if key in BOOLEAN_FIELDS:
-            if isinstance(value, bool):
-                pass  # Correct type
-            elif value is None:
-                value = False
-            else:
-                value = str(value).strip().lower() in TRUE_VALUES
+            value = bool(value)
 
-        # Integer Field Handling
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -329,12 +322,9 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Text Field Handling
-        else:
+        else:  # Text Fields
             if value is None:
                 value = ""
-            elif isinstance(value, bool):
-                value = "true" if value else "false"
             else:
                 value = str(value).strip()
 
