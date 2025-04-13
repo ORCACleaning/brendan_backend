@@ -329,9 +329,12 @@ def update_quote_record(record_id: str, fields: dict):
     Returns: List of successfully updated field names.
     """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
 
-    # Normalize furnished dropdown
+    # Normalize furnished field
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -343,19 +346,23 @@ def update_quote_record(record_id: str, fields: dict):
 
     for key, value in fields.items():
         key = FIELD_MAP.get(key, key)
-        if key not in VALID_AIRTABLE_FIELDS:
-            continue
 
+        if key not in VALID_AIRTABLE_FIELDS:
+            continue  # Skip invalid fields silently
+
+        # Trim strings
         if isinstance(value, str):
             value = value.strip()
 
+        # Handle boolean fields
         if key in BOOLEAN_FIELDS:
-            value = str(value).lower() in ["yes", "true", "1", "on", "checked", "t", "true"]
+            value = str(value).lower() in ["yes", "true", "1", "on", "checked", "t"]
 
+        # Handle integer fields
         if key in INTEGER_FIELDS:
             try:
                 value = int(value)
-            except:
+            except Exception:
                 value = 0
 
         normalized_fields[key] = value
@@ -367,12 +374,14 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
+    # Bulk Update First
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
     if res.ok:
         logger.info("✅ Airtable updated successfully.")
         return list(normalized_fields.keys())
 
+    # Handle Bulk Failure
     logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
     try:
         logger.error("🧾 Error message: %s", json.dumps(res.json(), indent=2))
@@ -380,6 +389,7 @@ def update_quote_record(record_id: str, fields: dict):
         logger.warning(f"⚠️ Could not decode Airtable error: {str(e)}")
 
     logger.info("🔍 Trying individual field updates...")
+
     successful_fields = []
 
     for key, value in normalized_fields.items():
@@ -507,24 +517,23 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         )
         if not response.choices:
             raise ValueError("No choices returned from GPT-4 response.")
+
         raw = response.choices[0].message.content.strip()
-        logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
         raw = raw.replace("```json", "").replace("```", "").strip()
+        logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
+
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
         clean_json = raw[start:end + 1]
-        logger.debug(f"📦 Clean JSON block before parsing:\n{clean_json}")
         parsed = json.loads(clean_json)
+
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
-        for field in ["quote_stage", "quote_notes"]:
-            if field in parsed:
-                props.append({"property": field, "value": parsed[field]})
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
-        field_updates = {}
+        # Load existing fields from Airtable
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -533,12 +542,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if res.ok:
                 existing = res.json().get("fields", {})
 
+        field_updates = {}
         current_stage = existing.get("quote_stage", "")
 
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
-                key = p["property"]
-                value = p["value"]
+                key, value = p["property"], p["value"]
                 if key == "quote_stage" and current_stage in [
                     "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
@@ -560,27 +569,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     value = value.strip()
                 field_updates[key] = value
 
-        force_int_fields = [
-            "bedrooms_v2", "bathrooms_v2", "window_count",
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-            "special_request_minutes_min", "special_request_minutes_max"
-        ]
-        for f in force_int_fields:
-            if f in field_updates:
-                try:
-                    field_updates[f] = int(field_updates[f])
-                except:
-                    field_updates[f] = 0
-
-        carpet_fields = [
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
-        ]
-        if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
-            field_updates["carpet_cleaning"] = True
-
-        required_fields = [
+        # Force safe defaults for missing required fields
+        for field in [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
@@ -590,38 +580,62 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
             "is_property_manager", "special_requests",
             "special_request_minutes_min", "special_request_minutes_max"
-        ]
-
-        for field in required_fields:
+        ]:
             if field not in field_updates and field not in existing:
-                if field in force_int_fields:
+                if field in INTEGER_FIELDS:
                     field_updates[field] = 0
                 elif field == "special_requests":
                     field_updates[field] = ""
                 else:
                     field_updates[field] = False
 
-        missing_fields = [f for f in required_fields if field_updates.get(f) in [None, ""] and existing.get(f) in [None, ""]]
+        # Auto set carpet_cleaning = True if any carpet count is > 0
+        if any(
+            field_updates.get(f, existing.get(f, 0)) > 0
+            for f in [
+                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
+            ]
+        ):
+            field_updates["carpet_cleaning"] = True
+
+        # Check for missing fields AFTER forcing defaults
+        missing_fields = [
+            f for f in [
+                "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
+                "window_cleaning", "window_count", "blind_cleaning",
+                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
+                "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
+                "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
+                "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+                "is_property_manager", "special_requests",
+                "special_request_minutes_min", "special_request_minutes_max"
+            ]
+            if field_updates.get(f) in [None, ""] and existing.get(f) in [None, ""]
+        ]
 
         if missing_fields:
             logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
+
         if not missing_fields:
             field_updates["quote_stage"] = "Quote Calculated"
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
+        # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
                 quote_id = existing.get("quote_id", "N/A")
             if current_stage == "Abuse Warning":
                 field_updates["quote_stage"] = "Chat Banned"
-                final_message = random.choice([
+                reply = random.choice([
                     f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id}. This chat is now closed.",
                     f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
                     f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
                 ])
-                return field_updates, final_message
+                return field_updates, reply
             else:
                 field_updates["quote_stage"] = "Abuse Warning"
                 warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
@@ -798,7 +812,6 @@ async def filter_response_entry(request: Request):
         quote_id, record_id, stage, fields = get_quote_by_session(session_id)
         log = fields.get("message_log", "")
 
-        # Chat Banned Handling
         if stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
@@ -822,93 +835,38 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # Quote Calculated → Ask for Personal Info
-        if stage == "Quote Calculated":
-            reply = "Awesome — to send your quote over, can I grab your name, email and best contact number?"
-            update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
-
-        # Gathering Info → Check if ready to calculate
-        if stage == "Gathering Info":
-            if props_dict:
-                reply = reply.replace("123456", quote_id).replace("{{quote_id}}", quote_id)
+        # If GPT says all info is collected, force stage to Quote Calculated
+        if props_dict.get("quote_stage") == "Quote Calculated":
+            from app.services.quote_logic import QuoteRequest, calculate_quote
 
             merged = fields.copy()
             merged.update(props_dict)
 
-            required_fields = [
-                "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
-                "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
-                "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-                "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-                "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-                "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-                "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
-                "is_property_manager", "special_requests", "special_request_minutes_min",
-                "special_request_minutes_max"
-            ]
+            quote_request = QuoteRequest(**merged)
+            quote_response = calculate_quote(quote_request)
 
-            filled = [
-                f for f in required_fields
-                if merged.get(f) not in [None, "", False] or f == "special_requests"
-            ]
+            perth_tz = pytz.timezone("Australia/Perth")
+            expiry_date = datetime.now(perth_tz) + timedelta(days=7)
+            expiry_str = expiry_date.strftime("%Y-%m-%d")
 
-            if len(filled) >= len(required_fields):
-                logger.info(f"✅ All required fields collected — calculating quote for record_id: {record_id}")
+            update_quote_record(record_id, {
+                **props_dict,
+                "quote_total": quote_response.total_price,
+                "quote_time_estimate": quote_response.estimated_time_mins,
+                "hourly_rate": quote_response.base_hourly_rate,
+                "discount_percent": quote_response.discount_applied,
+                "gst_amount": quote_response.gst_applied,
+                "final_price": quote_response.total_price,
+                "quote_expiry_date": expiry_str
+            })
 
-                # Update stage to Quote Calculated
-                update_quote_record(record_id, {**props_dict, "quote_stage": "Quote Calculated"})
+            summary = get_inline_quote_summary(quote_response.dict())
 
-                # Re-fetch updated record
-                quote_id, record_id, stage, fields = get_quote_by_session(session_id)
-
-                from app.services.quote_logic import QuoteRequest, calculate_quote
-                quote_request = QuoteRequest(**merged)
-                quote_response = calculate_quote(quote_request)
-
-                # Generate expiry date (7 days from now, Perth time)
-                perth_tz = pytz.timezone("Australia/Perth")
-                expiry_date = datetime.now(perth_tz) + timedelta(days=7)
-                expiry_str = expiry_date.strftime("%Y-%m-%d")
-
-                # Update Airtable with calculated quote details
-                update_quote_record(record_id, {
-                    "quote_total": quote_response.total_price,
-                    "quote_time_estimate": quote_response.estimated_time_mins,
-                    "hourly_rate": quote_response.base_hourly_rate,
-                    "discount_percent": quote_response.discount_applied,
-                    "gst_amount": quote_response.gst_applied,
-                    "final_price": quote_response.total_price,
-                    "quote_expiry_date": expiry_str
-                })
-
-                summary = get_inline_quote_summary(quote_response.dict())
-
-                reply = (
-                    "Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n"
-                    f"{summary}\n\n"
-                    f"⚠️ This quote is valid until {expiry_str}. If it expires, just let me know your quote number and I’ll whip up a new one for you."
-                )
-
-                append_message_log(record_id, message, "user")
-                append_message_log(record_id, reply, "brendan")
-
-                return JSONResponse(content={
-                    "properties": list(props_dict.keys()),
-                    "response": reply,
-                    "next_actions": generate_next_actions(),
-                    "session_id": session_id
-                })
-
-            # Not ready yet → Stay in Gathering Info stage
-            update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
+            reply = (
+                "Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n"
+                f"{summary}\n\n"
+                f"⚠️ This quote is valid until {expiry_str}. If it expires, just let me know your quote number and I’ll whip up a new one for you."
+            )
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
@@ -916,11 +874,22 @@ async def filter_response_entry(request: Request):
             return JSONResponse(content={
                 "properties": list(props_dict.keys()),
                 "response": reply,
-                "next_actions": [],
+                "next_actions": generate_next_actions(),
                 "session_id": session_id
             })
+
+        # Stay in Gathering Info
+        update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
+        append_message_log(record_id, message, "user")
+        append_message_log(record_id, reply, "brendan")
+
+        return JSONResponse(content={
+            "properties": list(props_dict.keys()),
+            "response": reply,
+            "next_actions": [],
+            "session_id": session_id
+        })
 
     except Exception as e:
         logger.error(f"❌ Exception in filter_response_entry: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
