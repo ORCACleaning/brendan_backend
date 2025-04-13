@@ -766,9 +766,10 @@ def get_inline_quote_summary(data: dict) -> str:
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
+    import json
 
     try:
-        logger.info("\U0001f9e0 Calling GPT-4 to extract properties...")
+        logger.info("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -783,15 +784,15 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             raise ValueError("No choices returned from GPT-4 response.")
 
         raw = response.choices[0].message.content.strip()
-        logger.debug(f"\U0001f50d RAW GPT OUTPUT:\n{raw}")
+        logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
 
         raw = raw.replace("```json", "").replace("```", "").strip()
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
 
-        clean_json = raw[start:end+1]
-        logger.debug(f"\n\U0001f4e6 Clean JSON block before parsing:\n{clean_json}")
+        clean_json = raw[start:end + 1]
+        logger.debug(f"\n📦 Clean JSON block before parsing:\n{clean_json}")
 
         parsed = json.loads(clean_json)
         props = parsed.get("properties", [])
@@ -801,8 +802,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
 
-        logger.debug(f"\u2705 Parsed props: {props}")
-        logger.debug(f"\u2705 Parsed reply: {reply}")
+        logger.debug(f"✅ Parsed props: {props}")
+        logger.debug(f"✅ Parsed reply: {reply}")
 
         field_updates = {}
         existing = {}
@@ -870,7 +871,35 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
 
-        if current_stage == "Gathering Info" and "quote_stage" not in field_updates:
+        required_fields = [
+            "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
+            "window_cleaning", "window_count", "blind_cleaning",
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
+            "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
+            "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
+            "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+            "is_property_manager", "special_requests",
+            "special_request_minutes_min", "special_request_minutes_max"
+        ]
+
+        for field in required_fields:
+            if field not in field_updates and field not in existing:
+                if field in force_int_fields:
+                    field_updates[field] = 0
+                elif field in ["special_requests"]:
+                    field_updates[field] = ""
+                else:
+                    field_updates[field] = False
+
+        all_filled = all(
+            (field_updates.get(f) not in [None, ""]) or (existing.get(f) not in [None, ""])
+            for f in required_fields
+        )
+
+        if all_filled:
+            field_updates["quote_stage"] = "Quote Calculated"
+        elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
@@ -889,7 +918,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 return field_updates, final_message
             else:
                 field_updates["quote_stage"] = "Abuse Warning"
-                warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful \U0001f44d"
+                warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
                 reply = f"{warning}\n\n{reply}"
 
         return field_updates, reply.strip()
