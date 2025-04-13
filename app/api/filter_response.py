@@ -491,182 +491,84 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
 # === Extract Properties from GPT-4 ===
 
-def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
-    import random
-    import json
+def extract_properties_from_gpt4(existing: dict, properties: list, reply: str) -> dict:
+    updated = {}
+    required_fields = [
+        "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
+        "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
+        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
+        "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
+        "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
+        "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+        "is_property_manager", "special_requests",
+        "special_request_minutes_min", "special_request_minutes_max"
+    ]
 
-    try:
-        logger.info("🧠 Calling GPT-4 to extract properties...")
+    # Normalise + merge
+    for prop in properties:
+        key = prop["property"]
+        value = prop["value"]
 
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": GPT_PROMPT},
-                {"role": "user", "content": log}
-            ],
-            max_tokens=3000,
-            temperature=0.4,
-        )
+        if key == "special_requests":
+            old = existing.get("special_requests", "")
+            if old and value and old != value:
+                value = f"{old}\n{value}".strip()
+            if not value or str(value).lower() in ["none", "false"]:
+                value = ""
 
-        if not response.choices:
-            raise ValueError("No response from GPT-4.")
-
-        raw = response.choices[0].message.content.strip()
-        logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
-
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        start, end = raw.find("{"), raw.rfind("}")
-        if start == -1 or end == -1:
-            raise ValueError("No JSON block found.")
-
-        clean_json = raw[start:end + 1]
-        logger.debug(f"📦 Clean JSON block before parsing:\n{clean_json}")
-
-        parsed = json.loads(clean_json)
-        props = parsed.get("properties", [])
-        reply = parsed.get("response", "")
-
-        for field in ["quote_stage", "quote_notes"]:
-            if field in parsed:
-                props.append({"property": field, "value": parsed[field]})
-
-        logger.debug(f"✅ Parsed props: {props}")
-        logger.debug(f"✅ Parsed reply: {reply}")
-
-        field_updates = {}
-        existing = {}
-
-        if record_id:
-            url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-            headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
-            res = requests.get(url, headers=headers)
-            if res.ok:
-                existing = res.json().get("fields", {})
-
-        current_stage = existing.get("quote_stage", "")
-
-        for p in props:
-            if not isinstance(p, dict) or "property" not in p or "value" not in p:
-                continue
-
-            key, value = p["property"], p["value"]
-
-            # Stage overwrite prevention
-            if key == "quote_stage" and current_stage in [
-                "Quote Calculated", "Gathering Personal Info",
-                "Personal Info Received", "Booking Confirmed", "Referred to Office"
-            ]:
-                continue
-
-            # Special Requests handling
-            if key == "special_requests":
-                old = existing.get("special_requests", "")
-                if old and value:
-                    value = f"{old}\n{value}".strip()
-                if not value:
-                    value = ""
-
-            if key in ["special_request_minutes_min", "special_request_minutes_max"]:
-                old = existing.get(key, 0)
-                try:
-                    value = int(value) + int(old)
-                except:
-                    value = int(value) if value else 0
-
-            if isinstance(value, str):
-                value = value.strip()
-
-            field_updates[key] = value
-
-        # Required Fields enforcement
-        required_fields = [
-            "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
-            "window_cleaning", "window_count", "blind_cleaning",
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-            "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-            "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-            "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
-            "is_property_manager", "special_requests",
-            "special_request_minutes_min", "special_request_minutes_max"
-        ]
-
-        # Auto-fill missing fields with safe defaults
-        for f in required_fields:
-            if f not in field_updates:
-                existing_val = existing.get(f)
-                if existing_val is not None and existing_val != "":
-                    continue
-                if f in ["suburb", "furnished", "window_count", "special_requests"]:
-                    field_updates[f] = ""
-                elif f in [
-                    "bedrooms_v2", "bathrooms_v2", "carpet_bedroom_count", "carpet_mainroom_count",
-                    "carpet_study_count", "carpet_halway_count", "carpet_stairs_count",
-                    "carpet_other_count", "special_request_minutes_min", "special_request_minutes_max"
-                ]:
-                    field_updates[f] = 0
-                else:
-                    field_updates[f] = False
-
-        # Determine if quote should be calculated
-        trigger_phrases = ["hang tight", "whip up your quote"]
-        force_calculate = any(phrase in reply.lower() for phrase in trigger_phrases)
-
-        all_filled = all(
-            (field_updates.get(f) is not None and field_updates.get(f) != "")
-            or (existing.get(f) is not None and existing.get(f) != "")
-            for f in required_fields
-        )
-
-        if force_calculate or all_filled:
-            field_updates["quote_stage"] = "Quote Calculated"
-        elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
-            field_updates["quote_stage"] = "Gathering Info"
-
-        # Carpet cleaning auto-flag
-        carpet_fields = [
-            "carpet_bedroom_count", "carpet_mainroom_count",
-            "carpet_study_count", "carpet_halway_count",
-            "carpet_stairs_count", "carpet_other_count"
-        ]
-
-        if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
-            field_updates["carpet_cleaning"] = True
-
-        # Abuse Detection
-        abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
-
-        if abuse_detected:
-            if not quote_id and existing:
-                quote_id = existing.get("quote_id", "N/A")
-
-            if current_stage == "Abuse Warning":
-                field_updates["quote_stage"] = "Chat Banned"
-                final_message = random.choice([
-                    f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id}. This chat is now closed.",
-                    f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
-                    f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
-                ])
-                return field_updates, final_message
-            else:
-                field_updates["quote_stage"] = "Abuse Warning"
-                warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
-                reply = f"{warning}\n\n{reply}"
-
-        return field_updates, reply.strip()
-
-    except Exception as e:
-        raw_fallback = raw if "raw" in locals() else "[No raw GPT output]"
-        error_msg = f"GPT EXTRACT ERROR: {str(e)}\nRAW fallback:\n{raw_fallback}"
-        logger.error(error_msg)
-
-        if record_id:
+        if key in ["special_request_minutes_min", "special_request_minutes_max"]:
+            old = existing.get(key, 0)
             try:
-                update_quote_record(record_id, {"gpt_error_log": error_msg[:10000]})
-            except Exception as airtable_err:
-                logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
+                value = int(value) + int(old)
+            except:
+                value = int(value) if value else 0
 
-        return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+        if isinstance(value, str):
+            value = value.strip()
+
+        updated[key] = value
+
+    # Carpet Cleaning Auto Toggle
+    carpet_fields = [
+        "carpet_bedroom_count", "carpet_mainroom_count",
+        "carpet_study_count", "carpet_halway_count",
+        "carpet_stairs_count", "carpet_other_count"
+    ]
+    if any(int(updated.get(field, existing.get(field, 0)) or 0) > 0 for field in carpet_fields):
+        updated["carpet_cleaning"] = True
+
+    # Fill Missing Required Fields
+    missing_fields = []
+    for field in required_fields:
+        if field not in updated:
+            if isinstance(existing.get(field), bool):
+                updated[field] = existing.get(field, False)
+            elif isinstance(existing.get(field), (int, float)):
+                updated[field] = existing.get(field, 0)
+            else:
+                updated[field] = existing.get(field, "")
+
+        if updated[field] in ["", None, False] and field not in ["special_requests"]:
+            missing_fields.append(field)
+
+    # Force Quote Stage Progression
+    response_lower = reply.lower()
+    if (
+        "hang tight" in response_lower
+        or "whip up your quote" in response_lower
+        or "calculate the quote" in response_lower
+        or "i'll calculate" in response_lower
+    ):
+        updated["quote_stage"] = "Quote Calculated"
+        logger.info("🚀 Forcing quote_stage = Quote Calculated based on GPT reply trigger")
+    elif not missing_fields:
+        updated["quote_stage"] = "Quote Calculated"
+        logger.info("🚀 All required fields filled — progressing quote_stage = Quote Calculated")
+    else:
+        logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
+
+    return updated
 
 
 # === GPT Error Email Notification Helper ===
