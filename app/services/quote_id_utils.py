@@ -3,7 +3,10 @@ from datetime import datetime
 import pytz
 import requests
 from fastapi import HTTPException
-from app.main import logger, AIRTABLE_API_KEY, AIRTABLE_BASE_ID
+from app.api.filter_response import logger, settings
+
+AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
+AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
 
 def get_next_quote_id(prefix: str = "VC") -> str:
     """
