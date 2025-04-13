@@ -227,7 +227,6 @@ def get_quote_by_session(session_id: str):
     Returns: (quote_id, record_id, quote_stage, fields) or None.
     """
 
-    import traceback
     from time import sleep
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
@@ -261,8 +260,10 @@ def get_quote_by_session(session_id: str):
     record = data["records"][0]
     fields = record.get("fields", {})
 
+    session_id_return = fields.get("session_id", session_id)
+
     logger.info(
-        f"✅ Found quote for session_id: {session_id} | Quote ID: {fields.get('quote_id')}"
+        f"✅ Found quote for session_id: {session_id_return} | Quote ID: {fields.get('quote_id')}"
     )
 
     return (
@@ -271,7 +272,6 @@ def get_quote_by_session(session_id: str):
         fields.get("quote_stage", "Gathering Info"),
         fields
     )
-
 
 # === Update Quote Record ===
 
@@ -311,7 +311,12 @@ def update_quote_record(record_id: str, fields: dict):
 
         # Boolean Field Handling
         if key in BOOLEAN_FIELDS:
-            value = str(value).strip().lower() in TRUE_VALUES
+            if isinstance(value, bool):
+                pass
+            elif value is None:
+                value = False
+            else:
+                value = str(value).strip().lower() in TRUE_VALUES
 
         # Integer Field Handling
         elif key in INTEGER_FIELDS:
@@ -404,14 +409,10 @@ def get_inline_quote_summary(data: dict) -> str:
 
     return summary
 
+
 # === GPT Extraction (Production-Grade) ===
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
-    """
-    Calls GPT-4 to extract properties from user message and log.
-    Applies merging logic with existing Airtable record.
-    Returns: (field_updates: dict, reply: str)
-    """
     import random
     import json
     import traceback
@@ -448,7 +449,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
-        # Fetch Existing Fields from Airtable
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -460,19 +460,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         field_updates = {}
         current_stage = existing.get("quote_stage", "")
 
-        # Process GPT Properties
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key, value = p["property"], p["value"]
 
-                # Skip quote_stage overwrite after calculation
                 if key == "quote_stage" and current_stage in [
                     "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
                 ]:
                     continue
 
-                # Merge special_requests
                 if key == "special_requests":
                     if str(value).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
                         value = ""
@@ -480,7 +477,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     if old and value:
                         value = f"{old}\n{value}".strip()
 
-                # Sum special_request_minutes
                 if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                     old = existing.get(key, 0)
                     try:
@@ -493,7 +489,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
                 field_updates[key] = value
 
-        # Force Safe Defaults for Missing Fields
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -503,7 +498,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 elif field in BOOLEAN_FIELDS:
                     field_updates[field] = False
 
-        # Auto Set carpet_cleaning Checkbox
         if any(
             int(field_updates.get(f, existing.get(f, 0) or 0)) > 0
             for f in [
@@ -517,7 +511,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         ):
             field_updates["carpet_cleaning"] = True
 
-        # Determine Quote Stage Progression
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -543,7 +536,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -609,10 +601,11 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
     logger.info(f"🚨 Checking for existing session: {session_id}")
 
-    existing = get_quote_by_session(session_id)
-    if existing and not force_new:
-        logger.warning("⚠️ Duplicate session detected. Returning existing quote.")
-        return existing
+    if not force_new:
+        existing = get_quote_by_session(session_id)
+        if existing:
+            logger.warning("⚠️ Duplicate session detected. Returning existing quote.")
+            return existing
 
     if force_new:
         logger.info("🔁 Force creating new quote despite duplicate session ID.")
@@ -720,7 +713,6 @@ def append_message_log(record_id: str, message: str, sender: str):
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
     }
 
-    # Fetch Current Record
     for attempt in range(3):
         try:
             res = requests.get(url, headers=headers)
@@ -736,7 +728,9 @@ def append_message_log(record_id: str, message: str, sender: str):
 
     old_log = str(current.get("fields", {}).get("message_log", "")).strip()
 
-    combined_log = f"{old_log}\n{sender_clean}: {message}".strip()
+    new_entry = f"{sender_clean}: {message}"
+
+    combined_log = f"{old_log}\n{new_entry}".strip() if old_log else new_entry
 
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
