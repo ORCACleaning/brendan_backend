@@ -312,7 +312,7 @@ def update_quote_record(record_id: str, fields: dict):
         # Boolean Field Handling
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
-                pass
+                pass  # Already correct
             elif value is None:
                 value = False
             else:
