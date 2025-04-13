@@ -493,9 +493,11 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
+    import json
 
     try:
         logger.info("🧠 Calling GPT-4 to extract properties...")
+
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -503,11 +505,11 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 {"role": "user", "content": log}
             ],
             max_tokens=3000,
-            temperature=0.4
+            temperature=0.4,
         )
 
-        if not response.choices or len(response.choices) == 0:
-            raise ValueError("No choices returned from GPT-4 response.")
+        if not response.choices:
+            raise ValueError("No response from GPT-4.")
 
         raw = response.choices[0].message.content.strip()
         logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
@@ -515,10 +517,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         raw = raw.replace("```json", "").replace("```", "").strip()
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
-            raise ValueError("JSON block not found.")
+            raise ValueError("No JSON block found.")
 
         clean_json = raw[start:end+1]
-        logger.debug(f"📦 Clean JSON block before parsing:\n{clean_json}")
+        logger.debug(f"\n📦 Clean JSON block before parsing:\n{clean_json}")
 
         parsed = json.loads(clean_json)
         props = parsed.get("properties", [])
@@ -544,48 +546,52 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         current_stage = existing.get("quote_stage", "")
 
         for p in props:
-            if isinstance(p, dict) and "property" in p and "value" in p:
-                key = p["property"]
-                value = p["value"]
+            if not isinstance(p, dict) or "property" not in p or "value" not in p:
+                continue
 
-                if key == "quote_stage" and current_stage in [
-                    "Quote Calculated", "Gathering Personal Info",
-                    "Personal Info Received", "Booking Confirmed", "Referred to Office"
-                ]:
+            key, value = p["property"], p["value"]
+
+            if key == "quote_stage" and current_stage in [
+                "Quote Calculated", "Gathering Personal Info",
+                "Personal Info Received", "Booking Confirmed", "Referred to Office"
+            ]:
+                continue
+
+            if key in ["special_requests", "special_request_minutes_min", "special_request_minutes_max"]:
+                if current_stage != "Gathering Info" and (value in ["", None, 0, False]):
                     continue
 
-                if key in ["special_requests", "special_request_minutes_min", "special_request_minutes_max"]:
-                    if current_stage not in ["Gathering Info"] and (value in ["", None, 0, False]):
-                        continue
+            if key == "special_requests":
+                old = existing.get("special_requests", "")
+                if old and value:
+                    value = f"{old}\n{value}".strip()
 
-                if key == "special_requests":
-                    old = existing.get("special_requests", "")
-                    if old and value:
-                        value = f"{old}\n{value}".strip()
+            if key in ["special_request_minutes_min", "special_request_minutes_max"]:
+                old = existing.get(key, 0)
+                try:
+                    value = int(value) + int(old)
+                except:
+                    value = int(value) if value else 0
 
-                if key in ["special_request_minutes_min", "special_request_minutes_max"]:
-                    old = existing.get(key, 0)
-                    try:
-                        value = int(value) + int(old)
-                    except:
-                        value = int(value) if value else 0
+            if isinstance(value, str):
+                value = value.strip()
 
-                if isinstance(value, str):
-                    value = value.strip()
+            field_updates[key] = value
 
-                field_updates[key] = value
-
+        # Always enforce quote_stage if still gathering info
         if current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
+        # Enforce carpet cleaning flag
         carpet_fields = [
             "carpet_bedroom_count", "carpet_mainroom_count",
             "carpet_study_count", "carpet_halway_count",
-            "carpet_stairs_count", "carpet_other_count"
+            "carpet_stairs_count", "carpet_other_count",
         ]
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
 
+        # Abuse detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
 
         if abuse_detected:
