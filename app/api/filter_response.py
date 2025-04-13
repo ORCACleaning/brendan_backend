@@ -20,15 +20,15 @@ from app.config import logger, settings  # Logger and Settings loaded from confi
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
 
 # === System Constants ===
-MAX_LOG_LENGTH = 10000        # Max character limit for message_log in Airtable
-QUOTE_EXPIRY_DAYS = 7        # Number of days after which quote expires
-LOG_TRUNCATE_LENGTH = 5000   # Max length of message log passed to GPT context
+MAX_LOG_LENGTH = 10000        # Max character limit for message_log and gpt_error_log in Airtable
+QUOTE_EXPIRY_DAYS = 7         # Number of days after which quote expires
+LOG_TRUNCATE_LENGTH = 5000    # Max length of message log passed to GPT context
 
 # === FastAPI Router ===
 router = APIRouter()
 
-# === OpenAI API Key Setup ===
-openai.api_key = settings.OPENAI_API_KEY
+# === OpenAI Client Setup ===
+client = openai.OpenAI()  # Required for openai>=1.0.0 SDK
 
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
@@ -278,7 +278,7 @@ def get_quote_by_session(session_id: str):
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a quote record in Airtable.
-    Auto-normalizes all fields.
+    Auto-normalizes all fields for Airtable schema.
     Returns: List of successfully updated field names.
     """
     import traceback
@@ -289,9 +289,9 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    MAX_REASONABLE_INT = 100  # Clamp insane GPT numbers
+    MAX_REASONABLE_INT = 100  # Clamp crazy GPT numbers for count fields
 
-    # Normalize furnished for dropdown single select
+    # Normalize dropdown for furnished
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -302,24 +302,24 @@ def update_quote_record(record_id: str, fields: dict):
     normalized_fields = {}
 
     for key, value in fields.items():
-        key = FIELD_MAP.get(key, key)
+        key = FIELD_MAP.get(key, key)  # Handle alias mapping if any
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # String cleanup
+        # Text Fields Cleanup
         if isinstance(value, str):
             value = value.strip()
 
-        # Boolean normalization
+        # Boolean Normalization
         if key in BOOLEAN_FIELDS:
             safe_value = str(value).strip().lower()
             if safe_value not in TRUE_VALUES and safe_value not in {"no", "false", "0", "off", "f"}:
                 logger.warning(f"⚠️ Unexpected boolean value for {key}: {value}")
             value = safe_value in TRUE_VALUES
 
-        # Integer normalization with clamping
+        # Integer Normalization
         if key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -339,14 +339,14 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Attempt Bulk Update
+    # Attempt Bulk Update First
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
         return list(normalized_fields.keys())
 
-    # Bulk failed — fallback to field-by-field
+    # Bulk Failed — Fallback to Field-By-Field Update
     logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
     try:
         logger.error("🧾 Error response: %s", json.dumps(res.json(), indent=2))
@@ -376,8 +376,8 @@ def append_message_log(record_id: str, message: str, sender: str):
     Appends a new message to the existing message_log field in Airtable.
     Truncates from the start if log exceeds MAX_LOG_LENGTH.
     """
-    import traceback
     from time import sleep
+    import traceback
 
     if not record_id:
         logger.error("❌ Cannot append log — missing record ID")
@@ -395,6 +395,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
     }
 
+    # --- Fetch Current Record ---
     current = {}
 
     for attempt in range(3):
@@ -414,15 +415,18 @@ def append_message_log(record_id: str, message: str, sender: str):
 
     combined_log = f"{old_log}\n{sender_clean}: {message}".strip()
 
+    # --- Enforce Log Truncation ---
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
 
     logger.info(f"📚 Appending to message log for record {record_id}")
     logger.debug(f"📝 New message_log length: {len(combined_log)} characters")
 
+    # --- Push Update ---
     update_quote_record(record_id, {
         "message_log": combined_log
     })
+
 
 # === Inline Quote Summary Helper ===
 
@@ -476,7 +480,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     try:
         logger.info("🧠 Calling GPT-4 to extract properties...")
 
-        response = openai.ChatCompletion.create(
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
@@ -505,7 +509,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
-        # Fetch Existing Fields
+        # Fetch Existing Fields from Airtable
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -517,24 +521,27 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         field_updates = {}
         current_stage = existing.get("quote_stage", "")
 
-        # Process Props from GPT
+        # Process GPT Properties
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key, value = p["property"], p["value"]
 
+                # Skip quote_stage overwrite after calculation
                 if key == "quote_stage" and current_stage in [
                     "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
                 ]:
                     continue
 
+                # Merge special_requests
                 if key == "special_requests":
-                    if str(value).lower().strip() in ["no", "none", "false", "no special requests", "n/a"]:
+                    if str(value).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
                         value = ""
                     old = existing.get("special_requests", "")
                     if old and value:
                         value = f"{old}\n{value}".strip()
 
+                # Sum special_request_minutes
                 if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                     old = existing.get(key, 0)
                     try:
@@ -622,7 +629,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.error(error_msg)
         if record_id:
             try:
-                update_quote_record(record_id, {"gpt_error_log": error_msg[:10000]})
+                update_quote_record(record_id, {"gpt_error_log": error_msg[:MAX_LOG_LENGTH]})
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
