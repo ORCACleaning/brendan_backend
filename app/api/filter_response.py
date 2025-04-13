@@ -681,47 +681,6 @@ def get_inline_quote_summary(data: dict) -> str:
 
 
 
-# === GPT Error Email Notification ===
-
-import smtplib
-from email.mime.text import MIMEText
-from time import sleep
-
-def send_gpt_error_email(error_msg: str):
-    """
-    Sends an email notification to admin when GPT extraction fails.
-    """
-    try:
-        msg = MIMEText(error_msg)
-        msg["Subject"] = "🚨 Brendan GPT Extraction Error"
-        msg["From"] = "info@orcacleaning.com.au"
-        msg["To"] = "admin@orcacleaning.com.au"
-
-        smtp_pass = os.getenv("SMTP_PASS")
-
-        if not smtp_pass:
-            logger.error("❌ SMTP password is missing in environment variables.")
-            return
-
-        with smtplib.SMTP("smtp.office365.com", 587) as server:
-            server.starttls()
-            server.login("info@orcacleaning.com.au", smtp_pass)
-            server.sendmail(
-                from_addr=msg["From"],
-                to_addrs=[msg["To"]],
-                msg=msg.as_string()
-            )
-
-        logger.info("✅ GPT error email sent successfully.")
-
-    except smtplib.SMTPException as e:
-        logger.error(f"⚠️ SMTP error occurred while sending the email: {e}")
-        sleep(5)  # Simple retry delay
-        send_gpt_error_email(error_msg)  # Retry once recursively
-
-    except Exception as e:
-        logger.error(f"⚠️ Could not send GPT error alert: {e}")
-
 # === Quote Summary Generator ===
 
 def get_inline_quote_summary(data: dict) -> str:
