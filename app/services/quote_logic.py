@@ -1,15 +1,17 @@
 import os
 import requests
-from app.models.quote_models import QuoteRequest, QuoteResponse
 from dotenv import load_dotenv
+
+from app.models.quote_models import QuoteRequest, QuoteResponse
 
 load_dotenv()
 
-# ✅ Airtable Config
+# === Airtable Config ===
 airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
 airtable_api_key = os.getenv("AIRTABLE_API_KEY")
 airtable_table = "Vacate Quotes"
 
+# === Generate Next Quote ID from Airtable ===
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{airtable_table}"
     headers = {"Authorization": f"Bearer {airtable_api_key}"}
@@ -20,15 +22,20 @@ def get_next_quote_id(prefix="VC"):
         "sort[0][direction]": "desc",
         "pageSize": 1
     }
+
     response = requests.get(url, headers=headers, params=params)
     records = response.json().get("records", [])
+
     if records:
         last_id = records[0]["fields"]["quote_id"].split("-")[1]
         next_id = int(last_id) + 1
     else:
         next_id = 1
+
     return f"{prefix}-{str(next_id).zfill(6)}"
 
+
+# === Main Quote Calculation ===
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75
     SEASONAL_DISCOUNT_PERCENT = 10
@@ -43,15 +50,17 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         "deep_cleaning": 60,
         "fridge_cleaning": 30,
         "range_hood_cleaning": 20,
-        "garage_cleaning": 40
+        "garage_cleaning": 40,
     }
 
     base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
 
+    # Add extras time
     for service, time in EXTRA_SERVICE_TIMES.items():
         if str(getattr(data, service, "false")).lower() == "true":
             base_minutes += time
 
+    # Window cleaning time
     if str(data.window_cleaning).lower() == "true":
         base_minutes += (data.window_count or 0) * 10
         if str(data.blind_cleaning).lower() == "true":
@@ -66,7 +75,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     if str(data.furnished).lower() == "furnished":
         base_minutes += 60
 
-    # ✅ Carpet cleaning logic — based on field values, not carpet_cleaning flag
+    # Carpet logic — based on count fields only
     base_minutes += (data.carpet_bedroom_count or 0) * 30
     base_minutes += (data.carpet_mainroom_count or 0) * 45
     base_minutes += (data.carpet_study_count or 0) * 25
@@ -74,23 +83,25 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     base_minutes += (data.carpet_stairs_count or 0) * 35
     base_minutes += (data.carpet_other_count or 0) * 30
 
-    is_range = data.special_request_minutes_min is not None and data.special_request_minutes_max is not None
+    # Handle Special Request Ranges
     min_total_mins = base_minutes
     max_total_mins = base_minutes
     note = None
 
-    if is_range:
+    if data.special_request_minutes_min is not None and data.special_request_minutes_max is not None:
         min_total_mins += data.special_request_minutes_min
         max_total_mins += data.special_request_minutes_max
         note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
 
+    is_range = data.special_request_minutes_min is not None and data.special_request_minutes_max is not None
+
+    # Calculate Price
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
     weekend_fee = WEEKEND_SURCHARGE if str(data.weekend_cleaning).lower() == "true" else 0
     after_hours_fee = data.after_hours_surcharge or 0
-    mandurah_field = str(data.mandurah_property).strip().lower()
-    mandurah_fee = MANDURAH_SURCHARGE if mandurah_field in ["yes", "true", "1"] else 0
+    mandurah_fee = MANDURAH_SURCHARGE if str(data.mandurah_property).lower() in ["yes", "true", "1"] else 0
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
