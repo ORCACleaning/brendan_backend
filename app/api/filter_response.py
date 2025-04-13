@@ -764,10 +764,11 @@ def get_inline_quote_summary(data: dict) -> str:
 
 # === GPT Extraction (Production-Grade) ===
 
+# paste this directly into filter_response.py
+
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
     import json
-
     try:
         logger.info("🧠 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
@@ -779,78 +780,54 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             max_tokens=3000,
             temperature=0.4
         )
-
-        if not response.choices or len(response.choices) == 0:
+        if not response.choices:
             raise ValueError("No choices returned from GPT-4 response.")
-
         raw = response.choices[0].message.content.strip()
         logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
-
         raw = raw.replace("```json", "").replace("```", "").strip()
         start, end = raw.find("{"), raw.rfind("}")
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
-
         clean_json = raw[start:end + 1]
-        logger.debug(f"\n📦 Clean JSON block before parsing:\n{clean_json}")
-
+        logger.debug(f"📦 Clean JSON block before parsing:\n{clean_json}")
         parsed = json.loads(clean_json)
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
-
         for field in ["quote_stage", "quote_notes"]:
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
-
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
-
         field_updates = {}
         existing = {}
-
         if record_id:
             url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
             headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
             res = requests.get(url, headers=headers)
             if res.ok:
                 existing = res.json().get("fields", {})
-
         current_stage = existing.get("quote_stage", "")
-
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key = p["property"]
                 value = p["value"]
-
-                if key == "quote_stage" and current_stage in [
-                    "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
-                    "Booking Confirmed", "Referred to Office"
-                ]:
+                if key == "quote_stage" and current_stage in ["Quote Calculated", "Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"]:
                     continue
-
-                if key in ["special_requests", "special_request_minutes_min", "special_request_minutes_max"]:
-                    if current_stage not in ["Gathering Info"] and value in ["", None, 0, False]:
-                        continue
-
                 if key == "special_requests":
                     if str(value).lower().strip() in ["no", "none", "false", "no special requests", "n/a"]:
                         value = ""
                     old = existing.get("special_requests", "")
                     if old and value:
                         value = f"{old}\n{value}".strip()
-
                 if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                     old = existing.get(key, 0)
                     try:
                         value = int(value) + int(old)
                     except:
                         value = int(value) if value else 0
-
                 if isinstance(value, str):
                     value = value.strip()
-
                 field_updates[key] = value
-
         force_int_fields = [
             "bedrooms_v2", "bathrooms_v2", "window_count",
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
@@ -863,14 +840,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     field_updates[f] = int(field_updates[f])
                 except:
                     field_updates[f] = 0
-
         carpet_fields = [
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
             "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
-
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -882,32 +857,25 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "is_property_manager", "special_requests",
             "special_request_minutes_min", "special_request_minutes_max"
         ]
-
         for field in required_fields:
             if field not in field_updates and field not in existing:
                 if field in force_int_fields:
                     field_updates[field] = 0
-                elif field in ["special_requests"]:
+                elif field == "special_requests":
                     field_updates[field] = ""
                 else:
                     field_updates[field] = False
-
-        all_filled = all(
-            (field_updates.get(f) not in [None, ""]) or (existing.get(f) not in [None, ""])
-            for f in required_fields
-        )
-
-        if all_filled:
+        missing_fields = [f for f in required_fields if field_updates.get(f) in [None, ""] and existing.get(f) in [None, ""]]
+        if missing_fields:
+            logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
+        if not missing_fields:
             field_updates["quote_stage"] = "Quote Calculated"
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
-
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
-
         if abuse_detected:
             if not quote_id and existing:
                 quote_id = existing.get("quote_id", "N/A")
-
             if current_stage == "Abuse Warning":
                 field_updates["quote_stage"] = "Chat Banned"
                 final_message = random.choice([
@@ -920,23 +888,19 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 field_updates["quote_stage"] = "Abuse Warning"
                 warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
                 reply = f"{warning}\n\n{reply}"
-
         return field_updates, reply.strip()
-
     except Exception as e:
         raw_fallback = raw if "raw" in locals() else "[No raw GPT output]"
         error_msg = f"GPT EXTRACT ERROR: {str(e)}\nRAW fallback:\n{raw_fallback}"
         logger.error(error_msg)
-
         if record_id:
             try:
                 update_quote_record(record_id, {"gpt_error_log": error_msg[:10000]})
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
-
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
-        
+
 # === GPT Error Email Notification ===
 
 import smtplib
