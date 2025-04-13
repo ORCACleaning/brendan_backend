@@ -18,9 +18,6 @@ from pydantic import BaseSettings
 from app.services.email_sender import handle_pdf_and_email
 from app.services.quote_id_utils import get_next_quote_id
 
-# === Load Environment Variables ===
-load_dotenv()
-
 # === Settings Class for ENV Vars ===
 class Settings(BaseSettings):
     OPENAI_API_KEY: str
@@ -296,9 +293,8 @@ def update_quote_record(record_id: str, fields: dict):
     Auto-normalizes all fields.
     Returns: List of successfully updated field names.
     """
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
 
@@ -384,8 +380,9 @@ def append_message_log(record_id: str, message: str, sender: str):
         logger.info("⏩ Empty message after stripping — skipping log update")
         return
 
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-    headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
+
 
     try:
         res = requests.get(url, headers=headers)
@@ -404,9 +401,6 @@ def append_message_log(record_id: str, message: str, sender: str):
     if len(new_log) > MAX_LOG_LENGTH:
         new_log = new_log[-MAX_LOG_LENGTH:]
 
-
-    # Append new log entry
-    new_log = f"{old_log}\n{sender_clean}: {message}".strip()
 
     logger.info(f"📚 Appending to message log for record {record_id}")
     logger.debug(f"📝 New message_log length: {len(new_log)} characters")
@@ -468,6 +462,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
 
 # === GPT Extraction (Production-Grade) ===
+import traceback
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     import random
@@ -475,7 +470,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
     try:
         logger.info("🧠 Calling GPT-4 to extract properties...")
-        response = client.ChatCompletion.create(
+        response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
