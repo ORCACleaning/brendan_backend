@@ -1022,11 +1022,7 @@ async def filter_response_entry(request: Request):
             })
 
         # Existing Quote
-        quote_data = get_quote_by_session(session_id)
-        if not quote_data:
-            raise HTTPException(status_code=404, detail="Session expired or not initialized.")
-
-        quote_id, record_id, stage, fields = quote_data
+        quote_id, record_id, stage, fields = get_quote_by_session(session_id)
         log = fields.get("message_log", "")
 
         # Chat Banned Handling
@@ -1097,6 +1093,9 @@ async def filter_response_entry(request: Request):
                 # Update stage to Quote Calculated
                 update_quote_record(record_id, {**props_dict, "quote_stage": "Quote Calculated"})
 
+                # Re-fetch updated record
+                quote_id, record_id, stage, fields = get_quote_by_session(session_id)
+
                 from app.services.quote_logic import QuoteRequest, calculate_quote
                 quote_request = QuoteRequest(**merged)
                 quote_response = calculate_quote(quote_request)
@@ -1151,3 +1150,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         logger.error(f"❌ Exception in filter_response_entry: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
