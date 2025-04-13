@@ -284,7 +284,6 @@ def update_quote_record(record_id: str, fields: dict):
 
     MAX_REASONABLE_INT = 100
 
-    # Normalize 'furnished' field
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -304,16 +303,15 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Handle Boolean fields
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
-                pass  # Already a boolean, keep it
+                pass  # It's already a boolean
             elif value is None:
-                value = False  # If None, treat as False
+                value = False  # Treat None as False
             else:
-                value = str(value).strip().lower() in TRUE_VALUES  # Convert string to boolean
+                # Normalize the value to boolean (True or False)
+                value = str(value).strip().lower() in {"true", "1", "yes"}
 
-        # Handle Integer fields
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -324,14 +322,13 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Handle Text fields
         else:
             if value is None:
-                value = ""  # If None, treat as empty string
+                value = ""
             elif isinstance(value, bool):
-                value = "true" if value else "false"  # If boolean, convert to string
+                value = "true" if value else "false"
             else:
-                value = str(value).strip()  # Otherwise, treat as string
+                value = str(value).strip()
 
         normalized_fields[key] = value
 
