@@ -281,8 +281,6 @@ def update_quote_record(record_id: str, fields: dict):
     Auto-normalizes all fields for Airtable schema.
     Returns: List of successfully updated field names.
     """
-    import traceback
-
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
@@ -291,7 +289,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     MAX_REASONABLE_INT = 100  # Clamp crazy GPT numbers for count fields
 
-    # Normalize Furnished Dropdown Field
+    # Normalize Furnished Field
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -305,18 +303,17 @@ def update_quote_record(record_id: str, fields: dict):
     normalized_fields = {}
 
     for key, value in fields.items():
-        key = FIELD_MAP.get(key, key)  # Map internal keys to Airtable field names
+        key = FIELD_MAP.get(key, key)
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Checkbox Fields → Must Be Boolean
+        # Boolean Field Handling
         if key in BOOLEAN_FIELDS:
-            safe_value = str(value).strip().lower()
-            value = safe_value in TRUE_VALUES  # True or False only
+            value = str(value).strip().lower() in TRUE_VALUES
 
-        # Integer Fields → Must Be Int (NOT String)
+        # Integer Field Handling
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -324,10 +321,10 @@ def update_quote_record(record_id: str, fields: dict):
                     logger.warning(f"⚠️ Clamping large value for {key}: {value}")
                     value = MAX_REASONABLE_INT
             except Exception:
-                logger.warning(f"⚠️ Failed to convert {key} to int, forcing 0")
+                logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Text Fields → Force String
+        # Text Field Handling
         else:
             if value is None or isinstance(value, bool):
                 value = ""
@@ -342,7 +339,6 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Bulk Update Attempt
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
     if res.ok:
