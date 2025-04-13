@@ -305,7 +305,7 @@ def update_quote_record(record_id: str, fields: dict):
     normalized_fields = {}
 
     for key, value in fields.items():
-        key = FIELD_MAP.get(key, key)
+        key = FIELD_MAP.get(key, key)  # Apply alias mapping if exists
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
@@ -314,7 +314,7 @@ def update_quote_record(record_id: str, fields: dict):
         # Checkbox Fields → Must Be Boolean
         if key in BOOLEAN_FIELDS:
             safe_value = str(value).strip().lower()
-            value = safe_value in TRUE_VALUES
+            value = safe_value in TRUE_VALUES  # True or False only
 
         # Integer Fields
         elif key in INTEGER_FIELDS:
@@ -329,7 +329,7 @@ def update_quote_record(record_id: str, fields: dict):
 
         # Text Fields
         else:
-            if value is None or value is False:
+            if value is None or isinstance(value, bool):
                 value = ""
             value = str(value).strip()
 
