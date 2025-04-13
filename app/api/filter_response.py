@@ -250,7 +250,9 @@ def get_quote_by_session(session_id: str):
     Retrieves latest quote record from Airtable by session_id.
     Returns: (quote_id, record_id, quote_stage, fields) or None.
     """
+
     import traceback
+    from time import sleep
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {
@@ -263,32 +265,36 @@ def get_quote_by_session(session_id: str):
         "pageSize": 1
     }
 
-    try:
-        res = requests.get(url, headers=headers, params=params)
-        res.raise_for_status()
-        data = res.json()
+    for attempt in range(3):
+        try:
+            res = requests.get(url, headers=headers, params=params)
+            res.raise_for_status()
+            data = res.json()
+            break
+        except Exception as e:
+            logger.warning(f"⚠️ Airtable fetch failed (attempt {attempt + 1}/3): {e}")
+            if attempt == 2:
+                logger.error(f"❌ Failed to fetch quote for session_id {session_id} after 3 attempts.")
+                return None
+            sleep(1)
 
-        if not data.get("records"):
-            logger.info(f"⏳ No existing quote found for session_id: {session_id}")
-            return None
-
-        record = data["records"][0]
-        fields = record.get("fields", {})
-
-        logger.info(
-            f"✅ Found quote for session_id: {session_id} | Quote ID: {fields.get('quote_id')}"
-        )
-
-        return (
-            fields.get("quote_id"),
-            record["id"],
-            fields.get("quote_stage", "Gathering Info"),
-            fields
-        )
-
-    except Exception as e:
-        logger.error(f"❌ Error fetching quote for session_id {session_id}: {e}")
+    if not data.get("records"):
+        logger.info(f"⏳ No existing quote found for session_id: {session_id}")
         return None
+
+    record = data["records"][0]
+    fields = record.get("fields", {})
+
+    logger.info(
+        f"✅ Found quote for session_id: {session_id} | Quote ID: {fields.get('quote_id')}"
+    )
+
+    return (
+        fields.get("quote_id"),
+        record["id"],
+        fields.get("quote_stage", "Gathering Info"),
+        fields
+    )
 
 
 # === Update Quote Record ===
@@ -394,8 +400,8 @@ def append_message_log(record_id: str, message: str, sender: str):
     Appends a new message to the existing message_log field in Airtable.
     Truncates from the start if log exceeds MAX_LOG_LENGTH.
     """
-
     import traceback
+    from time import sleep
 
     if not record_id:
         logger.error("❌ Cannot append log — missing record ID")
@@ -413,87 +419,71 @@ def append_message_log(record_id: str, message: str, sender: str):
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
     }
 
-    try:
-        res = requests.get(url, headers=headers)
-        res.raise_for_status()
-        current = res.json()
-    except Exception as e:
-        logger.error(f"❌ Failed to fetch existing log from Airtable: {e}")
-        return
+    current = {}
+
+    for attempt in range(3):
+        try:
+            res = requests.get(url, headers=headers)
+            res.raise_for_status()
+            current = res.json()
+            break
+        except Exception as e:
+            logger.warning(f"⚠️ Airtable fetch failed (attempt {attempt + 1}/3): {e}")
+            if attempt == 2:
+                logger.error(f"❌ Failed to fetch message log for record {record_id} after 3 attempts.")
+                return
+            sleep(1)
 
     old_log = str(current.get("fields", {}).get("message_log", "")).strip()
 
-    # Append new message
     combined_log = f"{old_log}\n{sender_clean}: {message}".strip()
 
-    # Enforce Airtable limit
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
 
     logger.info(f"📚 Appending to message log for record {record_id}")
     logger.debug(f"📝 New message_log length: {len(combined_log)} characters")
 
-    # Push update to Airtable
     update_quote_record(record_id, {
         "message_log": combined_log
     })
 
+# === Inline Quote Summary Helper ===
 
-# === Create New Quote ===
-
-def create_new_quote(session_id: str, force_new: bool = False):
+def get_inline_quote_summary(data: dict) -> str:
     """
-    Creates a new quote record in Airtable.
-    Returns: (quote_id, record_id, quote_stage, fields)
+    Generates a short, clean summary of the quote to show in chat.
+    Adds dynamic messaging based on price/time.
     """
-    logger.info(f"🚨 Checking for existing session: {session_id}")
 
-    # Check if quote already exists
-    existing = get_quote_by_session(session_id)
-    if existing and not force_new:
-        logger.warning("⚠️ Duplicate session detected. Returning existing quote.")
-        return existing
+    price = float(data.get("total_price", 0) or 0)
+    time_est = int(data.get("estimated_time_mins", 0) or 0)
+    note = str(data.get("note", "") or "").strip()
 
-    # Force create new session ID to avoid collision
-    if force_new:
-        logger.info("🔁 Force creating new quote despite duplicate session ID.")
-        session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
+    # Dynamic opening line based on price/time
+    if price > 800:
+        opening = "Looks like a big job! Here's your quote:\n\n"
+    elif price < 300:
+        opening = "Nice and quick job — here’s your quote:\n\n"
+    elif time_est > 360:
+        opening = "This one will take a fair while — here’s your quote:\n\n"
+    else:
+        opening = "All done! Here's your quote:\n\n"
 
-    quote_id = get_next_quote_id()
+    summary = (
+        f"{opening}"
+        f"💰 Total Price (incl. GST): ${price:.2f}\n"
+        f"⏰ Estimated Time: {time_est} minutes\n"
+    )
 
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
-    headers = {
-        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "fields": {
-            "session_id": session_id,
-            "quote_id": quote_id,
-            "quote_stage": "Gathering Info",
-            "message_log": "",
-        }
-    }
+    if note:
+        summary += f"📝 Note: {note}\n"
 
-    res = requests.post(url, headers=headers, json=data)
+    summary += (
+        "\nIf you'd like this in a PDF or want to make any changes, just let me know!"
+    )
 
-    if not res.ok:
-        logger.error(f"❌ FAILED to create quote: {res.status_code} {res.text}")
-        raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
-
-    record_id = res.json().get("id")
-
-    logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
-
-    # Append system trigger log
-    append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
-
-    return quote_id, record_id, "Gathering Info", {
-        "quote_stage": "Gathering Info",
-        "message_log": "",
-        "session_id": session_id
-    }
-
+    return summary
 
 # === GPT Extraction (Production-Grade) ===
 
@@ -503,13 +493,13 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     Applies merging logic with existing Airtable record.
     Returns: (field_updates: dict, reply: str)
     """
-
     import random
     import json
     import traceback
 
     try:
         logger.info("🧠 Calling GPT-4 to extract properties...")
+
         response = openai.ChatCompletion.create(
             model="gpt-4o",
             messages=[
@@ -539,6 +529,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
+        # Fetch Existing Fields
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -550,18 +541,17 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         field_updates = {}
         current_stage = existing.get("quote_stage", "")
 
+        # Process Props from GPT
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key, value = p["property"], p["value"]
 
-                # Don't overwrite protected stages
                 if key == "quote_stage" and current_stage in [
                     "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
                 ]:
                     continue
 
-                # Special Requests Merging
                 if key == "special_requests":
                     if str(value).lower().strip() in ["no", "none", "false", "no special requests", "n/a"]:
                         value = ""
@@ -569,7 +559,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     if old and value:
                         value = f"{old}\n{value}".strip()
 
-                # Special Request Minutes Accumulation
                 if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                     old = existing.get(key, 0)
                     try:
@@ -592,7 +581,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 elif field in BOOLEAN_FIELDS:
                     field_updates[field] = False
 
-        # Auto Set Carpet Cleaning Checkbox
+        # Auto Set carpet_cleaning Checkbox
         if any(
             int(field_updates.get(f, existing.get(f, 0) or 0)) > 0
             for f in [
@@ -663,44 +652,84 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
 
 
-# === Inline Quote Summary Helper ===
-
-def get_inline_quote_summary(data: dict) -> str:
-    """
-    Generates a short, clean summary of the quote to show in chat.
-    """
-    price = float(data.get("total_price", 0) or 0)
-    time_est = int(data.get("estimated_time_mins", 0) or 0)
-    note = str(data.get("note", "") or "").strip()
-
-    summary = (
-        "All done! Here's your quote:\n\n"
-        f"💰 Total Price (incl. GST): ${price:.2f}\n"
-        f"⏰ Estimated Time: {time_est} minutes\n"
-    )
-
-    if note:
-        summary += f"📝 Note: {note}\n"
-
-    summary += (
-        "\nIf you'd like this in a PDF or want to make any changes, just let me know!"
-    )
-
-    return summary
-
-
 # === Next Action Buttons Generator ===
 
-def generate_next_actions():
+def generate_next_actions() -> list[dict]:
     """
     Generates a list of next action buttons for the customer after quote calculation.
     """
     return [
-        {"action": "proceed_booking", "label": "Proceed to Booking"},
-        {"action": "download_pdf", "label": "Download PDF Quote"},
-        {"action": "email_pdf", "label": "Email PDF Quote"},
-        {"action": "ask_questions", "label": "Ask Questions or Change Parameters"}
+        {
+            "action": "proceed_booking",
+            "label": "Proceed to Booking"
+        },
+        {
+            "action": "download_pdf",
+            "label": "Download PDF Quote"
+        },
+        {
+            "action": "email_pdf",
+            "label": "Email PDF Quote"
+        },
+        {
+            "action": "ask_questions",
+            "label": "Ask Questions or Change Parameters"
+        }
     ]
+
+# === Create New Quote ===
+
+def create_new_quote(session_id: str, force_new: bool = False):
+    """
+    Creates a new quote record in Airtable.
+    Returns: (quote_id, record_id, quote_stage, fields)
+    """
+
+    logger.info(f"🚨 Checking for existing session: {session_id}")
+
+    existing = get_quote_by_session(session_id)
+    if existing and not force_new:
+        logger.warning("⚠️ Duplicate session detected. Returning existing quote.")
+        return existing
+
+    if force_new:
+        logger.info("🔁 Force creating new quote despite duplicate session ID.")
+        session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
+
+    quote_id = get_next_quote_id()
+
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    headers = {
+        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "fields": {
+            "session_id": session_id,
+            "quote_id": quote_id,
+            "quote_stage": "Gathering Info",
+            "message_log": "",
+        }
+    }
+
+    res = requests.post(url, headers=headers, json=data)
+
+    if not res.ok:
+        logger.error(f"❌ FAILED to create quote: {res.status_code} {res.text}")
+        raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
+
+    record_id = res.json().get("id")
+
+    logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
+
+    append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
+
+    return quote_id, record_id, "Gathering Info", {
+        "quote_stage": "Gathering Info",
+        "message_log": "",
+        "session_id": session_id
+    }
 
 # === GPT Error Email Alert ===
 
