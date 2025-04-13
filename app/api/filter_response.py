@@ -305,8 +305,7 @@ def update_quote_record(record_id: str, fields: dict):
     normalized_fields = {}
 
     for key, value in fields.items():
-        # Map internal keys to Airtable field names
-        key = FIELD_MAP.get(key, key)
+        key = FIELD_MAP.get(key, key)  # Map internal keys to Airtable field names
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
@@ -315,9 +314,9 @@ def update_quote_record(record_id: str, fields: dict):
         # Checkbox Fields → Must Be Boolean
         if key in BOOLEAN_FIELDS:
             safe_value = str(value).strip().lower()
-            value = safe_value in TRUE_VALUES  # Converts to True or False
+            value = safe_value in TRUE_VALUES  # True or False only
 
-        # Integer Fields → Must Be String for Airtable
+        # Integer Fields → Must Be Int (NOT String)
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -328,9 +327,7 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int, forcing 0")
                 value = 0
 
-            value = str(value)  # Force string for Airtable Text Field
-
-        # Text Fields → Normalize All Other Fields
+        # Text Fields → Force String
         else:
             if value is None or isinstance(value, bool):
                 value = ""
