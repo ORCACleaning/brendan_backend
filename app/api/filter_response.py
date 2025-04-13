@@ -728,7 +728,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     import random
 
     try:
-        logger.info("🧠 Calling GPT-4 to extract properties...")
+        logger.info("\U0001f9e0 Calling GPT-4 to extract properties...")
         response = client.chat.completions.create(
             model="gpt-4o",
             messages=[
@@ -743,7 +743,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             raise ValueError("No choices returned from GPT-4 response.")
 
         raw = response.choices[0].message.content.strip()
-        logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
+        logger.debug(f"\U0001f50d RAW GPT OUTPUT:\n{raw}")
 
         raw = raw.replace("```json", "").replace("```", "").strip()
         start, end = raw.find("{"), raw.rfind("}")
@@ -751,7 +751,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             raise ValueError("JSON block not found.")
 
         clean_json = raw[start:end+1]
-        logger.debug(f"\n📦 Clean JSON block before parsing:\n{clean_json}")
+        logger.debug(f"\n\U0001f4e6 Clean JSON block before parsing:\n{clean_json}")
 
         parsed = json.loads(clean_json)
         props = parsed.get("properties", [])
@@ -761,12 +761,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if field in parsed:
                 props.append({"property": field, "value": parsed[field]})
 
-        logger.debug(f"✅ Parsed props: {props}")
-        logger.debug(f"✅ Parsed reply: {reply}")
+        logger.debug(f"\u2705 Parsed props: {props}")
+        logger.debug(f"\u2705 Parsed reply: {reply}")
 
-        # Load existing Airtable fields if record_id is given
         field_updates = {}
         existing = {}
+
         if record_id:
             url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
             headers = {"Authorization": f"Bearer {AIRTABLE_API_KEY}"}
@@ -776,31 +776,28 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         current_stage = existing.get("quote_stage", "")
 
-        # Merge extracted properties
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key = p["property"]
                 value = p["value"]
 
-                # Prevent overwriting critical stages
                 if key == "quote_stage" and current_stage in [
                     "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
                 ]:
                     continue
 
-                # Don't clear special_requests after stage progression
                 if key in ["special_requests", "special_request_minutes_min", "special_request_minutes_max"]:
                     if current_stage not in ["Gathering Info"] and value in ["", None, 0, False]:
                         continue
 
-                # Proper merge for special_requests
                 if key == "special_requests":
+                    if str(value).lower().strip() in ["no", "none", "false", "no special requests", "n/a"]:
+                        value = ""
                     old = existing.get("special_requests", "")
                     if old and value:
                         value = f"{old}\n{value}".strip()
 
-                # Additive merge for special_request_minutes
                 if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                     old = existing.get(key, 0)
                     try:
@@ -808,13 +805,11 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     except:
                         value = int(value) if value else 0
 
-                # Trim strings
                 if isinstance(value, str):
                     value = value.strip()
 
                 field_updates[key] = value
 
-        # Force conversion for numeric fields
         force_int_fields = [
             "bedrooms_v2", "bathrooms_v2", "window_count",
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
@@ -828,20 +823,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 except:
                     field_updates[f] = 0
 
-        # Auto-set carpet_cleaning if any carpet fields > 0
         carpet_fields = [
-            "carpet_bedroom_count", "carpet_mainroom_count",
-            "carpet_study_count", "carpet_halway_count",
-            "carpet_stairs_count", "carpet_other_count"
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]
         if any(field_updates.get(f, existing.get(f, 0)) > 0 for f in carpet_fields):
             field_updates["carpet_cleaning"] = True
 
-        # Always enforce Gathering Info stage
         if current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
 
         if abuse_detected:
@@ -858,7 +849,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 return field_updates, final_message
             else:
                 field_updates["quote_stage"] = "Abuse Warning"
-                warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍"
+                warning = "Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful \U0001f44d"
                 reply = f"{warning}\n\n{reply}"
 
         return field_updates, reply.strip()
