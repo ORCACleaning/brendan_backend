@@ -297,7 +297,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # Normalize furnished field early
+    # Normalize furnished early
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -315,17 +315,17 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Normalize boolean fields
+        # Boolean (Checkbox fields in Airtable)
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
-                value = "true" if value else "false"
+                value = value
             elif value is None:
-                value = "false"
+                value = False
             else:
                 value = str(value).strip().lower()
-                value = "true" if value in {"true", "1", "yes"} else "false"
+                value = value in {"true", "1", "yes"}
 
-        # Normalize integer fields
+        # Integer
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -336,19 +336,17 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Normalize special_requests
+        # Special requests cleanup
         elif key == "special_requests":
             if not value or str(value).strip().lower() in {
                 "no", "none", "false", "no special requests", "n/a"
             }:
                 value = ""
 
-        # Normalize everything else
+        # Everything else
         else:
             if value is None:
                 value = ""
-            elif isinstance(value, bool):
-                value = "true" if value else "false"
             else:
                 value = str(value).strip()
 
@@ -371,7 +369,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
     logger.error(f"🧾 Error response: {res.json()}")
 
-    # Fallback: field-by-field
+    # Fallback field-by-field
     successful_fields = []
     for key, value in normalized_fields.items():
         single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
@@ -511,12 +509,18 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 key, value = p["property"], p["value"]
 
                 if key in BOOLEAN_FIELDS:
-                    if isinstance(value, bool):
-                        value = "true" if value else "false"
-                    elif not isinstance(value, str):
-                        value = str(value).strip().lower()
-                        if value not in {"true", "false"}:
-                            value = "false"
+                    if isinstance(value, str):
+                        value = value.strip().lower()
+                        if value == "true":
+                            value = True
+                        elif value == "false":
+                            value = False
+                        else:
+                            value = False
+                    elif isinstance(value, bool):
+                        value = value
+                    else:
+                        value = bool(value)
 
                 if key == "quote_stage" and current_stage in [
                     "Gathering Personal Info", "Personal Info Received",
@@ -544,26 +548,28 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         # ✅ Force is_property_manager if customer said it in message
         if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
-            field_updates["is_property_manager"] = "true"
+            field_updates["is_property_manager"] = True
 
-        # Auto-fill any missing required fields with safe defaults
+        # Auto-fill missing required fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
                     field_updates[field] = 0
+                elif field in BOOLEAN_FIELDS:
+                    field_updates[field] = False
                 elif field == "special_requests":
                     field_updates[field] = ""
-                elif field in BOOLEAN_FIELDS:
-                    field_updates[field] = "false"
+                else:
+                    field_updates[field] = ""
 
-        # Force carpet_cleaning = true if any carpet_* count > 0
+        # Force carpet_cleaning = true if any carpet_* field > 0
         if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
             "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]):
-            field_updates["carpet_cleaning"] = "true"
+            field_updates["carpet_cleaning"] = True
 
-        # Required fields to trigger quote calculation
+        # Required fields to trigger quote
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -582,7 +588,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if field == "special_requests":
                 if str(val).strip().lower() not in ["", "false", "none", "no", "n/a"]:
                     continue
-            if val in [None, ""]:
+            if val in [None, "", False]:
                 missing_fields.append(field)
 
         logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
@@ -621,6 +627,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 # === Create New Quote ===
 
@@ -855,18 +862,19 @@ async def filter_response_entry(request: Request):
                 logger.error("❌ Quote Response missing during summary generation.")
                 raise HTTPException(status_code=500, detail="Failed to calculate quote.")
 
-            # Sanity check: Ensure core calculated fields are valid
-            required_calculated_fields = [
+            # Verify calculated fields are valid
+            required_calc_fields = [
                 "total_price", "estimated_time_mins", "base_hourly_rate",
                 "discount_applied", "gst_applied"
             ]
-            missing_calc = [f for f in required_calculated_fields if not getattr(quote_response, f, None)]
+            missing_calc = [f for f in required_calc_fields if not getattr(quote_response, f, None)]
 
             if missing_calc:
-                logger.warning(f"⛔ Skipping Quote Calculated stage — missing: {missing_calc}")
+                logger.warning(f"⛔ Skipping Quote Calculated stage — missing calculated fields: {missing_calc}")
                 update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
+
                 return JSONResponse(content={
                     "properties": list(props_dict.keys()),
                     "response": reply,
@@ -874,7 +882,7 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-            # All good — proceed to update
+            # Proceed with Quote
             perth_tz = pytz.timezone("Australia/Perth")
             expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
             expiry_str = expiry_date.strftime("%Y-%m-%d")
