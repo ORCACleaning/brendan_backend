@@ -529,6 +529,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         ):
             field_updates["carpet_cleaning"] = True
 
+        # Required fields for quote calculation
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -541,13 +542,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "special_request_minutes_min", "special_request_minutes_max"
         ]
 
-        # Check if all required fields are filled
         missing_fields = []
         for field in required_fields:
             val = field_updates.get(field, existing.get(field, ""))
             if field == "special_requests":
-                if val not in ["", False]:
-                    continue
+                if str(val).strip().lower() not in ["", "false", "none", "no", "n/a"]:
+                    continue  # Considered filled
             if val in [None, ""]:
                 missing_fields.append(field)
 
