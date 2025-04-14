@@ -154,6 +154,7 @@ If customer asks for other services — say:
 - If any carpet_* field > 0:
 ```json
 { "property": "carpet_cleaning", "value": true }
+"""
 
 # === Airtable Field Rules ===
 
@@ -421,10 +422,11 @@ def get_inline_quote_summary(data: dict) -> str:
     summary += f"⏰ Estimated Time: ~{hours_per_cleaner_rounded} hour(s) per cleaner with {cleaners} cleaner(s)\n"
 
     if discount > 0:
-        summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% off Vacate Cleans (until end of May)"
+        summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special"
         if str(data.get("is_property_manager", "")).lower() in ["true", "1"]:
-            summary += " + extra 5% for Property Managers"
+            summary += " (+5% Property Manager Bonus)"
         summary += "\n"
+
 
     # List selected cleaning options
     selected = []
@@ -502,7 +504,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     import traceback
 
     try:
-        logger.info("🧠 Calling GPT-4 to extract properties...")
+        logger.info("🧑‍🧪 Calling GPT-4 to extract properties...")
 
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -540,13 +542,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 existing = res.json().get("fields", {})
 
         logger.warning(f"🔍 Existing Airtable Fields: {existing}")
+
         current_stage = existing.get("quote_stage", "")
         field_updates = {}
 
-        # Parse GPT Properties
         for p in props:
             if not isinstance(p, dict) or "property" not in p or "value" not in p:
                 continue
+
             key, value = p["property"], p["value"]
 
             if key in BOOLEAN_FIELDS:
@@ -578,17 +581,19 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         field_updates["source"] = "Brendan"
 
-        # Property Manager Logic
-        if field_updates.get("is_property_manager") or existing.get("is_property_manager"):
-            if "number_of_sessions" not in field_updates and "number_of_sessions" not in existing:
-                reply = (
-                    "No worries! How many sessions would you like to book for this property? "
-                    "Let me know if it's just 1 or more."
-                )
-                field_updates["number_of_sessions"] = 1  # Default until user confirms
-                return field_updates, reply
+        if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
+            field_updates["is_property_manager"] = True
 
-        # Auto-fill missing fields
+        if (field_updates.get("is_property_manager") or existing.get("is_property_manager")) and not (
+            field_updates.get("number_of_sessions") or existing.get("number_of_sessions")
+        ):
+            reply = (
+                "No worries! How many sessions would you like to book for this property? "
+                "Let me know if it's just 1 or more."
+            )
+            field_updates["number_of_sessions"] = 1
+            return field_updates, reply
+
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -643,11 +648,9 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         if not missing:
             field_updates["quote_stage"] = "Quote Calculated"
-
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -831,46 +834,199 @@ def append_message_log(record_id: str, message: str, sender: str):
     update_quote_record(record_id, {"message_log": combined_log})
 
 
-# === Brendan Main Route Handler ===
-# === Handle PDF Request After Quote Calculation ===
-if stage == "Quote Calculated" and message.lower() in [
-    "pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"
-]:
-    update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
-    append_message_log(record_id, message, "user")
+@router.post("/filter-response")
+async def filter_response_entry(request: Request):
+    """
+    Brendan's main route handler.
+    Handles session start, GPT field extraction, quote calculation, abuse handling, PDF flow.
+    """
 
-    reply = (
-        "No worries — before I collect your name, email, and phone number to send the PDF quote, "
-        "just letting you know we respect your privacy. "
-        "I won’t ask for any sensitive info like bank details — just your contact details for this quote.\n\n"
-        "Do I have your permission to collect these details?"
-    )
-    append_message_log(record_id, reply, "brendan")
+    try:
+        body = await request.json()
+        message = str(body.get("message", "")).strip()
+        session_id = str(body.get("session_id", "")).strip()
 
-    return JSONResponse(content={
-        "properties": [],
-        "response": reply,
-        "next_actions": [],
-        "session_id": session_id
-    })
+        if not session_id:
+            raise HTTPException(status_code=400, detail="Session ID is required.")
 
-# === Handle Privacy Acknowledgement Before Asking Personal Info ===
-if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
-    if message.lower() in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
-        update_quote_record(record_id, {"privacy_acknowledged": True})
-        reply = "Great! Could you please provide your name, email, and phone number so I can send the PDF quote?"
-    else:
-        reply = (
-            "No problem — we only need your name, email, and phone number to send the quote. "
-            "Let me know if you'd like to continue or if you have any questions about our privacy policy."
-        )
+        # === New Quote Flow ===
+        if message.lower() == "__init__":
+            existing = get_quote_by_session(session_id)
+            if existing:
+                quote_id, record_id, stage, fields = existing
+            else:
+                quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
+                session_id = fields.get("session_id", session_id)
 
-    append_message_log(record_id, message, "user")
-    append_message_log(record_id, reply, "brendan")
+            intro_message = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, intro_message, "brendan")
 
-    return JSONResponse(content={
-        "properties": [],
-        "response": reply,
-        "next_actions": [],
-        "session_id": session_id
-    })
+            return JSONResponse(content={
+                "properties": [],
+                "response": intro_message,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # === Existing Quote Flow ===
+        quote_id, record_id, stage, fields = get_quote_by_session(session_id)
+        if not record_id:
+            raise HTTPException(status_code=404, detail="Quote not found.")
+
+        log = fields.get("message_log", "")
+
+        if stage == "Chat Banned":
+            return JSONResponse(content={
+                "properties": [],
+                "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.",
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # === Handle PDF Request After Quote Calculation ===
+        if stage == "Quote Calculated" and message.lower() in [
+            "pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"
+        ]:
+            update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
+            append_message_log(record_id, message, "user")
+
+            reply = (
+                "No worries — before I collect your name, email, and phone number to send the PDF quote, "
+                "just letting you know we respect your privacy. "
+                "I won’t ask for any sensitive info like bank details — just your contact details for this quote.\n\n"
+                "Do I have your permission to collect these details?"
+            )
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # === Handle Privacy Acknowledgement Before Asking Personal Info ===
+        if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
+            if message.lower() in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
+                update_quote_record(record_id, {"privacy_acknowledged": True})
+                reply = "Great! Could you please provide your name, email, and phone number so I can send the PDF quote?"
+            else:
+                reply = (
+                    "No problem — we only need your name, email, and phone number to send the quote. "
+                    "Let me know if you'd like to continue or if you have any questions about our privacy policy."
+                )
+
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # === Auto Trigger PDF Generation After Personal Info Collected ===
+        if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False) and all([
+            fields.get("customer_name"),
+            fields.get("customer_email"),
+            fields.get("customer_phone")
+        ]):
+            update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
+            handle_pdf_and_email(record_id)
+
+            reply = (
+                "Thanks so much — I’ve sent your quote through to your email! "
+                "Let me know if there’s anything else I can help with."
+            )
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # === Prepare GPT Log Context ===
+        updated_log = f"{log}\nUSER: {message}".strip()[-LOG_TRUNCATE_LENGTH:]
+
+        # === GPT Field Extraction ===
+        props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
+
+        # === Abuse Handling ===
+        if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
+            update_quote_record(record_id, props_dict)
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": list(props_dict.keys()),
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # === Quote Calculation Trigger ===
+        if props_dict.get("quote_stage") == "Quote Calculated":
+            from app.services.quote_logic import QuoteRequest, calculate_quote
+
+            merged_fields = {**fields, **props_dict}
+            quote_request = QuoteRequest(**merged_fields)
+            quote_response = calculate_quote(quote_request)
+            quote_response.quote_id = quote_id
+
+            if not quote_response:
+                logger.error("❌ Quote Response missing during summary generation.")
+                raise HTTPException(status_code=500, detail="Failed to calculate quote.")
+
+            perth_tz = pytz.timezone("Australia/Perth")
+            expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
+            expiry_str = expiry_date.strftime("%Y-%m-%d")
+
+            update_quote_record(record_id, {
+                **props_dict,
+                "total_price": quote_response.total_price,
+                "estimated_time_mins": quote_response.estimated_time_mins,
+                "base_hourly_rate": quote_response.base_hourly_rate,
+                "discount_applied": quote_response.discount_applied,
+                "gst_applied": quote_response.gst_applied,
+                "price_per_session": quote_response.total_price,
+                "quote_expiry_date": expiry_str
+            })
+
+            summary = get_inline_quote_summary(quote_response.dict())
+
+            reply = (
+                "Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n"
+                f"{summary}\n\n"
+                f"⚠️ This quote is valid until {expiry_str}. If it expires, just let me know your quote number and I’ll whip up a new one for you."
+            )
+
+            append_message_log(record_id, message, "user")
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": list(props_dict.keys()),
+                "response": reply,
+                "next_actions": generate_next_actions(),
+                "session_id": session_id
+            })
+
+        # === Continue Gathering Info Stage ===
+        update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
+        append_message_log(record_id, message, "user")
+        append_message_log(record_id, reply, "brendan")
+
+        return JSONResponse(content={
+            "properties": list(props_dict.keys()),
+            "response": reply,
+            "next_actions": [],
+            "session_id": session_id
+        })
+
+    except Exception as e:
+        logger.error(f"❌ Exception in filter_response_entry: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")
