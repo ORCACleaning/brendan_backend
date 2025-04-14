@@ -211,9 +211,20 @@ INTEGER_FIELDS = {
 
 # Fields that must always be Boolean True/False
 BOOLEAN_FIELDS = {
-    "oven_cleaning", "window_cleaning", "blind_cleaning", "garage_cleaning",
-    "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-    "mandurah_property", "carpet_cleaning"
+    "oven_cleaning",
+    "window_cleaning",
+    "blind_cleaning",
+    "garage_cleaning",
+    "balcony_cleaning",
+    "upholstery_cleaning",
+    "deep_cleaning",
+    "fridge_cleaning",
+    "range_hood_cleaning",
+    "wall_cleaning",
+    "after_hours_cleaning",
+    "weekend_cleaning",
+    "mandurah_property",
+    "carpet_cleaning"
 }
 
 # Trigger Words for Abuse Detection (Escalation Logic)
@@ -286,7 +297,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     MAX_REASONABLE_INT = 100
 
-    # Handle 'furnished' field more gracefully
+    # Handle 'furnished' field normalization
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -297,8 +308,8 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
-    # Normalize fields
     normalized_fields = {}
+
     for key, value in fields.items():
         key = FIELD_MAP.get(key, key)
 
@@ -306,16 +317,16 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Normalize Boolean Fields
+        # Boolean Field Handling
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass  # Already boolean
             elif value is None:
-                value = False  # None becomes False
+                value = False
             else:
                 value = str(value).strip().lower() in {"true", "1", "yes"}
 
-        # Normalize Integer Fields
+        # Integer Field Handling
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -326,12 +337,12 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Normalize Special Case Fields
+        # Special Case: special_requests Field
         elif key == "special_requests":
             if not value or str(value).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
                 value = ""
 
-        # Normalize Other Fields
+        # Other Fields
         else:
             if value is None:
                 value = ""  # Force empty string
@@ -351,25 +362,24 @@ def update_quote_record(record_id: str, fields: dict):
 
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
-    # If update fails, retry each field individually
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
         return list(normalized_fields.keys())
-    else:
-        logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
-        logger.error(f"🧾 Error response: {res.json()}")
 
-        # Retry field-by-field to find problem
-        successful_fields = []
-        for key, value in normalized_fields.items():
-            single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
-            if single_res.ok:
-                logger.info(f"✅ Field '{key}' updated successfully.")
-                successful_fields.append(key)
-            else:
-                logger.error(f"❌ Field '{key}' failed to update.")
+    logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
+    logger.error(f"🧾 Error response: {res.json()}")
 
-        return successful_fields
+    # Retry field-by-field if bulk update fails
+    successful_fields = []
+    for key, value in normalized_fields.items():
+        single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
+        if single_res.ok:
+            logger.info(f"✅ Field '{key}' updated successfully.")
+            successful_fields.append(key)
+        else:
+            logger.error(f"❌ Field '{key}' failed to update.")
+
+    return successful_fields
 
 
 # === Inline Quote Summary Helper ===
@@ -466,7 +476,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key, value = p["property"], p["value"]
 
-                # Only prevent quote_stage overwrite if already past calculation
                 if key == "quote_stage" and current_stage in [
                     "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
@@ -491,10 +500,9 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     value = value.strip()
 
                 logger.warning(f"🚨 Updating Field: {key} = {value}")
-
                 field_updates[key] = value
 
-        # Force-fill missing fields with safe defaults
+        # Auto-fill missing fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -518,6 +526,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         ):
             field_updates["carpet_cleaning"] = True
 
+        # Check required fields for quote calculation
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
