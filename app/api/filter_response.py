@@ -294,8 +294,9 @@ def update_quote_record(record_id: str, fields: dict):
     }
 
     MAX_REASONABLE_INT = 100
+    normalized_fields = {}
 
-    # Normalize "furnished" text values
+    # Normalize furnished field early
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -306,17 +307,14 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
-    normalized_fields = {}
-
     for key, value in fields.items():
-        # Resolve Airtable-safe name
         key = FIELD_MAP.get(key, key)
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # BOOLEAN FIELDS
+        # Normalize boolean fields
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 value = "true" if value else "false"
@@ -326,7 +324,7 @@ def update_quote_record(record_id: str, fields: dict):
                 value = str(value).strip().lower()
                 value = "true" if value in {"true", "1", "yes"} else "false"
 
-        # INTEGER FIELDS
+        # Normalize integer fields
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -337,12 +335,14 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # SPECIAL REQUEST FIELD
+        # Normalize special_requests
         elif key == "special_requests":
-            if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
+            if not value or str(value).strip().lower() in {
+                "no", "none", "false", "no special requests", "n/a"
+            }:
                 value = ""
 
-        # TEXT / OTHER FIELDS
+        # Normalize everything else
         else:
             if value is None:
                 value = ""
@@ -360,7 +360,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Bulk PATCH
+    # Attempt bulk update
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
     if res.ok:
@@ -370,7 +370,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
     logger.error(f"🧾 Error response: {res.json()}")
 
-    # Fallback to individual fields
+    # Fallback: field-by-field
     successful_fields = []
     for key, value in normalized_fields.items():
         single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
