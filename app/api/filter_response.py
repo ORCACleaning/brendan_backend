@@ -288,6 +288,8 @@ def get_quote_by_session(session_id: str):
 # === Update Quote Record ===
 
 def update_quote_record(record_id: str, fields: dict):
+    import json
+
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
@@ -297,7 +299,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # Normalize furnished early
+    # === Normalize furnished field early ===
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -315,17 +317,16 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Boolean (Checkbox fields in Airtable)
+        # === Boolean Checkbox Fields ===
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
-                value = value
+                pass  # keep as-is
             elif value is None:
                 value = False
             else:
-                value = str(value).strip().lower()
-                value = value in {"true", "1", "yes"}
+                value = str(value).strip().lower() in {"true", "1", "yes"}
 
-        # Integer
+        # === Integer Fields ===
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -336,19 +337,16 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Special requests cleanup
+        # === Special Request Cleanup ===
         elif key == "special_requests":
             if not value or str(value).strip().lower() in {
                 "no", "none", "false", "no special requests", "n/a"
             }:
                 value = ""
 
-        # Everything else
+        # === Default String Normalization ===
         else:
-            if value is None:
-                value = ""
-            else:
-                value = str(value).strip()
+            value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
 
@@ -359,27 +357,29 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Attempt bulk update
+    # === Attempt Full Patch First ===
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
-
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
         return list(normalized_fields.keys())
 
     logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
-    logger.error(f"🧾 Error response: {res.json()}")
+    try:
+        logger.error(f"🧾 Error response: {res.json()}")
+    except Exception:
+        logger.error("🧾 Error response: (Non-JSON)")
 
-    # Fallback field-by-field
-    successful_fields = []
+    # === Fallback: Field-by-field retry ===
+    successful = []
     for key, value in normalized_fields.items():
-        single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
-        if single_res.ok:
+        single = requests.patch(url, headers=headers, json={"fields": {key: value}})
+        if single.ok:
             logger.info(f"✅ Field '{key}' updated successfully.")
-            successful_fields.append(key)
+            successful.append(key)
         else:
             logger.error(f"❌ Field '{key}' failed to update.")
 
-    return successful_fields
+    return successful
 
 
 # === Inline Quote Summary Helper ===
@@ -452,8 +452,8 @@ def generate_next_actions():
 # === GPT Extraction (Production-Grade) ===
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
-    import random
     import json
+    import random
     import traceback
 
     try:
@@ -486,11 +486,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
-        for p in props:
-            if p.get("property") == "special_requests":
-                if not p["value"] or str(p["value"]).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
-                    p["value"] = ""
-
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -503,53 +498,51 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         current_stage = existing.get("quote_stage", "")
         field_updates = {}
 
+        # === Parse GPT Output Properties ===
         for p in props:
-            if isinstance(p, dict) and "property" in p and "value" in p:
-                key, value = p["property"], p["value"]
+            if not isinstance(p, dict) or "property" not in p or "value" not in p:
+                continue
 
-                if key in BOOLEAN_FIELDS:
-                    if isinstance(value, str):
-                        value = value.strip().lower()
-                        if value == "true":
-                            value = True
-                        elif value == "false":
-                            value = False
-                        else:
-                            value = False
-                    elif isinstance(value, bool):
-                        value = value
-                    else:
-                        value = bool(value)
+            key, value = p["property"], p["value"]
 
-                if key == "quote_stage" and current_stage in [
-                    "Gathering Personal Info", "Personal Info Received",
-                    "Booking Confirmed", "Referred to Office"
-                ]:
-                    continue
-
-                if key in ["special_request_minutes_min", "special_request_minutes_max"]:
-                    old = existing.get(key, 0)
-                    try:
-                        value = int(value) + int(old)
-                    except:
-                        value = int(value) if value else 0
-
-                if key == "special_requests":
-                    old = existing.get("special_requests", "")
-                    if old and value:
-                        value = f"{old}\n{value}".strip()
-
+            if key in BOOLEAN_FIELDS:
                 if isinstance(value, str):
+                    value = value.strip().lower() in ["true", "yes"]
+                else:
+                    value = bool(value)
+
+            if key in INTEGER_FIELDS:
+                try:
+                    value = int(value)
+                except:
+                    value = 0
+
+            if key == "special_requests":
+                if not value or str(value).strip().lower() in ["no", "none", "false", "n/a"]:
+                    value = ""
+                old = existing.get("special_requests", "")
+                if old and value and value not in old:
+                    value = f"{old}\n{value}".strip()
+                elif not old:
                     value = value.strip()
 
-                logger.warning(f"🚨 Updating Field: {key} = {value}")
-                field_updates[key] = value
+            if key == "quote_stage" and current_stage in [
+                "Gathering Personal Info", "Personal Info Received",
+                "Booking Confirmed", "Referred to Office"
+            ]:
+                continue
 
-        # ✅ Force is_property_manager if customer said it in message
+            field_updates[key] = value
+            logger.warning(f"🚨 Updating Field: {key} = {value}")
+
+        # === Force Source Field ===
+        field_updates["source"] = "Brendan"
+
+        # === Auto-set is_property_manager if detected in message ===
         if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
             field_updates["is_property_manager"] = True
 
-        # Auto-fill missing required fields with safe defaults
+        # === Auto-fill Missing Required Fields ===
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -561,14 +554,21 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates[field] = ""
 
-        # Force carpet_cleaning = true if any carpet_* field > 0
+        # === Set Special Request Minutes if Missing ===
+        if field_updates.get("special_requests") and (
+            not field_updates.get("special_request_minutes_min") and not existing.get("special_request_minutes_min")
+        ):
+            field_updates["special_request_minutes_min"] = 30
+            field_updates["special_request_minutes_max"] = 60
+
+        # === Force Carpet Cleaning True if any Carpet Count > 0 ===
         if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
             "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]):
             field_updates["carpet_cleaning"] = True
 
-        # Required fields to trigger quote
+        # === Determine If Ready to Calculate Quote ===
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -581,23 +581,22 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "special_request_minutes_min", "special_request_minutes_max"
         ]
 
-        missing_fields = []
-        for field in required_fields:
-            val = field_updates.get(field, existing.get(field, ""))
-            if field == "special_requests":
-                if str(val).strip().lower() not in ["", "false", "none", "no", "n/a"]:
-                    continue
+        missing = []
+        for f in required_fields:
+            val = field_updates.get(f, existing.get(f, ""))
+            if f == "special_requests" and str(val).strip().lower() in ["", "none", "no", "false", "n/a"]:
+                continue
             if val in [None, "", False]:
-                missing_fields.append(field)
+                missing.append(f)
 
-        logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
+        logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing}")
 
-        if not missing_fields:
+        if not missing:
             field_updates["quote_stage"] = "Quote Calculated"
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # Abuse detection and escalation
+        # === Abuse Detection and Escalation ===
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
