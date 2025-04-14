@@ -442,7 +442,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         )
 
         if not response.choices:
-            raise ValueError("No choices returned from GPT-4 response.")
+            raise ValueError("No choices returned from GPT-4.")
 
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
@@ -452,15 +452,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if start == -1 or end == -1:
             raise ValueError("JSON block not found.")
 
-        clean_json = raw[start:end + 1]
-        parsed = json.loads(clean_json)
-
+        parsed = json.loads(raw[start:end + 1])
         props = parsed.get("properties", [])
         reply = parsed.get("response", "")
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
-        # Force special_requests early fix
         for p in props:
             if p.get("property") == "special_requests":
                 if not p["value"] or str(p["value"]).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
@@ -475,18 +472,20 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 existing = res.json().get("fields", {})
 
         logger.warning(f"🔍 Existing Airtable Fields: {existing}")
-
-        field_updates = {}
         current_stage = existing.get("quote_stage", "")
+        field_updates = {}
 
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key, value = p["property"], p["value"]
 
-                # Force boolean fields to be "true" / "false" strings
                 if key in BOOLEAN_FIELDS:
                     if isinstance(value, bool):
                         value = "true" if value else "false"
+                    elif not isinstance(value, str):
+                        value = str(value).strip().lower()
+                        if value not in {"true", "false"}:
+                            value = "false"
 
                 if key == "quote_stage" and current_stage in [
                     "Gathering Personal Info", "Personal Info Received",
@@ -512,7 +511,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 logger.warning(f"🚨 Updating Field: {key} = {value}")
                 field_updates[key] = value
 
-        # Auto-fill missing fields
+        # Auto-fill any missing required fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -522,21 +521,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 elif field in BOOLEAN_FIELDS:
                     field_updates[field] = "false"
 
-        # Auto-set carpet_cleaning if any carpet fields > 0
-        if any(
-            int(field_updates.get(f, existing.get(f, 0) or 0)) > 0
-            for f in [
-                "carpet_bedroom_count",
-                "carpet_mainroom_count",
-                "carpet_study_count",
-                "carpet_halway_count",
-                "carpet_stairs_count",
-                "carpet_other_count",
-            ]
-        ):
+        # Force carpet_cleaning = true if any carpet_* count > 0
+        if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
+        ]):
             field_updates["carpet_cleaning"] = "true"
 
-        # Required fields for quote calculation
+        # Required fields to trigger quote calculation
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -565,6 +557,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
+        # Abuse detection and escalation
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -593,6 +586,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 # === Create New Quote ===
 
