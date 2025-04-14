@@ -16,38 +16,48 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        env_file_encoding = "utf-8"
 
 
 settings = Settings()
 
-# === Setup Logging Directory ===
+# === Logging Setup ===
+
 LOG_DIR = "logs"
+LOG_FILE = os.path.join(LOG_DIR, "brendan.log")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# === Setup Logging ===
-LOG_FILE = os.path.join(LOG_DIR, "brendan.log")
+logger = logging.getLogger("brendan")
+logger.setLevel(logging.DEBUG)
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5),
-        logging.StreamHandler()
-    ]
+formatter = logging.Formatter(
+    "%(asctime)s - %(levelname)s - %(message)s"
 )
 
-logger = logging.getLogger("brendan")
+file_handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5)
+file_handler.setFormatter(formatter)
+
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 # === ENV Safety Check ===
-required_env_vars = [
-    settings.OPENAI_API_KEY,
-    settings.AIRTABLE_API_KEY,
-    settings.AIRTABLE_BASE_ID,
-    settings.SMTP_PASS
-]
 
-if not all(required_env_vars):
-    logger.error("❌ Critical ENV variables missing.")
-    raise RuntimeError("Missing critical ENV variables.")
+missing_env = []
 
-logger.info("✅ Config loaded successfully. Brendan is ready.")
+if not settings.OPENAI_API_KEY:
+    missing_env.append("OPENAI_API_KEY")
+if not settings.AIRTABLE_API_KEY:
+    missing_env.append("AIRTABLE_API_KEY")
+if not settings.AIRTABLE_BASE_ID:
+    missing_env.append("AIRTABLE_BASE_ID")
+if not settings.SMTP_PASS:
+    missing_env.append("SMTP_PASS")
+
+if missing_env:
+    logger.error(f"❌ Missing critical ENV variables: {', '.join(missing_env)}")
+    raise RuntimeError("Missing required environment variables.")
+
+logger.info("✅ Brendan config loaded and validated.")
