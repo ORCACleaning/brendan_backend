@@ -422,6 +422,48 @@ def get_inline_quote_summary(data: dict) -> str:
     return summary
 
 
+# === Generate Next Actions After Quote ===
+
+def generate_next_actions():
+    """
+    After quote is calculated, gives customer a list of options to proceed.
+    Brendan will:
+    - Ask if they want the quote as PDF
+    - Offer to email it
+    - Let them change anything
+    - Or contact the office
+    """
+    return [
+        {
+            "action": "offer_next_step",
+            "response": (
+                "Would you like me to generate a formal PDF quote, send it to your email, "
+                "or would you prefer to change anything in the quote?\n\n"
+                "If you’d rather speak with someone, you can also call the office on **1300 918 388** "
+                f"and mention your quote ID — I’ve got that saved for you."
+            ),
+            "options": [
+                {
+                    "label": "📄 Get PDF Quote",
+                    "value": "pdf_quote"
+                },
+                {
+                    "label": "📧 Email Me the Quote",
+                    "value": "email_quote"
+                },
+                {
+                    "label": "✏️ Edit the Quote",
+                    "value": "edit_quote"
+                },
+                {
+                    "label": "📞 Call the Office",
+                    "value": "call_office"
+                }
+            ]
+        }
+    ]
+
+
 # === GPT Extraction (Production-Grade) ===
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
