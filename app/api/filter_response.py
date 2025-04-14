@@ -172,7 +172,7 @@ VALID_AIRTABLE_FIELDS = {
     "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
     "garage_cleaning", "balcony_cleaning", "upholstery_cleaning",
     "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-    "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+    "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager",
 
     # Carpet Cleaning Breakdown
     "carpet_steam_clean",  # Legacy Field — auto-filled from carpet_* counts
@@ -224,7 +224,8 @@ BOOLEAN_FIELDS = {
     "after_hours_cleaning",
     "weekend_cleaning",
     "mandurah_property",
-    "carpet_cleaning"
+    "carpet_cleaning",
+    "is_property_manager"
 }
 
 # Trigger Words for Abuse Detection (Escalation Logic)
