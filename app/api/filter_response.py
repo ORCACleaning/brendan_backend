@@ -781,8 +781,8 @@ def append_message_log(record_id: str, message: str, sender: str):
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     """
-    Main route handler for Brendan quote chat.
-    Handles new sessions, message processing, abuse handling, quote calculation.
+    Brendan's main route handler.
+    Handles session start, GPT field extraction, quote calculation, abuse handling.
     """
 
     try:
@@ -793,7 +793,7 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # === Start New Quote ===
+        # === New Quote Flow ===
         if message.lower() == "__init__":
             existing = get_quote_by_session(session_id)
             if existing:
@@ -829,13 +829,13 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # Prepare Truncated Log for GPT
+        # === Prepare GPT Log Context ===
         updated_log = f"{log}\nUSER: {message}".strip()[-LOG_TRUNCATE_LENGTH:]
 
-        # Call GPT to Extract Properties
+        # === GPT Field Extraction ===
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
-        # === Abuse Handling Escalation ===
+        # === Abuse Handling ===
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
@@ -848,27 +848,28 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Quote Calculation Triggered ===
+        # === Quote Calculation Trigger ===
         if props_dict.get("quote_stage") == "Quote Calculated":
             from app.services.quote_logic import QuoteRequest, calculate_quote
 
             merged_fields = {**fields, **props_dict}
             quote_request = QuoteRequest(**merged_fields)
             quote_response = calculate_quote(quote_request)
+            quote_response.quote_id = quote_id  # FIX 3 Applied — force backend ID
 
             if not quote_response:
                 logger.error("❌ Quote Response missing during summary generation.")
                 raise HTTPException(status_code=500, detail="Failed to calculate quote.")
 
-            # Verify calculated fields are valid
-            required_calc_fields = [
+            # Ensure calculated fields exist
+            required_calc = [
                 "total_price", "estimated_time_mins", "base_hourly_rate",
                 "discount_applied", "gst_applied"
             ]
-            missing_calc = [f for f in required_calc_fields if not getattr(quote_response, f, None)]
+            missing_calc = [f for f in required_calc if not getattr(quote_response, f, None)]
 
             if missing_calc:
-                logger.warning(f"⛔ Skipping Quote Calculated stage — missing calculated fields: {missing_calc}")
+                logger.warning(f"⛔ Missing calculated fields: {missing_calc}")
                 update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
@@ -880,7 +881,7 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-            # Proceed with Quote
+            # Update Quote Record
             perth_tz = pytz.timezone("Australia/Perth")
             expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
             expiry_str = expiry_date.strftime("%Y-%m-%d")
