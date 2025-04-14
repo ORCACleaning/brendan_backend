@@ -69,6 +69,8 @@ If customer asks for other services — say:
 
 - We provide cleaning certificates for tenants.
 
+- If customer has glass roller doors they count as three windows each, make sure you let customer know about this. 
+
 ---
 
 ## OFFERS (Until June 2025)
