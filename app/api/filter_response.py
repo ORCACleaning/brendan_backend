@@ -301,6 +301,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
+    # === Normalize 'furnished' field to clean values ===
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -311,6 +312,7 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
+    # === Normalize All Fields ===
     for key, value in fields.items():
         key = FIELD_MAP.get(key, key)
 
@@ -321,7 +323,7 @@ def update_quote_record(record_id: str, fields: dict):
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass
-            elif value is None or value == "":
+            elif value in [None, ""]:
                 value = False
             else:
                 value = str(value).strip().lower() in {"true", "1", "yes"}
@@ -363,6 +365,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
+    # === Bulk Update First Attempt ===
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
@@ -374,10 +377,11 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception:
         logger.error("🧾 Error response: (Non-JSON)")
 
+    # === Fallback to Single Field Updates ===
     successful = []
     for key, value in normalized_fields.items():
-        single = requests.patch(url, headers=headers, json={"fields": {key: value}})
-        if single.ok:
+        single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
+        if single_res.ok:
             logger.info(f"✅ Field '{key}' updated successfully.")
             successful.append(key)
         else:
@@ -386,36 +390,73 @@ def update_quote_record(record_id: str, fields: dict):
     return successful
 
 
-
 # === Inline Quote Summary Helper ===
 
 def get_inline_quote_summary(data: dict) -> str:
     """
     Generates a short, clean summary of the quote to show in chat.
-    Adds dynamic messaging based on price/time.
+    Shows price, estimated time with number of cleaners, discount applied,
+    and lists all selected cleaning options.
     """
 
     price = float(data.get("total_price", 0) or 0)
-    time_est = int(data.get("estimated_time_mins", 0) or 0)
+    time_est_mins = int(data.get("estimated_time_mins", 0) or 0)
+    discount = float(data.get("discount_applied", 0) or 0)
     note = str(data.get("note", "") or "").strip()
+    special_requests = str(data.get("special_requests", "") or "").strip()
 
+    # Calculate cleaners required
+    hours = time_est_mins / 60
+    cleaners = max(1, (time_est_mins + 299) // 300)  # 5 hours max per cleaner
+    hours_per_cleaner = (hours / cleaners)
+    hours_per_cleaner_rounded = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
+
+    # Generate opening line based on job size
     if price > 800:
         opening = "Looks like a big job! Here's your quote:\n\n"
     elif price < 300:
         opening = "Nice and quick job — here’s your quote:\n\n"
-    elif time_est > 360:
+    elif time_est_mins > 360:
         opening = "This one will take a fair while — here’s your quote:\n\n"
     else:
         opening = "All done! Here's your quote:\n\n"
 
-    summary = (
-        f"{opening}"
-        f"💰 Total Price (incl. GST): ${price:.2f}\n"
-        f"⏰ Estimated Time: {time_est} minutes\n"
-    )
+    summary = f"{opening}"
+    summary += f"💰 Total Price (incl. GST): ${price:.2f}\n"
+    summary += f"⏰ Estimated Time: ~{hours_per_cleaner_rounded} hour(s) per cleaner with {cleaners} cleaner(s)\n"
+
+    if discount > 0:
+        summary += f"🏷️ Discount Applied: ${discount:.2f} — Online Quote Special\n"
+
+    # List selected cleaning options
+    selected = []
+
+    for field, label in {
+        "oven_cleaning": "Oven Cleaning",
+        "window_cleaning": "Window Cleaning",
+        "blind_cleaning": "Blind Cleaning",
+        "wall_cleaning": "Wall Cleaning",
+        "deep_cleaning": "Deep Cleaning",
+        "fridge_cleaning": "Fridge Cleaning",
+        "range_hood_cleaning": "Range Hood Cleaning",
+        "balcony_cleaning": "Balcony Cleaning",
+        "garage_cleaning": "Garage Cleaning",
+        "upholstery_cleaning": "Upholstery Cleaning",
+        "after_hours_cleaning": "After-Hours Cleaning",
+        "weekend_cleaning": "Weekend Cleaning",
+        "carpet_cleaning": "Carpet Steam Cleaning",
+    }.items():
+        if str(data.get(field, "")).lower() in ["true", "1"]:
+            selected.append(f"- {label}")
+
+    if special_requests:
+        selected.append(f"- Special Request: {special_requests}")
+
+    if selected:
+        summary += "\n🧹 Cleaning Included:\n" + "\n".join(selected) + "\n"
 
     if note:
-        summary += f"📝 Note: {note}\n"
+        summary += f"\n📜 Note: {note}\n"
 
     summary += (
         "\nThis quote is valid for 7 days.\n"
@@ -423,6 +464,7 @@ def get_inline_quote_summary(data: dict) -> str:
     )
 
     return summary
+
 
 # === Generate Next Actions After Quote ===
 
@@ -782,7 +824,7 @@ def append_message_log(record_id: str, message: str, sender: str):
 async def filter_response_entry(request: Request):
     """
     Brendan's main route handler.
-    Handles session start, GPT field extraction, quote calculation, abuse handling.
+    Handles session start, GPT field extraction, quote calculation, abuse handling, PDF flow.
     """
 
     try:
@@ -839,6 +881,28 @@ async def filter_response_entry(request: Request):
                 "No worries — I’ll just need your name, email, and phone number to send the PDF quote. "
                 "Could you please provide those details?"
             )
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # === Auto Trigger PDF Generation After Personal Info Received ===
+        if stage == "Gathering Personal Info" and all([
+            fields.get("customer_name"),
+            fields.get("customer_email"),
+            fields.get("customer_phone")
+        ]):
+            update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
+            handle_pdf_and_email(record_id)
+            reply = (
+                "Thanks so much — I’ve sent your quote through to your email! "
+                "Let me know if there’s anything else I can help with."
+            )
+            append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
             return JSONResponse(content={
