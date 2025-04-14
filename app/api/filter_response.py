@@ -69,21 +69,24 @@ If customer asks for other services — say:
 
 - We provide cleaning certificates for tenants.
 
-- If customer has glass roller doors they count as three windows each, make sure you let customer know about this. 
+- If customer has glass roller doors they count as three windows each — make sure you let them know.
 
 ---
 
-## OFFERS (Until June 2025)
+## CURRENT DISCOUNTS (Valid Until May 31, 2025)
 
-- 10% Off for everyone using online quote.  
-- Extra 5% Off if property manager booking.
+- ✅ 10% Off for all vacate cleans  
+- ✅ Extra 5% Off if booked by a **property manager**
 
 ---
 
-## PRIVACY RULES
+## PRIVACY + INFO RULES
 
-- Never ask for personal info (name, customer_phone, email) during quote stage.  
-- If customer asks about privacy — reply:  
+- Never ask for personal info (name, phone, email) during the quote stage.
+- Before asking for personal details, **Brendan must say**:
+> "Just so you know — we don’t ask for anything private like bank info. Only your name, email and phone so we can send the quote over. Your privacy is 100% respected."
+
+- If customer asks about privacy:
 > "No worries — we don’t collect personal info at this stage. You can read our Privacy Policy here: https://orcacleaning.com.au/privacy-policy"
 
 ---
@@ -122,18 +125,12 @@ If customer asks for other services — say:
 21. after_hours_cleaning  
 22. weekend_cleaning  
 23. mandurah_property  
-24. is_property_manager → if true, ask for real_estate_name  
+24. is_property_manager → if true, ask for:
+    - real_estate_name  
+    - number_of_sessions  
 25. special_requests  
 26. special_request_minutes_min  
 27. special_request_minutes_max  
-
----
-
-## STAGE RULES
-
-- When all fields are filled:  
-> Respond: "Thank you! I’ve got what I need to whip up your quote. Hang tight…"  
-> Set: "quote_stage": "Quote Calculated"
 
 ---
 
@@ -154,11 +151,9 @@ If customer asks for other services — say:
 - Ask: "Roughly how many bedrooms, living areas, studies or stairs have carpet?"  
 - Always populate carpet_* fields individually.
 
-- If any carpet_* field > 0:  
+- If any carpet_* field > 0:
 ```json
 { "property": "carpet_cleaning", "value": true }
-
-"""
 
 # === Airtable Field Rules ===
 
@@ -548,11 +543,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         current_stage = existing.get("quote_stage", "")
         field_updates = {}
 
-        # === Parse GPT Output Properties ===
+        # Parse GPT Properties
         for p in props:
             if not isinstance(p, dict) or "property" not in p or "value" not in p:
                 continue
-
             key, value = p["property"], p["value"]
 
             if key in BOOLEAN_FIELDS:
@@ -584,9 +578,17 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         field_updates["source"] = "Brendan"
 
-        if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
-            field_updates["is_property_manager"] = True
+        # Property Manager Logic
+        if field_updates.get("is_property_manager") or existing.get("is_property_manager"):
+            if "number_of_sessions" not in field_updates and "number_of_sessions" not in existing:
+                reply = (
+                    "No worries! How many sessions would you like to book for this property? "
+                    "Let me know if it's just 1 or more."
+                )
+                field_updates["number_of_sessions"] = 1  # Default until user confirms
+                return field_updates, reply
 
+        # Auto-fill missing fields
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -632,16 +634,20 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing}")
 
-        # === Always Ask for Special Requests if Missing ===
         if "special_requests" in missing:
-            reply = f"Awesome — before I whip up your quote, do you have any special requests for this clean (like inside microwave, extra windows, balcony door tracks etc)? Let me know if there’s anything extra."
+            reply = (
+                "Awesome — before I whip up your quote, do you have any special requests "
+                "(like inside microwave, extra windows, balcony door tracks etc)?"
+            )
+            return field_updates, reply
 
-        elif not missing:
+        if not missing:
             field_updates["quote_stage"] = "Quote Calculated"
 
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
+        # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -656,7 +662,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 return field_updates, reply
             else:
                 field_updates["quote_stage"] = "Abuse Warning"
-                reply = f"Just a heads-up — we can’t continue the quote if abusive language is used. Let’s keep things respectful 👍\n\n{reply}"
+                reply = (
+                    "Just a heads-up — we can’t continue the quote if abusive language is used. "
+                    "Let’s keep things respectful 👍\n\n" + reply
+                )
 
         return field_updates, reply.strip()
 
