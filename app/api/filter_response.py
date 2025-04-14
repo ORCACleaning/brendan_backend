@@ -419,7 +419,6 @@ def get_inline_quote_summary(data: dict) -> str:
 
     return summary
 
-
 # === Generate Next Actions After Quote ===
 
 def generate_next_actions():
@@ -889,12 +888,12 @@ async def filter_response_entry(request: Request):
 
             update_quote_record(record_id, {
                 **props_dict,
-                "quote_total": quote_response.total_price,
-                "quote_time_estimate": quote_response.estimated_time_mins,
-                "hourly_rate": quote_response.base_hourly_rate,
+                "total_price": quote_response.total_price,
+                "estimated_time_mins": quote_response.estimated_time_mins,
+                "base_hourly_rate": quote_response.base_hourly_rate,
                 "discount_percent": quote_response.discount_applied,
-                "gst_amount": quote_response.gst_applied,
-                "final_price": quote_response.total_price,
+                "gst_applied": quote_response.gst_applied,
+                "price_per_session": quote_response.total_price,
                 "quote_expiry_date": expiry_str
             })
 
