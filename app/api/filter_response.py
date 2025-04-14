@@ -460,7 +460,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
-        # Fix bad special_requests early
+        # Force special_requests early fix
         for p in props:
             if p.get("property") == "special_requests":
                 if not p["value"] or str(p["value"]).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
@@ -474,14 +474,19 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if res.ok:
                 existing = res.json().get("fields", {})
 
+        logger.warning(f"🔍 Existing Airtable Fields: {existing}")
+
         field_updates = {}
         current_stage = existing.get("quote_stage", "")
-
-        logger.warning(f"🔍 Existing Airtable Fields: {existing}")
 
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key, value = p["property"], p["value"]
+
+                # Force boolean fields to be "true" / "false" strings
+                if key in BOOLEAN_FIELDS:
+                    if isinstance(value, bool):
+                        value = "true" if value else "false"
 
                 if key == "quote_stage" and current_stage in [
                     "Gathering Personal Info", "Personal Info Received",
@@ -501,20 +506,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     if old and value:
                         value = f"{old}\n{value}".strip()
 
-                if key in BOOLEAN_FIELDS:
-                    if isinstance(value, bool):
-                        value = "true" if value else "false"
-                    else:
-                        value = str(value).strip().lower() in {"true", "1", "yes"}
-                        value = "true" if value else "false"
-
-                elif key in INTEGER_FIELDS:
-                    try:
-                        value = int(value)
-                    except:
-                        value = 0
-
-                elif isinstance(value, str):
+                if isinstance(value, str):
                     value = value.strip()
 
                 logger.warning(f"🚨 Updating Field: {key} = {value}")
@@ -530,7 +522,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 elif field in BOOLEAN_FIELDS:
                     field_updates[field] = "false"
 
-        # Auto-calculate carpet_cleaning
+        # Auto-set carpet_cleaning if any carpet fields > 0
         if any(
             int(field_updates.get(f, existing.get(f, 0) or 0)) > 0
             for f in [
@@ -544,6 +536,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         ):
             field_updates["carpet_cleaning"] = "true"
 
+        # Required fields for quote calculation
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -600,7 +593,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
 
 # === Create New Quote ===
 
