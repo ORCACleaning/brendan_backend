@@ -4,11 +4,10 @@ import base64
 from dotenv import load_dotenv
 
 from app.services.pdf_generator import generate_quote_pdf
-from app.api import filter_response  # For Airtable update
+from app.api import filter_response  # Airtable update logic
 
 load_dotenv()
 
-# === Microsoft Graph Auth Config ===
 MS_CLIENT_ID = os.getenv("MS_CLIENT_ID")
 MS_TENANT_ID = os.getenv("MS_TENANT_ID")
 MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET")
@@ -16,7 +15,6 @@ MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET")
 SENDER_EMAIL = "info@orcacleaning.com.au"
 
 
-# === Get MS Graph API Token ===
 def get_ms_access_token():
     url = f"https://login.microsoftonline.com/{MS_TENANT_ID}/oauth2/v2.0/token"
     data = {
@@ -30,7 +28,6 @@ def get_ms_access_token():
     return res.json()["access_token"]
 
 
-# === Basic Email Sending (No Attachment) ===
 def send_email_outlook(to_email: str, subject: str, body_html: str):
     access_token = get_ms_access_token()
     url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
@@ -38,43 +35,39 @@ def send_email_outlook(to_email: str, subject: str, body_html: str):
     payload = {
         "message": {
             "subject": subject,
-            "body": {
-                "contentType": "HTML",
-                "content": body_html
-            },
-            "toRecipients": [
-                {"emailAddress": {"address": to_email}}
-            ]
+            "body": {"contentType": "HTML", "content": body_html},
+            "toRecipients": [{"emailAddress": {"address": to_email}}],
         }
     }
 
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     res = requests.post(url, json=payload, headers=headers)
     if res.status_code == 202:
         print(f"✅ Email sent to {to_email}")
     else:
-        print("❌ Failed to send email:", res.status_code, res.text)
+        print(f"❌ Failed to send email ({res.status_code}): {res.text}")
 
 
-# === Quote Email with PDF Attachment ===
 def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id: str):
     access_token = get_ms_access_token()
     url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
 
     subject = f"Your Vacate Cleaning Quote from Orca Cleaning ({quote_id})"
 
+    booking_url = f"https://orcacleaning.com.au/schedule?quote_id={quote_id}"
+
     body_html = f"""
     <p>Hi {customer_name or 'there'},</p>
 
     <p>Thank you for requesting a quote with Orca Cleaning!</p>
 
-    <p>I’ve attached your vacate cleaning quote as a PDF. If you’d like to proceed with booking, simply reply to this email or click the link below:</p>
+    <p>I’ve attached your vacate cleaning quote as a PDF. If you’d like to proceed with booking, simply reply to this email or click below:</p>
 
-    <p><a href="https://orcacleaning.com.au/schedule?quote_id={quote_id}">Schedule My Cleaning</a></p>
+    <p><a href="{booking_url}">Schedule My Cleaning</a></p>
 
     <p>Let me know if you have any questions.</p>
 
@@ -87,43 +80,37 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
     payload = {
         "message": {
             "subject": subject,
-            "body": {
-                "contentType": "HTML",
-                "content": body_html
-            },
-            "toRecipients": [
-                {"emailAddress": {"address": to_email}}
-            ],
+            "body": {"contentType": "HTML", "content": body_html},
+            "toRecipients": [{"emailAddress": {"address": to_email}}],
             "attachments": [
                 {
                     "@odata.type": "#microsoft.graph.fileAttachment",
                     "name": os.path.basename(pdf_path),
-                    "contentBytes": pdf_data
+                    "contentBytes": pdf_data,
                 }
-            ]
+            ],
         }
     }
 
     headers = {
         "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     res = requests.post(url, json=payload, headers=headers)
     if res.status_code == 202:
         print(f"✅ Quote email sent to {to_email}")
     else:
-        print("❌ Failed to send quote email:", res.status_code, res.text)
+        print(f"❌ Failed to send quote email ({res.status_code}): {res.text}")
 
 
-# === PDF Generation + Email Sending Handler ===
 def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
     pdf_path = generate_quote_pdf(fields)
     customer_name = fields.get("customer_name", "there")
     to_email = fields.get("email")
 
     if not to_email:
-        print("❌ No customer email found — skipping PDF + Email sending.")
+        print(f"❌ No customer email found for Quote ID: {quote_id} — skipping email.")
         return
 
     print(f"📧 Generating PDF & Sending Email to {to_email} for Quote {quote_id}")
