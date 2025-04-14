@@ -14,28 +14,28 @@ AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
 QUOTE_ID_COUNTER_TABLE = "Quote ID Counter"
 
 
-# === Brendan Auto Quote ID ===
+# === Brendan Auto Quote ID (Chatbot Generated) ===
 def get_next_quote_id(prefix: str = "VC") -> str:
     """
-    Generates a timestamp-based quote_id for Brendan.
+    Generates a timestamp-based quote_id for Brendan (AI-generated quotes).
     Format: VC-YYMMDD-HHMMSS-RND
     Example: VC-250413-224512-491
     """
     now = datetime.now(pytz.timezone("Australia/Perth"))
     timestamp = now.strftime("%y%m%d-%H%M%S")
-    random_suffix = str(uuid.uuid4().int)[:3]  # Last 3 digits from UUID for randomness
+    random_suffix = str(uuid.uuid4().int)[-3:]  # Use last 3 digits for randomness
 
     quote_id = f"{prefix}-{timestamp}-{random_suffix}"
     logger.info(f"✅ Generated Brendan quote_id: {quote_id}")
     return quote_id
 
 
-# === Manual Admin Quote ID ===
+# === Admin Manual Quote ID (Sequential) ===
 def get_next_manual_quote_id() -> str:
     """
     Generates a sequential quote_id for admin-created quotes.
     Pulls & increments counter in Airtable.
-    Example: VC-000123
+    Format: VC-000123
     """
     url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{QUOTE_ID_COUNTER_TABLE}"
     headers = {
@@ -52,14 +52,14 @@ def get_next_manual_quote_id() -> str:
 
     records = res.json().get("records", [])
     if not records:
-        logger.error("❌ No counter record found in Airtable.")
+        logger.error("❌ No Quote ID Counter record found in Airtable.")
         raise HTTPException(status_code=500, detail="No Quote ID Counter record found.")
 
     record_id = records[0]["id"]
     current_counter = records[0]["fields"].get("counter", 0)
 
     next_counter = current_counter + 1
-    next_quote_id = f"VC-{str(next_counter).zfill(6)}"  # Pad to VC-000123
+    next_quote_id = f"VC-{str(next_counter).zfill(6)}"  # Format: VC-000123
 
     patch_res = requests.patch(
         f"{url}/{record_id}",
@@ -68,7 +68,7 @@ def get_next_manual_quote_id() -> str:
     )
 
     if not patch_res.ok:
-        logger.error(f"❌ Failed to update Airtable Counter: {patch_res.text}")
+        logger.error(f"❌ Failed to update Quote ID Counter: {patch_res.text}")
         raise HTTPException(status_code=500, detail="Failed to update Quote ID Counter.")
 
     logger.info(f"✅ Generated Manual quote_id: {next_quote_id}")
