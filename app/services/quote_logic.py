@@ -11,6 +11,7 @@ airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
 airtable_api_key = os.getenv("AIRTABLE_API_KEY")
 airtable_table = "Vacate Quotes"
 
+
 # === Generate Next Quote ID from Airtable ===
 def get_next_quote_id(prefix="VC"):
     url = f"https://api.airtable.com/v0/{airtable_base_id}/{airtable_table}"
@@ -57,25 +58,24 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     # Add extras time
     for service, time in EXTRA_SERVICE_TIMES.items():
-        if str(getattr(data, service, "false")).lower() == "true":
+        if getattr(data, service, False):
             base_minutes += time
 
-    # Window cleaning time
-    if str(data.window_cleaning).lower() == "true":
+    if data.window_cleaning:
         base_minutes += (data.window_count or 0) * 10
-        if str(data.blind_cleaning).lower() == "true":
+        if data.blind_cleaning:
             base_minutes += (data.window_count or 0) * 10
 
-    if str(data.oven_cleaning).lower() == "true":
+    if data.oven_cleaning:
         base_minutes += 30
 
-    if str(data.upholstery_cleaning).lower() == "true":
+    if data.upholstery_cleaning:
         base_minutes += 45
 
     if str(data.furnished).lower() == "furnished":
         base_minutes += 60
 
-    # Carpet logic — based on count fields only
+    # Carpet Logic
     base_minutes += (data.carpet_bedroom_count or 0) * 30
     base_minutes += (data.carpet_mainroom_count or 0) * 45
     base_minutes += (data.carpet_study_count or 0) * 25
@@ -83,7 +83,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     base_minutes += (data.carpet_stairs_count or 0) * 35
     base_minutes += (data.carpet_other_count or 0) * 30
 
-    # Handle Special Request Ranges
+    # Special Requests Handling
     min_total_mins = base_minutes
     max_total_mins = base_minutes
     note = None
@@ -99,14 +99,14 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
-    weekend_fee = WEEKEND_SURCHARGE if str(data.weekend_cleaning).lower() == "true" else 0
+    weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
     after_hours_fee = data.after_hours_surcharge or 0
-    mandurah_fee = MANDURAH_SURCHARGE if str(data.mandurah_property).lower() in ["yes", "true", "1"] else 0
+    mandurah_fee = MANDURAH_SURCHARGE if data.mandurah_property else 0
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
-    if str(data.is_property_manager).lower() == "true":
+    if data.is_property_manager:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
 
     discount_amount = round(total_before_discount * (total_discount_percent / 100), 2)
