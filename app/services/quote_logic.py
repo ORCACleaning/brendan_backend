@@ -105,8 +105,9 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
+    # Apply discounts
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
-    if data.is_property_manager:
+    if str(data.is_property_manager).strip().lower() in {"true", "yes", "1"}:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
 
     discount_amount = round(total_before_discount * (total_discount_percent / 100), 2)
