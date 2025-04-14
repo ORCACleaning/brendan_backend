@@ -344,18 +344,17 @@ def update_quote_record(record_id: str, fields: dict):
             }:
                 value = ""
 
+        elif key in {"gst_applied", "total_price", "base_hourly_rate", "price_per_session", "estimated_time_mins", "discount_applied"}:
+            try:
+                value = float(value)
+            except:
+                value = 0
+
         # === Default String Normalization ===
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
-
-    if not normalized_fields:
-        logger.info(f"⏩ No valid fields to update for record {record_id}")
-        return []
-
-    logger.info(f"\n📤 Updating Airtable Record: {record_id}")
-    logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
     # === Attempt Full Patch First ===
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
