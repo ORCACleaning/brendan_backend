@@ -276,6 +276,7 @@ def get_quote_by_session(session_id: str):
 # === Update Quote Record ===
 
 # Update the handling of balcony_cleaning and other similar fields
+
 def update_quote_record(record_id: str, fields: dict):
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
@@ -308,9 +309,9 @@ def update_quote_record(record_id: str, fields: dict):
         # Normalize Boolean Fields
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
-                pass  # Already a boolean
+                pass  # Already boolean
             elif value is None:
-                value = False  # Treat None as False
+                value = False  # None becomes False
             else:
                 value = str(value).strip().lower() in {"true", "1", "yes"}
 
@@ -325,10 +326,15 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Normalize other fields
+        # Normalize Special Case Fields
+        elif key == "special_requests":
+            if not value or str(value).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
+                value = ""
+
+        # Normalize Other Fields
         else:
             if value is None:
-                value = ""  # Use empty string for missing values
+                value = ""  # Force empty string
             elif isinstance(value, bool):
                 value = "true" if value else "false"
             else:
@@ -345,7 +351,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
 
-    # If update fails, retry each field individually to identify the problematic ones
+    # If update fails, retry each field individually
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
         return list(normalized_fields.keys())
@@ -353,7 +359,7 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
         logger.error(f"🧾 Error response: {res.json()}")
 
-        # Retry field-by-field update if bulk update fails
+        # Retry field-by-field to find problem
         successful_fields = []
         for key, value in normalized_fields.items():
             single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
@@ -362,7 +368,7 @@ def update_quote_record(record_id: str, fields: dict):
                 successful_fields.append(key)
             else:
                 logger.error(f"❌ Field '{key}' failed to update.")
-        
+
         return successful_fields
 
 
@@ -454,12 +460,15 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         field_updates = {}
         current_stage = existing.get("quote_stage", "")
 
+        logger.warning(f"🔍 Existing Airtable Fields: {existing}")
+
         for p in props:
             if isinstance(p, dict) and "property" in p and "value" in p:
                 key, value = p["property"], p["value"]
 
+                # Only prevent quote_stage overwrite if already past calculation
                 if key == "quote_stage" and current_stage in [
-                    "Quote Calculated", "Gathering Personal Info", "Personal Info Received",
+                    "Gathering Personal Info", "Personal Info Received",
                     "Booking Confirmed", "Referred to Office"
                 ]:
                     continue
@@ -481,8 +490,11 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 if isinstance(value, str):
                     value = value.strip()
 
+                logger.warning(f"🚨 Updating Field: {key} = {value}")
+
                 field_updates[key] = value
 
+        # Force-fill missing fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -492,6 +504,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 elif field in BOOLEAN_FIELDS:
                     field_updates[field] = False
 
+        # Auto-set carpet_cleaning if any carpet count > 0
         if any(
             int(field_updates.get(f, existing.get(f, 0) or 0)) > 0
             for f in [
@@ -522,8 +535,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if field_updates.get(f) in [None, ""] and existing.get(f) in [None, ""]
         ]
 
-        if missing_fields:
-            logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
+        logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
 
         if not missing_fields:
             field_updates["quote_stage"] = "Quote Calculated"
@@ -787,6 +799,7 @@ async def filter_response_entry(request: Request):
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
+
             return JSONResponse(content={
                 "properties": list(props_dict.keys()),
                 "response": reply,
@@ -798,6 +811,7 @@ async def filter_response_entry(request: Request):
         if props_dict.get("quote_stage") == "Quote Calculated":
             from app.services.quote_logic import QuoteRequest, calculate_quote
 
+            # Merge GPT updates with existing Airtable fields
             merged_fields = {**fields, **props_dict}
 
             quote_request = QuoteRequest(**merged_fields)
@@ -840,7 +854,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Continue Gathering Info ===
+        # === Continue Gathering Info Stage ===
         update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
         append_message_log(record_id, message, "user")
         append_message_log(record_id, reply, "brendan")
@@ -855,4 +869,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         logger.error(f"❌ Exception in filter_response_entry: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
