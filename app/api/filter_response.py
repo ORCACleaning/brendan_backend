@@ -65,7 +65,7 @@ You are **Brendan**, the quoting officer at **Orca Cleaning**, a professional cl
 If customer asks for other services — say:  
 > "We specialise in vacate cleaning here — but check out orcacleaning.com.au or call our office on 1300 818838 for other services."
 
-- Your boss is Behzad Bagheri, Managing Director of Orca Cleaning (Phone: 0431 002 469).
+- Your boss is Behzad Bagheri, Managing Director of Orca Cleaning (customer_phone: 0431 002 469).
 
 - We provide cleaning certificates for tenants.
 
@@ -80,7 +80,7 @@ If customer asks for other services — say:
 
 ## PRIVACY RULES
 
-- Never ask for personal info (name, phone, email) during quote stage.  
+- Never ask for personal info (name, customer_phone, email) during quote stage.  
 - If customer asks about privacy — reply:  
 > "No worries — we don’t collect personal info at this stage. You can read our Privacy Policy here: https://orcacleaning.com.au/privacy-policy"
 
@@ -175,7 +175,7 @@ VALID_AIRTABLE_FIELDS = {
     "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager",
 
     # Carpet Cleaning Breakdown
-    "carpet_steam_clean",  # Legacy Field — auto-filled from carpet_* counts
+    "carpet_cleaning",  # Legacy Field — auto-filled from carpet_* counts
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
     "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
     "carpet_cleaning",  # Auto-calculated Checkbox
@@ -184,11 +184,11 @@ VALID_AIRTABLE_FIELDS = {
     "special_requests", "special_request_minutes_min", "special_request_minutes_max", "extra_hours_requested",
 
     # Quote Result Fields
-    "quote_total", "quote_time_estimate", "hourly_rate", "gst_amount",
-    "discount_percent", "discount_reason", "final_price",
+    "total_price", "estimated_time_mins", "base_hourly_rate", "gst_applied",
+    "discount_applied", "discount_reason", "price_per_session",
 
     # Customer Details (After Quote)
-    "customer_name", "email", "phone", "business_name", "property_address",
+    "customer_name", "customer_email", "customer_phone", "real_estate_name", "property_address",
 
     # Outputs
     "pdf_link", "booking_url",
@@ -506,10 +506,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             key, value = p["property"], p["value"]
 
             if key in BOOLEAN_FIELDS:
-                if isinstance(value, str):
-                    value = value.strip().lower() in ["true", "yes"]
-                else:
-                    value = bool(value)
+                value = str(value).strip().lower() in {"true", "yes", "1"}
 
             if key in INTEGER_FIELDS:
                 try:
@@ -518,7 +515,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     value = 0
 
             if key == "special_requests":
-                if not value or str(value).strip().lower() in ["no", "none", "false", "n/a"]:
+                if not value or str(value).strip().lower() in {"no", "none", "false", "n/a"}:
                     value = ""
                 old = existing.get("special_requests", "")
                 if old and value and value not in old:
@@ -535,14 +532,11 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             field_updates[key] = value
             logger.warning(f"🚨 Updating Field: {key} = {value}")
 
-        # === Force Source Field ===
         field_updates["source"] = "Brendan"
 
-        # === Auto-set is_property_manager if detected in message ===
         if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
             field_updates["is_property_manager"] = True
 
-        # === Auto-fill Missing Required Fields ===
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -554,21 +548,18 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates[field] = ""
 
-        # === Set Special Request Minutes if Missing ===
         if field_updates.get("special_requests") and (
             not field_updates.get("special_request_minutes_min") and not existing.get("special_request_minutes_min")
         ):
             field_updates["special_request_minutes_min"] = 30
             field_updates["special_request_minutes_max"] = 60
 
-        # === Force Carpet Cleaning True if any Carpet Count > 0 ===
         if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
             "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]):
             field_updates["carpet_cleaning"] = True
 
-        # === Determine If Ready to Calculate Quote ===
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -591,12 +582,16 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing}")
 
-        if not missing:
+        # === Always Ask for Special Requests if Missing ===
+        if "special_requests" in missing:
+            reply = f"Awesome — before I whip up your quote, do you have any special requests for this clean (like inside microwave, extra windows, balcony door tracks etc)? Let me know if there’s anything extra."
+
+        elif not missing:
             field_updates["quote_stage"] = "Quote Calculated"
+
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # === Abuse Detection and Escalation ===
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -891,7 +886,7 @@ async def filter_response_entry(request: Request):
                 "total_price": quote_response.total_price,
                 "estimated_time_mins": quote_response.estimated_time_mins,
                 "base_hourly_rate": quote_response.base_hourly_rate,
-                "discount_percent": quote_response.discount_applied,
+                "discount_applied": quote_response.discount_applied,
                 "gst_applied": quote_response.gst_applied,
                 "price_per_session": quote_response.total_price,
                 "quote_expiry_date": expiry_str
