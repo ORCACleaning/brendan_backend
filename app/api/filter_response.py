@@ -544,7 +544,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
                     field_updates[field] = 0
-                elif field in BOOLEAN_FIELDS:
+                elif field in BOOLEAN_FIELDS or field == "privacy_acknowledged":
                     field_updates[field] = False
                 elif field == "special_requests":
                     field_updates[field] = ""
