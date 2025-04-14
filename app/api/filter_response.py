@@ -426,7 +426,10 @@ def get_inline_quote_summary(data: dict) -> str:
     summary += f"⏰ Estimated Time: ~{hours_per_cleaner_rounded} hour(s) per cleaner with {cleaners} cleaner(s)\n"
 
     if discount > 0:
-        summary += f"🏷️ Discount Applied: ${discount:.2f} — Online Quote Special\n"
+        summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% off Vacate Cleans (until end of May)"
+        if str(data.get("is_property_manager", "")).lower() in ["true", "1"]:
+            summary += " + extra 5% for Property Managers"
+        summary += "\n"
 
     # List selected cleaning options
     selected = []
@@ -820,175 +823,45 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 
 # === Brendan Main Route Handler ===
-@router.post("/filter-response")
-async def filter_response_entry(request: Request):
-    """
-    Brendan's main route handler.
-    Handles session start, GPT field extraction, quote calculation, abuse handling, PDF flow.
-    """
+# === Handle PDF Request After Quote Calculation ===
+if stage == "Quote Calculated" and message.lower() in [
+    "pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"
+]:
+    update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
+    append_message_log(record_id, message, "user")
 
-    try:
-        body = await request.json()
-        message = str(body.get("message", "")).strip()
-        session_id = str(body.get("session_id", "")).strip()
+    reply = (
+        "No worries — before I collect your name, email, and phone number to send the PDF quote, "
+        "just letting you know we respect your privacy. "
+        "I won’t ask for any sensitive info like bank details — just your contact details for this quote.\n\n"
+        "Do I have your permission to collect these details?"
+    )
+    append_message_log(record_id, reply, "brendan")
 
-        if not session_id:
-            raise HTTPException(status_code=400, detail="Session ID is required.")
+    return JSONResponse(content={
+        "properties": [],
+        "response": reply,
+        "next_actions": [],
+        "session_id": session_id
+    })
 
-        # === New Quote Flow ===
-        if message.lower() == "__init__":
-            existing = get_quote_by_session(session_id)
-            if existing:
-                quote_id, record_id, stage, fields = existing
-            else:
-                quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
-                session_id = fields.get("session_id", session_id)
+# === Handle Privacy Acknowledgement Before Asking Personal Info ===
+if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
+    if message.lower() in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
+        update_quote_record(record_id, {"privacy_acknowledged": True})
+        reply = "Great! Could you please provide your name, email, and phone number so I can send the PDF quote?"
+    else:
+        reply = (
+            "No problem — we only need your name, email, and phone number to send the quote. "
+            "Let me know if you'd like to continue or if you have any questions about our privacy policy."
+        )
 
-            intro_message = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, intro_message, "brendan")
+    append_message_log(record_id, message, "user")
+    append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={
-                "properties": [],
-                "response": intro_message,
-                "next_actions": [],
-                "session_id": session_id
-            })
-
-        # === Existing Quote Flow ===
-        quote_id, record_id, stage, fields = get_quote_by_session(session_id)
-        if not record_id:
-            raise HTTPException(status_code=404, detail="Quote not found.")
-
-        log = fields.get("message_log", "")
-
-        if stage == "Chat Banned":
-            return JSONResponse(content={
-                "properties": [],
-                "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.",
-                "next_actions": [],
-                "session_id": session_id
-            })
-
-        # === Handle PDF Request After Quote Calculation ===
-        if stage == "Quote Calculated" and message.lower() in [
-            "pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"
-        ]:
-            update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
-            append_message_log(record_id, message, "user")
-
-            reply = (
-                "No worries — I’ll just need your name, email, and phone number to send the PDF quote. "
-                "Could you please provide those details?"
-            )
-            append_message_log(record_id, reply, "brendan")
-
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
-
-        # === Auto Trigger PDF Generation After Personal Info Received ===
-        if stage == "Gathering Personal Info" and all([
-            fields.get("customer_name"),
-            fields.get("customer_email"),
-            fields.get("customer_phone")
-        ]):
-            update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
-            handle_pdf_and_email(record_id)
-            reply = (
-                "Thanks so much — I’ve sent your quote through to your email! "
-                "Let me know if there’s anything else I can help with."
-            )
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
-
-        # === Prepare GPT Log Context ===
-        updated_log = f"{log}\nUSER: {message}".strip()[-LOG_TRUNCATE_LENGTH:]
-
-        # === GPT Field Extraction ===
-        props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
-
-        # === Abuse Handling ===
-        if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
-            update_quote_record(record_id, props_dict)
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-
-            return JSONResponse(content={
-                "properties": list(props_dict.keys()),
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
-
-        # === Quote Calculation Trigger ===
-        if props_dict.get("quote_stage") == "Quote Calculated":
-            from app.services.quote_logic import QuoteRequest, calculate_quote
-
-            merged_fields = {**fields, **props_dict}
-            quote_request = QuoteRequest(**merged_fields)
-            quote_response = calculate_quote(quote_request)
-            quote_response.quote_id = quote_id
-
-            if not quote_response:
-                logger.error("❌ Quote Response missing during summary generation.")
-                raise HTTPException(status_code=500, detail="Failed to calculate quote.")
-
-            perth_tz = pytz.timezone("Australia/Perth")
-            expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
-            expiry_str = expiry_date.strftime("%Y-%m-%d")
-
-            update_quote_record(record_id, {
-                **props_dict,
-                "total_price": quote_response.total_price,
-                "estimated_time_mins": quote_response.estimated_time_mins,
-                "base_hourly_rate": quote_response.base_hourly_rate,
-                "discount_applied": quote_response.discount_applied,
-                "gst_applied": quote_response.gst_applied,
-                "price_per_session": quote_response.total_price,
-                "quote_expiry_date": expiry_str
-            })
-
-            summary = get_inline_quote_summary(quote_response.dict())
-
-            reply = (
-                "Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n"
-                f"{summary}\n\n"
-                f"⚠️ This quote is valid until {expiry_str}. If it expires, just let me know your quote number and I’ll whip up a new one for you."
-            )
-
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-
-            return JSONResponse(content={
-                "properties": list(props_dict.keys()),
-                "response": reply,
-                "next_actions": generate_next_actions(),
-                "session_id": session_id
-            })
-
-        # === Continue Gathering Info Stage ===
-        update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
-        append_message_log(record_id, message, "user")
-        append_message_log(record_id, reply, "brendan")
-
-        return JSONResponse(content={
-            "properties": list(props_dict.keys()),
-            "response": reply,
-            "next_actions": [],
-            "session_id": session_id
-        })
-
-    except Exception as e:
-        logger.error(f"❌ Exception in filter_response_entry: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+    return JSONResponse(content={
+        "properties": [],
+        "response": reply,
+        "next_actions": [],
+        "session_id": session_id
+    })
