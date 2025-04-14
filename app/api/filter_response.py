@@ -458,6 +458,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
+        # Pre-fix GPT bug — convert bad special_requests values early
+        for p in props:
+            if p.get("property") == "special_requests":
+                if not p["value"] or str(p["value"]).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
+                    p["value"] = ""
+
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -481,13 +487,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 ]:
                     continue
 
-                if key == "special_requests":
-                    if str(value).strip().lower() in ["no", "none", "false", "no special requests", "n/a"]:
-                        value = ""
-                    old = existing.get("special_requests", "")
-                    if old and value:
-                        value = f"{old}\n{value}".strip()
-
                 if key in ["special_request_minutes_min", "special_request_minutes_max"]:
                     old = existing.get(key, 0)
                     try:
@@ -495,12 +494,18 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     except:
                         value = int(value) if value else 0
 
+                if key == "special_requests":
+                    old = existing.get("special_requests", "")
+                    if old and value:
+                        value = f"{old}\n{value}".strip()
+
                 if isinstance(value, str):
                     value = value.strip()
 
                 logger.warning(f"🚨 Updating Field: {key} = {value}")
                 field_updates[key] = value
 
+        # Auto-fill missing fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -510,6 +515,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 elif field in BOOLEAN_FIELDS:
                     field_updates[field] = False
 
+        # Auto-calculate carpet_cleaning
         if any(
             int(field_updates.get(f, existing.get(f, 0) or 0)) > 0
             for f in [
@@ -535,13 +541,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "special_request_minutes_min", "special_request_minutes_max"
         ]
 
+        # Check if all required fields are filled
         missing_fields = []
         for field in required_fields:
+            val = field_updates.get(field, existing.get(field, ""))
             if field == "special_requests":
-                val = field_updates.get(field, existing.get(field, ""))
                 if val not in ["", False]:
-                    continue  # Considered filled
-            if field_updates.get(field) in [None, ""] and existing.get(field) in [None, ""]:
+                    continue
+            if val in [None, ""]:
                 missing_fields.append(field)
 
         logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing_fields}")
@@ -579,6 +586,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+
 
 
 # === Create New Quote ===
