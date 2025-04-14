@@ -428,9 +428,9 @@ def generate_next_actions():
     """
     After quote is calculated, gives customer a list of options to proceed.
     Brendan will:
-    - Ask if they want the quote as PDF
+    - Offer to generate a PDF quote
     - Offer to email it
-    - Let them change anything
+    - Offer to edit the quote
     - Or contact the office
     """
     return [
@@ -438,27 +438,15 @@ def generate_next_actions():
             "action": "offer_next_step",
             "response": (
                 "Would you like me to generate a formal PDF quote, send it to your email, "
-                "or would you prefer to change anything in the quote?\n\n"
-                "If you’d rather speak with someone, you can also call the office on **1300 918 388** "
-                f"and mention your quote ID — I’ve got that saved for you."
+                "or would you like to change anything in the quote?\n\n"
+                "If you’d prefer to speak to someone directly, you can call our office on "
+                "**1300 918 388** and mention your quote ID — I’ve got that saved for you."
             ),
             "options": [
-                {
-                    "label": "📄 Get PDF Quote",
-                    "value": "pdf_quote"
-                },
-                {
-                    "label": "📧 Email Me the Quote",
-                    "value": "email_quote"
-                },
-                {
-                    "label": "✏️ Edit the Quote",
-                    "value": "edit_quote"
-                },
-                {
-                    "label": "📞 Call the Office",
-                    "value": "call_office"
-                }
+                {"label": "📄 Get PDF Quote", "value": "pdf_quote"},
+                {"label": "📧 Email Me the Quote", "value": "email_quote"},
+                {"label": "✏️ Edit the Quote", "value": "edit_quote"},
+                {"label": "📞 Call the Office", "value": "call_office"}
             ]
         }
     ]
@@ -554,6 +542,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 logger.warning(f"🚨 Updating Field: {key} = {value}")
                 field_updates[key] = value
 
+        # ✅ Force is_property_manager if customer said it in message
+        if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
+            field_updates["is_property_manager"] = "true"
+
         # Auto-fill any missing required fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
@@ -629,7 +621,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             except Exception as airtable_err:
                 logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
         return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
-
 
 # === Create New Quote ===
 
@@ -856,9 +847,7 @@ async def filter_response_entry(request: Request):
         if props_dict.get("quote_stage") == "Quote Calculated":
             from app.services.quote_logic import QuoteRequest, calculate_quote
 
-            # Merge GPT updates with existing Airtable fields
             merged_fields = {**fields, **props_dict}
-
             quote_request = QuoteRequest(**merged_fields)
             quote_response = calculate_quote(quote_request)
 
@@ -866,6 +855,26 @@ async def filter_response_entry(request: Request):
                 logger.error("❌ Quote Response missing during summary generation.")
                 raise HTTPException(status_code=500, detail="Failed to calculate quote.")
 
+            # Sanity check: Ensure core calculated fields are valid
+            required_calculated_fields = [
+                "total_price", "estimated_time_mins", "base_hourly_rate",
+                "discount_applied", "gst_applied"
+            ]
+            missing_calc = [f for f in required_calculated_fields if not getattr(quote_response, f, None)]
+
+            if missing_calc:
+                logger.warning(f"⛔ Skipping Quote Calculated stage — missing: {missing_calc}")
+                update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
+                append_message_log(record_id, message, "user")
+                append_message_log(record_id, reply, "brendan")
+                return JSONResponse(content={
+                    "properties": list(props_dict.keys()),
+                    "response": reply,
+                    "next_actions": [],
+                    "session_id": session_id
+                })
+
+            # All good — proceed to update
             perth_tz = pytz.timezone("Australia/Perth")
             expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
             expiry_str = expiry_date.strftime("%Y-%m-%d")
