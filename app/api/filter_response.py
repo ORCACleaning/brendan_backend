@@ -814,17 +814,36 @@ async def filter_response_entry(request: Request):
             })
 
         # === Existing Quote Flow ===
-        quote_info = get_quote_by_session(session_id)
-        if not quote_info:
+        quote_id, record_id, stage, fields = get_quote_by_session(session_id)
+        if not record_id:
             raise HTTPException(status_code=404, detail="Quote not found.")
 
-        quote_id, record_id, stage, fields = quote_info
         log = fields.get("message_log", "")
 
         if stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
                 "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.",
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # === Handle PDF Request After Quote Calculation ===
+        if stage == "Quote Calculated" and message.lower() in [
+            "pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"
+        ]:
+            update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
+            append_message_log(record_id, message, "user")
+
+            reply = (
+                "No worries — I’ll just need your name, email, and phone number to send the PDF quote. "
+                "Could you please provide those details?"
+            )
+            append_message_log(record_id, reply, "brendan")
+
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
                 "next_actions": [],
                 "session_id": session_id
             })
@@ -855,33 +874,12 @@ async def filter_response_entry(request: Request):
             merged_fields = {**fields, **props_dict}
             quote_request = QuoteRequest(**merged_fields)
             quote_response = calculate_quote(quote_request)
-            quote_response.quote_id = quote_id  # FIX 3 Applied — force backend ID
+            quote_response.quote_id = quote_id
 
             if not quote_response:
                 logger.error("❌ Quote Response missing during summary generation.")
                 raise HTTPException(status_code=500, detail="Failed to calculate quote.")
 
-            # Ensure calculated fields exist
-            required_calc = [
-                "total_price", "estimated_time_mins", "base_hourly_rate",
-                "discount_applied", "gst_applied"
-            ]
-            missing_calc = [f for f in required_calc if not getattr(quote_response, f, None)]
-
-            if missing_calc:
-                logger.warning(f"⛔ Missing calculated fields: {missing_calc}")
-                update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
-                append_message_log(record_id, message, "user")
-                append_message_log(record_id, reply, "brendan")
-
-                return JSONResponse(content={
-                    "properties": list(props_dict.keys()),
-                    "response": reply,
-                    "next_actions": [],
-                    "session_id": session_id
-                })
-
-            # Update Quote Record
             perth_tz = pytz.timezone("Australia/Perth")
             expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
             expiry_str = expiry_date.strftime("%Y-%m-%d")
