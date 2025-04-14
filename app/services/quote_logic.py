@@ -1,42 +1,3 @@
-import os
-import requests
-from dotenv import load_dotenv
-
-from app.models.quote_models import QuoteRequest, QuoteResponse
-
-load_dotenv()
-
-# === Airtable Config ===
-airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
-airtable_api_key = os.getenv("AIRTABLE_API_KEY")
-airtable_table = "Vacate Quotes"
-
-
-# === Generate Next Quote ID from Airtable ===
-def get_next_quote_id(prefix="VC"):
-    url = f"https://api.airtable.com/v0/{airtable_base_id}/{airtable_table}"
-    headers = {"Authorization": f"Bearer {airtable_api_key}"}
-    params = {
-        "filterByFormula": f'STARTS_WITH(quote_id, "{prefix}-")',
-        "fields[]": "quote_id",
-        "sort[0][field]": "quote_id",
-        "sort[0][direction]": "desc",
-        "pageSize": 1
-    }
-
-    response = requests.get(url, headers=headers, params=params)
-    records = response.json().get("records", [])
-
-    if records:
-        last_id = records[0]["fields"]["quote_id"].split("-")[1]
-        next_id = int(last_id) + 1
-    else:
-        next_id = 1
-
-    return f"{prefix}-{str(next_id).zfill(6)}"
-
-
-# === Main Quote Calculation ===
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75
     SEASONAL_DISCOUNT_PERCENT = 10
@@ -56,7 +17,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
 
-    # Add extras time
+    # Extras Time
     for service, time in EXTRA_SERVICE_TIMES.items():
         if getattr(data, service, False):
             base_minutes += time
@@ -75,7 +36,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     if str(data.furnished).lower() == "furnished":
         base_minutes += 60
 
-    # Carpet Logic
+    # Carpet Time
     base_minutes += (data.carpet_bedroom_count or 0) * 30
     base_minutes += (data.carpet_mainroom_count or 0) * 45
     base_minutes += (data.carpet_study_count or 0) * 25
@@ -83,7 +44,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     base_minutes += (data.carpet_stairs_count or 0) * 35
     base_minutes += (data.carpet_other_count or 0) * 30
 
-    # Special Requests Handling
+    # Special Requests
     min_total_mins = base_minutes
     max_total_mins = base_minutes
     note = None
@@ -95,7 +56,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     is_range = data.special_request_minutes_min is not None and data.special_request_minutes_max is not None
 
-    # Calculate Price
+    # Price Calculation
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
@@ -105,7 +66,6 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
-    # Apply discounts
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
     if str(data.is_property_manager).strip().lower() in {"true", "yes", "1"}:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
@@ -116,10 +76,9 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     gst_amount = round(discounted_price * (GST_PERCENT / 100), 2)
     total_with_gst = round(discounted_price + gst_amount, 2)
 
-    quote_id = get_next_quote_id("VC")
-
+    # Use existing quote_id from frontend / database (NOT generated here)
     return QuoteResponse(
-        quote_id=quote_id,
+        quote_id=data.quote_id,
         estimated_time_mins=max_total_mins,
         minimum_time_mins=min_total_mins if is_range else None,
         calculated_hours=calculated_hours,
