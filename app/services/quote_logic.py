@@ -1,3 +1,5 @@
+from app.models.quote_models import QuoteRequest, QuoteResponse
+
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75
     SEASONAL_DISCOUNT_PERCENT = 10
@@ -15,9 +17,10 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         "garage_cleaning": 40,
     }
 
+    # Base time from bedrooms and bathrooms
     base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
 
-    # Extras Time
+    # Add time for extra services
     for service, time in EXTRA_SERVICE_TIMES.items():
         if getattr(data, service, False):
             base_minutes += time
@@ -36,7 +39,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     if str(data.furnished).lower() == "furnished":
         base_minutes += 60
 
-    # Carpet Time
+    # Carpet times
     base_minutes += (data.carpet_bedroom_count or 0) * 30
     base_minutes += (data.carpet_mainroom_count or 0) * 45
     base_minutes += (data.carpet_study_count or 0) * 25
@@ -44,7 +47,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     base_minutes += (data.carpet_stairs_count or 0) * 35
     base_minutes += (data.carpet_other_count or 0) * 30
 
-    # Special Requests
+    # Handle special request minutes
     min_total_mins = base_minutes
     max_total_mins = base_minutes
     note = None
@@ -56,7 +59,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     is_range = data.special_request_minutes_min is not None and data.special_request_minutes_max is not None
 
-    # Price Calculation
+    # Price calculation
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
@@ -66,6 +69,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
+    # Apply discount logic
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
     if str(data.is_property_manager).strip().lower() in {"true", "yes", "1"}:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
@@ -76,7 +80,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     gst_amount = round(discounted_price * (GST_PERCENT / 100), 2)
     total_with_gst = round(discounted_price + gst_amount, 2)
 
-    # Use existing quote_id from frontend / database (NOT generated here)
+    # Final return — quote_id is passed from backend/database
     return QuoteResponse(
         quote_id=data.quote_id,
         estimated_time_mins=max_total_mins,
