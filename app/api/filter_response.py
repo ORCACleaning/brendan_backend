@@ -48,6 +48,11 @@ client = openai.OpenAI()  # Required for openai>=1.0.0 SDK
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
 
+# === PDF Trigger Keywords (Skip GPT and Collect Contact Details) ===
+PDF_KEYWORDS = {
+    "pdf", "email", "send quote", "quote please", "email quote",
+    "send me quote", "send it", "can you email"
+}
 
 # === GPT PROMPT ===
 
