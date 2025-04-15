@@ -173,17 +173,16 @@ VALID_AIRTABLE_FIELDS = {
     "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager",
 
     # Carpet Cleaning Breakdown
-    "carpet_cleaning",  # Legacy Field — auto-filled from carpet_* counts
+    "carpet_cleaning",  # Auto-filled from carpet_* counts
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
     "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-    "carpet_cleaning",  # Auto-calculated Checkbox
 
     # Special Requests Handling
     "special_requests", "special_request_minutes_min", "special_request_minutes_max", "extra_hours_requested",
 
     # Quote Result Fields
     "total_price", "estimated_time_mins", "base_hourly_rate", "gst_applied",
-    "discount_applied", "discount_reason", "price_per_session"
+    "discount_applied", "discount_reason", "price_per_session",
     "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge",
 
     # Customer Details (After Quote)
@@ -198,7 +197,6 @@ VALID_AIRTABLE_FIELDS = {
 
 # Field Mapping (Ready for Aliases or Renames)
 FIELD_MAP = {k: k for k in VALID_AIRTABLE_FIELDS}
-
 
 # Fields that must always be cast to Integer
 INTEGER_FIELDS = {
@@ -229,6 +227,7 @@ BOOLEAN_FIELDS = {
 
 # Trigger Words for Abuse Detection (Escalation Logic)
 ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
+
 
 # === Get Quote by Session ID ===
 
