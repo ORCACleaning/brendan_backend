@@ -361,7 +361,13 @@ def update_quote_record(record_id: str, fields: dict):
 
         # === Extra Hours Requested Normalization ===
         elif key == "extra_hours_requested":
-            value = "" if value is None else str(value).strip()
+            if value in [None, ""]:
+                value = 0
+            else:
+                try:
+                    value = float(value)
+                except Exception:
+                    value = 0
 
         # === String Fallback ===
         else:
@@ -570,7 +576,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         logger.warning(f"🔍 Existing Airtable Fields: {existing}")
         current_stage = existing.get("quote_stage", "")
-
         field_updates = {}
 
         for p in props:
@@ -581,19 +586,26 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
             if key in BOOLEAN_FIELDS:
                 value = str(value).strip().lower() in TRUE_VALUES
+
             elif key in INTEGER_FIELDS:
                 try:
                     value = int(value)
                 except:
                     value = 0
+
             elif key == "special_requests":
                 if not value or str(value).strip().lower() in {"no", "none", "false", "n/a"}:
                     value = ""
-                old = existing.get("special_requests", "")
-                if old and value and value not in old:
-                    value = f"{old}\n{value}".strip()
-                elif not old:
-                    value = value.strip()
+                else:
+                    new_value = str(value).strip()
+                    old = existing.get("special_requests", "").strip()
+                    # Merge only if not already in
+                    if old and new_value.lower() not in old.lower():
+                        value = f"{old}\n{new_value}".strip()
+                    elif not old:
+                        value = new_value
+                    else:
+                        value = old  # Already exists, prevent duplication
 
             if key == "quote_stage" and current_stage in {
                 "Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"
@@ -902,7 +914,12 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         # === Load Quote Record ===
         quote_id, record_id, stage, fields = get_quote_by_session(session_id)
@@ -916,7 +933,12 @@ async def filter_response_entry(request: Request):
         # === Stage: Chat Banned ===
         if stage == "Chat Banned":
             reply = "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote."
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         # === Stage: Quote Calculated | PDF Trigger ===
         if stage == "Quote Calculated" and message_lower in pdf_keywords:
@@ -925,7 +947,12 @@ async def filter_response_entry(request: Request):
             reply = "Sure thing — I’ll just grab your name, email and phone number so I can send that through."
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         # === Stage: Gathering Personal Info | Privacy Check ===
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
@@ -934,22 +961,35 @@ async def filter_response_entry(request: Request):
                 fields = get_quote_by_session(session_id)[3]
                 reply = "Great! Could you please provide your name, email, and phone number so I can send the PDF quote?"
             else:
-                reply = "No problem — we only need your name, email, and phone number to send the quote. Let me know if you'd like to continue or if you have any questions about our privacy policy."
+                reply = (
+                    "No problem — we only need your name, email, and phone number to send the quote. "
+                    "Let me know if you'd like to continue or if you have any questions about our privacy policy."
+                )
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         # === Stage: Gathering Personal Info | Final Step — PDF and Email ===
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
-                customer_email = str(fields.get("customer_email", "")).strip()
                 import re
+                customer_email = str(fields.get("customer_email", "")).strip()
                 if not re.match(r"[^@]+@[^@]+\.[^@]+", customer_email):
                     reply = "That email doesn’t look right — could you double check and send it again?"
                     append_message_log(record_id, message, "user")
                     append_message_log(record_id, reply, "brendan")
-                    return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+                    return JSONResponse(content={
+                        "properties": [],
+                        "response": reply,
+                        "next_actions": [],
+                        "session_id": session_id
+                    })
 
                 update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
                 fields = get_quote_by_session(session_id)[3]
@@ -959,42 +999,58 @@ async def filter_response_entry(request: Request):
                     if not pdf_path:
                         raise Exception("PDF generation failed")
 
-                    send_quote_email(to_email=customer_email, customer_name=fields.get("customer_name"), pdf_path=pdf_path, quote_id=quote_id)
+                    send_quote_email(
+                        to_email=customer_email,
+                        customer_name=fields.get("customer_name"),
+                        pdf_path=pdf_path,
+                        quote_id=quote_id
+                    )
+
                     update_quote_record(record_id, {"pdf_link": pdf_path})
+
                     reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
+
                 except Exception as e:
                     logger.exception(f"❌ PDF Generation/Email Sending Failed: {e}")
                     reply = "Sorry — I ran into an issue while generating your PDF quote. Please call our office on 1300 918 388 and we’ll sort it out for you."
 
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
-                return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+                return JSONResponse(content={
+                    "properties": [],
+                    "response": reply,
+                    "next_actions": [],
+                    "session_id": session_id
+                })
 
-        # === Default GPT Handling ===
+        # === Default GPT Extraction & Quote Recalc ===
         append_message_log(record_id, message, "user")
         field_updates, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
+
         merged_fields = fields.copy()
         merged_fields.update(field_updates)
 
-        # === Recalculate Quote If Ready ===
-        if field_updates.get("quote_stage") == "Quote Calculated":
-            if message_lower not in pdf_keywords:
-                try:
-                    quote_obj = calculate_quote(QuoteRequest(**merged_fields))
-                    field_updates.update(quote_obj.model_dump())
-                    summary = get_inline_quote_summary(quote_obj.model_dump())
-                    reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
-                except Exception as e:
-                    logger.warning(f"⚠️ Quote calculation failed: {e}")
+        if field_updates.get("quote_stage") == "Quote Calculated" and message_lower not in pdf_keywords:
+            try:
+                quote_obj = calculate_quote(QuoteRequest(**merged_fields))
+                field_updates.update(quote_obj.model_dump())
+                summary = get_inline_quote_summary(quote_obj.model_dump())
+                reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
+            except Exception as e:
+                logger.warning(f"⚠️ Quote calculation failed: {e}")
 
         update_quote_record(record_id, field_updates)
         append_message_log(record_id, reply, "brendan")
 
         next_actions = generate_next_actions() if field_updates.get("quote_stage") == "Quote Calculated" else []
 
-        return JSONResponse(content={"properties": [{"property": k, "value": v} for k, v in field_updates.items()], "response": reply, "next_actions": next_actions, "session_id": session_id})
+        return JSONResponse(content={
+            "properties": [{"property": k, "value": v} for k, v in field_updates.items()],
+            "response": reply,
+            "next_actions": next_actions,
+            "session_id": session_id
+        })
 
     except Exception as e:
         logger.exception("❌ Error in /filter-response route")
         raise HTTPException(status_code=500, detail="Internal server error.")
-
