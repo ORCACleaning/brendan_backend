@@ -20,6 +20,8 @@ from app.services.quote_logic import calculate_quote
 from app.models.quote_models import QuoteRequest
 from app.config import logger, settings  # Logger and Settings loaded from config.py
 
+# === Field Rules / Validations ===
+from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
