@@ -359,6 +359,10 @@ def update_quote_record(record_id: str, fields: dict):
             }:
                 value = ""
 
+        # === Extra Hours Requested Normalization ===
+        elif key == "extra_hours_requested":
+            value = "" if value is None else str(value).strip()
+
         # === String Fallback ===
         else:
             value = "" if value is None else str(value).strip()
@@ -405,7 +409,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.error(f"❌ Field '{key}' failed to update.")
 
     return successful
-
 
 
 # === Inline Quote Summary Helper ===
