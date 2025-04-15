@@ -9,9 +9,9 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     PROPERTY_MANAGER_DISCOUNT = 5
     GST_PERCENT = 10
 
-    WEEKEND_SURCHARGE_FLAT = 25.0
-    AFTER_HOURS_SURCHARGE_FLAT = 25.0
-    MANDURAH_SURCHARGE_FLAT = 25.0
+    WEEKEND_SURCHARGE_PERCENT = 100
+    AFTER_HOURS_SURCHARGE_PERCENT = 15
+    MANDURAH_SURCHARGE_PERCENT = 30
 
     EXTRA_SERVICE_TIMES = {
         "wall_cleaning": 30,
@@ -66,10 +66,10 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
-    # === Surcharge Handling (Flat Fee) ===
-    weekend_fee = WEEKEND_SURCHARGE_FLAT if data.weekend_cleaning else 0.0
-    after_hours_fee = AFTER_HOURS_SURCHARGE_FLAT if data.after_hours_cleaning else 0.0
-    mandurah_fee = MANDURAH_SURCHARGE_FLAT if data.mandurah_property else 0.0
+    # === Surcharge Handling (% of Base Price) ===
+    weekend_fee = round(base_price * (WEEKEND_SURCHARGE_PERCENT / 100), 2) if data.weekend_cleaning else 0.0
+    after_hours_fee = round(base_price * (AFTER_HOURS_SURCHARGE_PERCENT / 100), 2) if data.after_hours_cleaning else 0.0
+    mandurah_fee = round(base_price * (MANDURAH_SURCHARGE_PERCENT / 100), 2) if data.mandurah_property else 0.0
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
