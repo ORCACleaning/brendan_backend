@@ -2,6 +2,10 @@ from fastapi import FastAPI
 from app.api import quote
 from fastapi.responses import JSONResponse
 import json
+from app import auto_fixer
+
+app.include_router(auto_fixer.router)
+
 
 app = FastAPI(
     title="Brendan API",
