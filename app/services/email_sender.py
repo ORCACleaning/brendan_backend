@@ -57,7 +57,6 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
     url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
 
     subject = f"Your Vacate Cleaning Quote from Orca Cleaning ({quote_id})"
-
     booking_url = f"https://orcacleaning.com.au/schedule?quote_id={quote_id}"
 
     body_html = f"""
@@ -107,17 +106,14 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
 def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
     pdf_path = generate_quote_pdf(fields)
     customer_name = fields.get("customer_name", "there")
-    to_email = fields.get("email")
+    to_email = fields.get("customer_email")
 
     if not to_email:
         print(f"❌ No customer email found for Quote ID: {quote_id} — skipping email.")
         return
 
     print(f"📧 Generating PDF & Sending Email to {to_email} for Quote {quote_id}")
-
     send_quote_email(to_email, customer_name, pdf_path, quote_id)
 
     pdf_url = f"https://orcacleaning.com.au/static/quotes/{os.path.basename(pdf_path)}"
-
-    # Update Airtable with PDF link
     filter_response.update_quote_record(record_id, {"pdf_link": pdf_url})
