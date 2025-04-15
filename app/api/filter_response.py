@@ -997,7 +997,7 @@ async def filter_response_entry(request: Request):
             try:
                 quote_obj = calculate_quote(QuoteRequest(**merged_fields))
                 field_updates.update(quote_obj.model_dump())
-                summary = get_inline_quote_summary(quote_obj)
+                summary = get_inline_quote_summary(quote_obj.model_dump())
                 reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
             except Exception as e:
                 logger.warning(f"⚠️ Quote calculation failed: {e}")
