@@ -610,13 +610,12 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     new_value = str(value).strip()
                     old = existing.get("special_requests", "").strip()
-                    # Merge only if not already in
                     if old and new_value.lower() not in old.lower():
                         value = f"{old}\n{new_value}".strip()
                     elif not old:
                         value = new_value
                     else:
-                        value = old  # Already exists, prevent duplication
+                        value = old
 
             if key == "quote_stage" and current_stage in {
                 "Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"
@@ -626,6 +625,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             field_updates[key] = value
             logger.warning(f"🚨 Updating Field: {key} = {value}")
 
+        # Always set source
         field_updates["source"] = "Brendan"
 
         # Auto-property manager detection
@@ -643,7 +643,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             field_updates["number_of_sessions"] = 1
             return field_updates, reply
 
-        # Fill all required fields with safe defaults
+        # Fill missing fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -655,7 +655,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates[field] = ""
 
-        # Special Request Auto Estimate
+        # Auto-estimate for special requests
         if field_updates.get("special_requests") and not field_updates.get("special_request_minutes_min"):
             field_updates["special_request_minutes_min"] = 30
             field_updates["special_request_minutes_max"] = 60
@@ -667,7 +667,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         ]):
             field_updates["carpet_cleaning"] = True
 
-        # Force surcharge fields to float
+        # Float normalization
         for f in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
             if f in field_updates:
                 try:
@@ -675,7 +675,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 except:
                     field_updates[f] = 0.0
 
-        # Required Fields Check
+        # Check if quote is ready
         required = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -710,7 +710,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # Abuse Handling
+        # Abuse check
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -850,7 +850,7 @@ def send_gpt_error_email(error_msg: str):
 
 def append_message_log(record_id: str, message: str, sender: str):
     """
-    Appends a new message to the existing message_log field in Airtable.
+    Appends a new message to the message_log field in Airtable.
     Truncates from the start if log exceeds MAX_LOG_LENGTH.
     """
 
@@ -866,6 +866,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         return
 
     sender_clean = str(sender or "user").strip().upper()
+    new_entry = f"{sender_clean}: {message}"
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
@@ -887,11 +888,9 @@ def append_message_log(record_id: str, message: str, sender: str):
             sleep(1)
 
     old_log = str(current.get("fields", {}).get("message_log", "")).strip()
-    new_entry = f"{sender_clean}: {message}"
-
     combined_log = f"{old_log}\n{new_entry}".strip() if old_log else new_entry
 
-    # === Truncate Log if Over Limit ===
+    # === Truncate if Exceeds MAX_LOG_LENGTH ===
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
 
@@ -899,6 +898,7 @@ def append_message_log(record_id: str, message: str, sender: str):
     logger.debug(f"📝 New message_log length: {len(combined_log)} characters")
 
     update_quote_record(record_id, {"message_log": combined_log})
+
 
 # === Brendan Filter Response Route ===
 
