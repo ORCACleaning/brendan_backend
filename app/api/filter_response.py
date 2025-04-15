@@ -415,9 +415,8 @@ def update_quote_record(record_id: str, fields: dict):
 
 def get_inline_quote_summary(data: dict) -> str:
     """
-    Generates a clean, natural-sounding summary of the quote to show in chat.
-    Includes price, estimated time, number of cleaners, discount applied,
-    and all selected cleaning options.
+    Generates a natural, friendly quote summary for Brendan to show in chat.
+    Includes price, estimated time, cleaner count, discount details, and selected options.
     """
 
     price = float(data.get("total_price", 0) or 0)
@@ -427,18 +426,18 @@ def get_inline_quote_summary(data: dict) -> str:
     special_requests = str(data.get("special_requests", "") or "").strip()
     is_property_manager = str(data.get("is_property_manager", "") or "").lower() in TRUE_VALUES
 
-    # Calculate hours + cleaners (max 5 hours per cleaner)
+    # === Time & Cleaners Calculation ===
     hours = time_est_mins / 60
-    cleaners = max(1, (time_est_mins + 299) // 300)
+    cleaners = max(1, (time_est_mins + 299) // 300)  # Max 5 hours per cleaner
     hours_per_cleaner = hours / cleaners
     hours_per_cleaner_rounded = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
 
-    # Opening message based on price / time
-    if price > 800:
+    # === Dynamic Opening Line ===
+    if price >= 800:
         opening = "Here’s what we’re looking at for this job:\n\n"
-    elif price < 300:
+    elif price <= 300:
         opening = "Nice and easy — here’s your quote:\n\n"
-    elif time_est_mins > 360:
+    elif time_est_mins >= 360:
         opening = "This one will take a little longer — here’s your quote:\n\n"
     else:
         opening = "All sorted — here’s your quote:\n\n"
@@ -447,17 +446,17 @@ def get_inline_quote_summary(data: dict) -> str:
     summary += f"💰 Total Price (incl. GST): ${price:.2f}\n"
     summary += f"⏰ Estimated Time: ~{hours_per_cleaner_rounded} hour(s) per cleaner with {cleaners} cleaner(s)\n"
 
-    # Discount display logic
+    # === Discount Line Logic ===
     if discount > 0:
         if is_property_manager and discount >= price / 1.1 * 0.15:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special (+5% Property Manager Bonus)\n"
         else:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special\n"
 
-    # Cleaning options selected
-    selected = []
+    # === Selected Cleaning Options ===
+    selected_services = []
 
-    for field, label in {
+    CLEANING_OPTIONS = {
         "oven_cleaning": "Oven Cleaning",
         "window_cleaning": "Window Cleaning",
         "blind_cleaning": "Blind Cleaning",
@@ -471,25 +470,30 @@ def get_inline_quote_summary(data: dict) -> str:
         "after_hours_cleaning": "After-Hours Cleaning",
         "weekend_cleaning": "Weekend Cleaning",
         "carpet_cleaning": "Carpet Steam Cleaning",
-    }.items():
+    }
+
+    for field, label in CLEANING_OPTIONS.items():
         if str(data.get(field, "")).lower() in TRUE_VALUES:
-            selected.append(f"- {label}")
+            selected_services.append(f"- {label}")
 
     if special_requests:
-        selected.append(f"- Special Request: {special_requests}")
+        selected_services.append(f"- Special Request: {special_requests}")
 
-    if selected:
-        summary += "\n🧹 Cleaning Included:\n" + "\n".join(selected) + "\n"
+    if selected_services:
+        summary += "\n🧹 Cleaning Included:\n" + "\n".join(selected_services) + "\n"
 
+    # === Notes (Optional) ===
     if note:
         summary += f"\n📜 Note: {note}\n"
 
+    # === Closing Line ===
     summary += (
         "\nThis quote is valid for 7 days.\n"
         "Would you like me to send this to your email as a PDF, or would you like to make any changes?"
     )
 
     return summary.strip()
+
 
 
 # === Generate Next Actions After Quote ===
