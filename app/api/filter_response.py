@@ -421,15 +421,15 @@ def get_inline_quote_summary(data: dict) -> str:
     discount = float(data.get("discount_applied", 0) or 0)
     note = str(data.get("note", "") or "").strip()
     special_requests = str(data.get("special_requests", "") or "").strip()
-    is_property_manager = str(data.get("is_property_manager", "")).lower() in ["true", "1"]
+    is_property_manager = str(data.get("is_property_manager", "") or "").lower() in ["true", "1"]
 
-    # Calculate cleaners required
+    # Calculate hours and cleaners (max 5 hours each)
     hours = time_est_mins / 60
-    cleaners = max(1, (time_est_mins + 299) // 300)  # 5 hours max per cleaner
+    cleaners = max(1, (time_est_mins + 299) // 300)
     hours_per_cleaner = hours / cleaners
     hours_per_cleaner_rounded = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
 
-    # Generate opening line based on job size
+    # Opening based on job size
     if price > 800:
         opening = "Looks like a big job! Here's your quote:\n\n"
     elif price < 300:
@@ -444,7 +444,7 @@ def get_inline_quote_summary(data: dict) -> str:
     summary += f"⏰ Estimated Time: ~{hours_per_cleaner_rounded} hour(s) per cleaner with {cleaners} cleaner(s)\n"
 
     if discount > 0:
-        if discount >= price / 1.1 * 0.15:  # 15% discount check (before GST)
+        if is_property_manager and discount >= price / 1.1 * 0.15:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special (+5% Property Manager Bonus)\n"
         else:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special\n"
@@ -484,7 +484,8 @@ def get_inline_quote_summary(data: dict) -> str:
         "If you'd like this in a PDF or want to make any changes, just let me know!"
     )
 
-    return summary
+    return summary.strip()
+
 
 # === Generate Next Actions After Quote ===
 
