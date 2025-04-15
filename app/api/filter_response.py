@@ -1022,4 +1022,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         logger.exception("❌ Error in /filter-response route")
         raise HTTPException(status_code=500, detail="Internal server error.")
-
