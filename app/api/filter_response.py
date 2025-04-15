@@ -985,17 +985,16 @@ async def filter_response_entry(request: Request):
         append_message_log(record_id, message, "user")
         field_updates, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
 
-        # === Merge existing fields ===
+        # === Merge fields before calculating quote ===
         merged_fields = fields.copy()
         merged_fields.update(field_updates)
 
         if field_updates.get("quote_stage") == "Quote Calculated":
-            from app.services.quote_logic import calculate_quote
-            from app.models.quote_models import QuoteRequest
-
             try:
                 quote_obj = calculate_quote(QuoteRequest(**merged_fields))
                 field_updates.update(quote_obj.dict())
+                summary = get_inline_quote_summary(quote_obj)
+                reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
             except Exception as e:
                 logger.warning(f"⚠️ Quote calculation failed: {e}")
 
@@ -1014,3 +1013,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         logger.exception("❌ Error in /filter-response route")
         raise HTTPException(status_code=500, detail="Internal server error.")
+
