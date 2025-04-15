@@ -297,7 +297,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # === Normalize 'furnished' field to clean values ===
+    # === Normalize 'furnished' field ===
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -314,6 +314,10 @@ def update_quote_record(record_id: str, fields: dict):
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
+            continue
+
+        # Skip extra_hours_requested if empty or None
+        if key == "extra_hours_requested" and value in [None, ""]:
             continue
 
         if key in BOOLEAN_FIELDS:
@@ -353,6 +357,10 @@ def update_quote_record(record_id: str, fields: dict):
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
+
+    # Always force privacy_acknowledged to be boolean
+    if "privacy_acknowledged" in fields:
+        normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
