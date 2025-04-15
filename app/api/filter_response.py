@@ -956,8 +956,8 @@ async def filter_response_entry(request: Request):
             expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
             expiry_str = expiry_date.strftime("%Y-%m-%d")
 
-            update_quote_record(record_id, {
-                **props_dict,
+            fields_to_update = props_dict.copy()
+            fields_to_update.update({
                 "total_price": quote_response.total_price,
                 "estimated_time_mins": quote_response.estimated_time_mins,
                 "base_hourly_rate": quote_response.base_hourly_rate,
@@ -966,6 +966,9 @@ async def filter_response_entry(request: Request):
                 "price_per_session": quote_response.total_price,
                 "quote_expiry_date": expiry_str
             })
+
+            update_quote_record(record_id, fields_to_update)
+
 
             handle_pdf_and_email(record_id, quote_id, {**props_dict, "total_price": quote_response.total_price, "estimated_time_mins": quote_response.estimated_time_mins, "base_hourly_rate": quote_response.base_hourly_rate, "discount_applied": quote_response.discount_applied, "gst_applied": quote_response.gst_applied, "price_per_session": quote_response.total_price, "quote_expiry_date": expiry_str})
 
