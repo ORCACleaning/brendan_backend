@@ -967,7 +967,21 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
+        # DEFAULT FALLBACK
+        append_message_log(record_id, message, "user")
+        field_updates, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
+        update_quote_record(record_id, field_updates)
+        append_message_log(record_id, reply, "brendan")
+
+        next_actions = generate_next_actions() if field_updates.get("quote_stage") == "Quote Calculated" else []
+
+        return JSONResponse(content={
+            "properties": [{"property": k, "value": v} for k, v in field_updates.items()],
+            "response": reply,
+            "next_actions": next_actions,
+            "session_id": session_id
+        })
+
     except Exception as e:
         logger.exception("❌ Error in /filter-response route")
         raise HTTPException(status_code=500, detail="Internal server error.")
-
