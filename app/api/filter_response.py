@@ -317,9 +317,11 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
+        # Skip extra_hours_requested if empty or None
         if key == "extra_hours_requested" and value in [None, ""]:
             continue
 
+        # Boolean Normalization
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass
@@ -328,6 +330,7 @@ def update_quote_record(record_id: str, fields: dict):
             else:
                 value = str(value).strip().lower() in {"true", "1", "yes"}
 
+        # Integer Normalization
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -338,6 +341,7 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
+        # Float / Currency Normalization
         elif key in {
             "gst_applied", "total_price", "base_hourly_rate",
             "price_per_session", "estimated_time_mins", "discount_applied",
@@ -348,17 +352,20 @@ def update_quote_record(record_id: str, fields: dict):
             except Exception:
                 value = 0.0
 
+        # Special Requests Normalization
         elif key == "special_requests":
             if not value or str(value).strip().lower() in {
                 "no", "none", "false", "no special requests", "n/a"
             }:
                 value = ""
 
+        # String Field
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
 
+    # Always Force Privacy Checkbox
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
@@ -369,6 +376,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
+    # === Bulk Update Attempt ===
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
@@ -380,6 +388,7 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception:
         logger.error("🧾 Error response: (Non-JSON)")
 
+    # === Fallback Single Field Updates ===
     successful = []
     for key, value in normalized_fields.items():
         single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
@@ -622,6 +631,14 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]):
             field_updates["carpet_cleaning"] = True
+
+        # ✅ Force surcharge fields to valid float
+        for surcharge_field in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
+            if surcharge_field in field_updates:
+                try:
+                    field_updates[surcharge_field] = float(field_updates[surcharge_field])
+                except Exception:
+                    field_updates[surcharge_field] = 0.0
 
         required_fields = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
