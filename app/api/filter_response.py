@@ -27,7 +27,7 @@ TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
 # === System Constants ===
 MAX_LOG_LENGTH = 10000        # Max character limit for message_log and gpt_error_log in Airtable
 QUOTE_EXPIRY_DAYS = 7         # Number of days after which quote expires
-LOG_TRUNCATE_LENGTH = 5000    # Max length of message log passed to GPT context
+LOG_TRUNCATE_LENGTH = 10000   # Max length of message_log passed to GPT context (sent to GPT-4)
 
 # === FastAPI Router ===
 router = APIRouter()
@@ -37,7 +37,6 @@ client = openai.OpenAI()  # Required for openai>=1.0.0 SDK
 
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
-
 
 # === GPT PROMPT ===
 GPT_PROMPT = """
@@ -191,7 +190,7 @@ VALID_AIRTABLE_FIELDS = {
     "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge",
 
     # Customer Details (After Quote)
-    "customer_name", "customer_email", "customer_phone", "real_estate_name", "property_address",
+    "customer_name", "customer_email", "customer_phone", "real_estate_name", "property_address", "number_of_sessions",
 
     # Outputs
     "pdf_link", "booking_url",
@@ -208,7 +207,8 @@ INTEGER_FIELDS = {
     "bedrooms_v2", "bathrooms_v2", "window_count",
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
     "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-    "special_request_minutes_min", "special_request_minutes_max"
+    "special_request_minutes_min", "special_request_minutes_max",
+    "number_of_sessions"
 }
 
 # Fields that must always be Boolean True/False
@@ -315,7 +315,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     # === Field Normalization ===
     for key, value in fields.items():
-        key = FIELD_MAP.get(key, key)
+        key = FIELD_MAP.get(key, key)  # Apply field map
 
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
@@ -344,7 +344,7 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Float / Currency Normalization
+        # Float Normalization
         elif key in {
             "gst_applied", "total_price", "base_hourly_rate",
             "price_per_session", "estimated_time_mins", "discount_applied",
@@ -368,7 +368,7 @@ def update_quote_record(record_id: str, fields: dict):
 
         normalized_fields[key] = value
 
-    # Always Force Privacy Checkbox
+    # Always Force Privacy Checkbox as Bool
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
@@ -379,13 +379,13 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # === Sanity Check For Bad Merged Keys ===
+    # Final Sanity Check
     for key in list(normalized_fields.keys()):
         if key not in VALID_AIRTABLE_FIELDS:
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
             normalized_fields.pop(key, None)
 
-    # === Bulk Update ===
+    # === Bulk Update Attempt ===
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
@@ -397,7 +397,7 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception:
         logger.error("🧾 Error response: (Non-JSON)")
 
-    # === Fallback Single Field Update ===
+    # === Fallback to Single Field Updates ===
     successful = []
     for key, value in normalized_fields.items():
         single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
@@ -424,15 +424,15 @@ def get_inline_quote_summary(data: dict) -> str:
     discount = float(data.get("discount_applied", 0) or 0)
     note = str(data.get("note", "") or "").strip()
     special_requests = str(data.get("special_requests", "") or "").strip()
-    is_property_manager = str(data.get("is_property_manager", "") or "").lower() in ["true", "1"]
+    is_property_manager = str(data.get("is_property_manager", "") or "").lower() in TRUE_VALUES
 
-    # Calculate hours and cleaners (max 5 hours each)
+    # Calculate hours and cleaners (max 5 hours per cleaner)
     hours = time_est_mins / 60
     cleaners = max(1, (time_est_mins + 299) // 300)
     hours_per_cleaner = hours / cleaners
     hours_per_cleaner_rounded = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
 
-    # Opening based on job size
+    # Opening based on price / time
     if price > 800:
         opening = "Looks like a big job! Here's your quote:\n\n"
     elif price < 300:
@@ -446,13 +446,14 @@ def get_inline_quote_summary(data: dict) -> str:
     summary += f"💰 Total Price (incl. GST): ${price:.2f}\n"
     summary += f"⏰ Estimated Time: ~{hours_per_cleaner_rounded} hour(s) per cleaner with {cleaners} cleaner(s)\n"
 
+    # Discount
     if discount > 0:
         if is_property_manager and discount >= price / 1.1 * 0.15:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special (+5% Property Manager Bonus)\n"
         else:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special\n"
 
-    # List selected cleaning options
+    # Cleaning Options
     selected = []
 
     for field, label in {
@@ -470,7 +471,7 @@ def get_inline_quote_summary(data: dict) -> str:
         "weekend_cleaning": "Weekend Cleaning",
         "carpet_cleaning": "Carpet Steam Cleaning",
     }.items():
-        if str(data.get(field, "")).lower() in ["true", "1"]:
+        if str(data.get(field, "")).lower() in TRUE_VALUES:
             selected.append(f"- {label}")
 
     if special_requests:
@@ -488,7 +489,6 @@ def get_inline_quote_summary(data: dict) -> str:
     )
 
     return summary.strip()
-
 
 # === Generate Next Actions After Quote ===
 
@@ -534,7 +534,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             model="gpt-4o",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
-                {"role": "user", "content": log}
+                {"role": "user", "content": log[-LOG_TRUNCATE_LENGTH:]}
             ],
             max_tokens=3000,
             temperature=0.4
@@ -577,15 +577,13 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             key, value = p["property"], p["value"]
 
             if key in BOOLEAN_FIELDS:
-                value = str(value).strip().lower() in {"true", "yes", "1"}
-
-            if key in INTEGER_FIELDS:
+                value = str(value).strip().lower() in TRUE_VALUES
+            elif key in INTEGER_FIELDS:
                 try:
                     value = int(value)
                 except:
                     value = 0
-
-            if key == "special_requests":
+            elif key == "special_requests":
                 if not value or str(value).strip().lower() in {"no", "none", "false", "n/a"}:
                     value = ""
                 old = existing.get("special_requests", "")
@@ -593,11 +591,9 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     value = f"{old}\n{value}".strip()
                 elif not old:
                     value = value.strip()
-
-            if key == "quote_stage" and current_stage in [
-                "Gathering Personal Info", "Personal Info Received",
-                "Booking Confirmed", "Referred to Office"
-            ]:
+            if key == "quote_stage" and current_stage in {
+                "Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"
+            }:
                 continue
 
             field_updates[key] = value
@@ -605,9 +601,11 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
         field_updates["source"] = "Brendan"
 
+        # Property manager shortcut
         if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
             field_updates["is_property_manager"] = True
 
+        # Auto-ask sessions if missing
         if (field_updates.get("is_property_manager") or existing.get("is_property_manager")) and not (
             field_updates.get("number_of_sessions") or existing.get("number_of_sessions")
         ):
@@ -618,6 +616,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             field_updates["number_of_sessions"] = 1
             return field_updates, reply
 
+        # Fill all required fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -629,27 +628,28 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates[field] = ""
 
-        if field_updates.get("special_requests") and (
-            not field_updates.get("special_request_minutes_min") and not existing.get("special_request_minutes_min")
-        ):
+        # Estimate microwave special request
+        if field_updates.get("special_requests") and not field_updates.get("special_request_minutes_min"):
             field_updates["special_request_minutes_min"] = 30
             field_updates["special_request_minutes_max"] = 60
 
+        # Carpet auto-flag
         if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
             "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
         ]):
             field_updates["carpet_cleaning"] = True
 
-        # ✅ Force surcharge fields to valid float
-        for surcharge_field in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
-            if surcharge_field in field_updates:
+        # Force surcharges to float
+        for f in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
+            if f in field_updates:
                 try:
-                    field_updates[surcharge_field] = float(field_updates[surcharge_field])
-                except Exception:
-                    field_updates[surcharge_field] = 0.0
+                    field_updates[f] = float(field_updates[f])
+                except:
+                    field_updates[f] = 0.0
 
-        required_fields = [
+        # Required field check
+        required = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
             "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
@@ -662,7 +662,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         ]
 
         missing = []
-        for f in required_fields:
+        for f in required:
             val = field_updates.get(f, existing.get(f, ""))
             if f == "special_requests" and str(val).strip().lower() in ["", "none", "no", "false", "n/a"]:
                 continue
@@ -683,6 +683,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
+        # Abuse Detection
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -771,6 +772,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
         "session_id": session_id
     }
 
+
 # === GPT Error Email Alert ===
 
 import smtplib
@@ -782,6 +784,7 @@ def send_gpt_error_email(error_msg: str):
     """
     Sends an email to admin if GPT extraction fails.
     """
+
     try:
         msg = MIMEText(error_msg)
         msg["Subject"] = "🚨 Brendan GPT Extraction Error"
@@ -820,6 +823,7 @@ def append_message_log(record_id: str, message: str, sender: str):
     Appends a new message to the existing message_log field in Airtable.
     Truncates from the start if log exceeds MAX_LOG_LENGTH.
     """
+
     from time import sleep
 
     if not record_id:
@@ -838,6 +842,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
     }
 
+    # === Fetch Existing Log ===
     for attempt in range(3):
         try:
             res = requests.get(url, headers=headers)
@@ -852,11 +857,11 @@ def append_message_log(record_id: str, message: str, sender: str):
             sleep(1)
 
     old_log = str(current.get("fields", {}).get("message_log", "")).strip()
-
     new_entry = f"{sender_clean}: {message}"
 
     combined_log = f"{old_log}\n{new_entry}".strip() if old_log else new_entry
 
+    # === Truncate Log if Over Limit ===
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
 
