@@ -2,12 +2,15 @@
 
 from app.models.quote_models import QuoteRequest, QuoteResponse
 
-
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75
     SEASONAL_DISCOUNT_PERCENT = 10
     PROPERTY_MANAGER_DISCOUNT = 5
     GST_PERCENT = 10
+
+    WEEKEND_SURCHARGE_PERCENT = 10
+    AFTER_HOURS_SURCHARGE_PERCENT = 10
+    MANDURAH_SURCHARGE_PERCENT = 10
 
     EXTRA_SERVICE_TIMES = {
         "wall_cleaning": 30,
@@ -18,7 +21,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         "garage_cleaning": 40,
     }
 
-    # === Calculate Base Minutes ===
+    # === Base Time Calculation ===
     base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
 
     for service, time in EXTRA_SERVICE_TIMES.items():
@@ -58,18 +61,18 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
         is_range = True
 
-    # === Surcharge Calculation ===
-    # These fields come from Airtable directly as fixed $ amounts
-    weekend_fee = float(data.weekend_surcharge or 0)
-    after_hours_fee = float(data.after_hours_surcharge or 0)
-    mandurah_fee = float(data.mandurah_surcharge or 0)
-
     # === Price Calculation ===
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = calculated_hours * BASE_HOURLY_RATE
 
+    # === Surcharge Handling (as % of base price) ===
+    weekend_fee = round((WEEKEND_SURCHARGE_PERCENT / 100) * base_price, 2) if data.weekend_cleaning else 0.0
+    after_hours_fee = round((AFTER_HOURS_SURCHARGE_PERCENT / 100) * base_price, 2) if data.after_hours_cleaning else 0.0
+    mandurah_fee = round((MANDURAH_SURCHARGE_PERCENT / 100) * base_price, 2) if data.mandurah_property else 0.0
+
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
+    # === Discounts ===
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
     if str(data.is_property_manager).strip().lower() in {"true", "yes", "1"}:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
@@ -77,6 +80,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     discount_amount = round(total_before_discount * (total_discount_percent / 100), 2)
     discounted_price = total_before_discount - discount_amount
 
+    # === GST ===
     gst_amount = round(discounted_price * (GST_PERCENT / 100), 2)
     total_with_gst = round(discounted_price + gst_amount, 2)
 
