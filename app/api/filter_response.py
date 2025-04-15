@@ -861,11 +861,6 @@ def append_message_log(record_id: str, message: str, sender: str):
 
     update_quote_record(record_id, {"message_log": combined_log})
 
-
-@router.post("/filter-response")
-from app.services.email_sender import send_quote_email
-from app.services.pdf_generator import generate_quote_pdf
-
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -888,7 +883,12 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, message, "user")
             append_message_log(record_id, intro_message, "brendan")
 
-            return JSONResponse(content={"properties": [], "response": intro_message, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": intro_message,
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         quote_id, record_id, stage, fields = get_quote_by_session(session_id)
         if not record_id:
@@ -897,29 +897,53 @@ async def filter_response_entry(request: Request):
         log = fields.get("message_log", "")
 
         if stage == "Chat Banned":
-            return JSONResponse(content={"properties": [], "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.", "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.",
+                "next_actions": [],
+                "session_id": session_id
+            })
 
-        if stage == "Quote Calculated" and message.lower() in ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"]:
+        if stage == "Quote Calculated" and message.lower() in [
+            "pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"
+        ]:
             update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
             append_message_log(record_id, message, "user")
 
-            reply = "No worries — before I collect your name, email, and phone number to send the PDF quote, just letting you know we respect your privacy. I won’t ask for any sensitive info like bank details — just your contact details for this quote.\n\nDo I have your permission to collect these details?"
-
+            reply = (
+                "No worries — before I collect your name, email, and phone number to send the PDF quote, "
+                "just letting you know we respect your privacy. I won’t ask for any sensitive info like bank details — "
+                "just your contact details for this quote.\n\n"
+                "Do I have your permission to collect these details?"
+            )
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
             if message.lower() in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
                 update_quote_record(record_id, {"privacy_acknowledged": True})
                 reply = "Great! Could you please provide your name, email, and phone number so I can send the PDF quote?"
             else:
-                reply = "No problem — we only need your name, email, and phone number to send the quote. Let me know if you'd like to continue or if you have any questions about our privacy policy."
+                reply = (
+                    "No problem — we only need your name, email, and phone number to send the quote. "
+                    "Let me know if you'd like to continue or if you have any questions about our privacy policy."
+                )
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False) and all([
             fields.get("customer_name"),
@@ -936,4 +960,14 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": reply,
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+    except Exception as e:
+        logger.exception("❌ Error in /filter-response route")
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
