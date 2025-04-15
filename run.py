@@ -1,25 +1,19 @@
 import logging
 import os
-from fastapi import FastAPI
 from dotenv import load_dotenv
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-# ✅ Load environment variables FIRST
+# === Load environment variables ===
 load_dotenv()
 
-from app.services.pdf_generator import generate_quote_pdf
-from app.store_customer import router as store_customer_router
-from app.api.quote import router as quote_router
-from app.brendan_chat import router as brendan_chat_router
-from app.api.filter_response import router as filter_response_router
-from openai import OpenAI
-
-# ✅ Load API Keys
+# === Load API Keys ===
 api_key = os.getenv("OPENAI_API_KEY")
 airtable_key = os.getenv("AIRTABLE_API_KEY")
 airtable_base = os.getenv("AIRTABLE_BASE_ID")
 
-# ✅ Debug loaded keys (partial masking)
+# === Debug key loading ===
 if api_key:
     print(f"✅ Loaded OpenAI Key: {api_key[:10]}...{api_key[-5:]}")
 else:
@@ -30,13 +24,18 @@ if airtable_key and airtable_base:
 else:
     print("❌ ERROR: Airtable credentials not loaded! Check .env.")
 
-# ✅ Initialize OpenAI client
+# === Initialize OpenAI Client ===
+from openai import OpenAI
 client = OpenAI(api_key=api_key)
 
-# ✅ FastAPI app init
-app = FastAPI()
+# === FastAPI App Init ===
+app = FastAPI(
+    title="Brendan API",
+    description="Backend for Orca Cleaning's AI Quote Assistant - Brendan",
+    version="1.0.0"
+)
 
-# ✅ CORS Configuration
+# === CORS Setup ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -45,23 +44,35 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Register endpoints
+# === Import Routers ===
+from app.api.quote import router as quote_router
+from app.api.filter_response import router as filter_response_router
+from app.brendan_chat import router as brendan_chat_router
+from app.store_customer import router as store_customer_router
+from app import auto_fixer  # ✅ Add AI Auto-Fix Commit System
+
+# === Register Routes ===
 app.include_router(filter_response_router)
 app.include_router(quote_router)
 app.include_router(store_customer_router)
 app.include_router(brendan_chat_router)
+app.include_router(auto_fixer.router)  # ✅ Route for /auto-fix-code
 
-# ✅ Root
+# === Root Welcome Endpoint ===
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to Brendan Backend! 🎉"}
+    return JSONResponse(
+        content={"message": "Welcome to Brendan Backend! 🎉"},
+        media_type="application/json; charset=utf-8"
+    )
 
-# ✅ Health check
+# === Health Check Endpoint ===
 @app.get("/ping")
 def ping():
     return {"ping": "pong"}
 
-# ✅ Local only
+# === Local PDF Test Generator (Optional) ===
+from app.services.pdf_generator import generate_quote_pdf
 def get_test_pdf_data():
     return {
         "quote_id": "VAC-LOGOTEST01",
@@ -105,9 +116,9 @@ def get_test_pdf_data():
         "logo_base64": open("app/static/orca_logo.b64.txt", "r").read(),
     }
 
+# === Run Locally ===
 if __name__ == "__main__":
     import uvicorn
-
     logging.basicConfig(encoding="utf-8")
 
     try:
