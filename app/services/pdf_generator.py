@@ -1,5 +1,3 @@
-# === pdf_generator.py ===
-
 import os
 import uuid
 import base64
@@ -10,8 +8,8 @@ from app.config import logger
 
 def generate_quote_pdf(data: dict) -> str:
     """
-    Generates a PDF quote for Brendan using WeasyPrint and Jinja2 Template.
-    Returns: Absolute path of the generated PDF.
+    Generate a PDF quote using WeasyPrint & Jinja2.
+    Returns: Absolute path of generated PDF.
     """
 
     # === Generate Safe Quote ID ===
@@ -22,7 +20,7 @@ def generate_quote_pdf(data: dict) -> str:
 
     logger.info(f"📄 Generating PDF Quote: {output_path}")
 
-    # === Load Orca Logo as Base64 ===
+    # === Load Logo Base64 ===
     logo_path = "app/static/orca_logo.png"
     try:
         with open(logo_path, "rb") as f:
@@ -33,27 +31,27 @@ def generate_quote_pdf(data: dict) -> str:
 
     data["logo_base64"] = logo_base64
 
-    # === Load Jinja2 Template ===
+    # === Load Template ===
     env = Environment(loader=FileSystemLoader("app/services/templates"))
     template = env.get_template("quote_template.html")
 
-    # === Extra Services Description ===
+    # === Extra Services List ===
     extra_services = []
 
     if data.get("window_cleaning"):
         wc = int(data.get("window_count") or 0)
         extra_services.append(f"Window Cleaning ({wc} windows)" if wc else "Window Cleaning")
 
-    carpet_fields = [
+    carpet_map = [
         ("carpet_bedroom_count", "bedroom"),
         ("carpet_mainroom_count", "main room"),
         ("carpet_study_count", "study"),
         ("carpet_halway_count", "hallway"),
         ("carpet_stairs_count", "stairs"),
-        ("carpet_other_count", "other area")
+        ("carpet_other_count", "other area"),
     ]
 
-    for field, label in carpet_fields:
+    for field, label in carpet_map:
         count = int(data.get(field, 0) or 0)
         if count > 0:
             extra_services.append(f"Carpet Steam Cleaning – {count} {label}(s)")
@@ -83,22 +81,22 @@ def generate_quote_pdf(data: dict) -> str:
     else:
         data["property_manager_note"] = "–"
 
-    # === After-Hours Note ===
+    # === After-Hours Surcharge Note ===
     after_hours = float(data.get("after_hours_surcharge") or 0)
     data["after_hours_note"] = (
-        f"✅ After-Hours Cleaning Surcharge (${after_hours:.2f})"
-        if after_hours > 0 else "–"
+        f"✅ After-Hours Cleaning Surcharge (${after_hours:.2f})" if after_hours > 0 else "–"
     )
 
-    # === Weekend Surcharge (Fix for template crash) ===
+    # === Weekend Surcharge Note ===
     weekend_surcharge = float(data.get("weekend_surcharge") or 0)
-    data["weekend_surcharge"] = weekend_surcharge  # ✅ Ensure always available for Jinja2
     data["weekend_note"] = (
-        f"✅ Weekend Cleaning Surcharge (${weekend_surcharge:.2f})"
-        if weekend_surcharge > 0 else "–"
+        f"✅ Weekend Cleaning Surcharge (${weekend_surcharge:.2f})" if weekend_surcharge > 0 else "–"
     )
 
-    # === Render PDF ===
+    # === Ensure Surcharge Exists in Data for Template ===
+    data["weekend_surcharge"] = weekend_surcharge
+
+    # === Render & Export PDF ===
     html_out = template.render(**data)
     HTML(string=html_out, base_url=".").write_pdf(output_path)
 
