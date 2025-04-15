@@ -298,7 +298,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # === Normalize 'furnished' field ===
+    # === Furnished Field Normalization ===
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -309,7 +309,7 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
-    # === Normalize All Fields ===
+    # === Field Normalization ===
     for key, value in fields.items():
         key = FIELD_MAP.get(key, key)
 
@@ -317,7 +317,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Skip extra_hours_requested if empty or None
         if key == "extra_hours_requested" and value in [None, ""]:
             continue
 
@@ -359,7 +358,7 @@ def update_quote_record(record_id: str, fields: dict):
             }:
                 value = ""
 
-        # String Field
+        # String Normalization
         else:
             value = "" if value is None else str(value).strip()
 
@@ -376,7 +375,13 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # === Bulk Update Attempt ===
+    # === Sanity Check For Bad Merged Keys ===
+    for key in list(normalized_fields.keys()):
+        if key not in VALID_AIRTABLE_FIELDS:
+            logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
+            normalized_fields.pop(key, None)
+
+    # === Bulk Update ===
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
@@ -388,7 +393,7 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception:
         logger.error("🧾 Error response: (Non-JSON)")
 
-    # === Fallback Single Field Updates ===
+    # === Fallback Single Field Update ===
     successful = []
     for key, value in normalized_fields.items():
         single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
