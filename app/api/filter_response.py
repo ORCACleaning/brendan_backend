@@ -316,7 +316,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Skip extra_hours_requested if empty or None
         if key == "extra_hours_requested" and value in [None, ""]:
             continue
 
@@ -340,7 +339,8 @@ def update_quote_record(record_id: str, fields: dict):
 
         elif key in {
             "gst_applied", "total_price", "base_hourly_rate",
-            "price_per_session", "estimated_time_mins", "discount_applied"
+            "price_per_session", "estimated_time_mins", "discount_applied",
+            "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge"
         }:
             try:
                 value = float(value)
@@ -358,7 +358,6 @@ def update_quote_record(record_id: str, fields: dict):
 
         normalized_fields[key] = value
 
-    # Always force privacy_acknowledged to be boolean
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
@@ -369,7 +368,6 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # === Bulk Update First Attempt ===
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
@@ -381,7 +379,6 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception:
         logger.error("🧾 Error response: (Non-JSON)")
 
-    # === Fallback to Single Field Updates ===
     successful = []
     for key, value in normalized_fields.items():
         single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
