@@ -603,6 +603,11 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         current_stage = existing.get("quote_stage", "")
         field_updates = {}
 
+        # === GPT Reply Suppression for PDF Requests ===
+        if current_stage == "Quote Calculated" and any(x in message.lower() for x in PDF_KEYWORDS):
+            reply = "Sure thing — I’ll just grab your name, email and phone number so I can send that through."
+            return field_updates, reply
+
         for p in props:
             if not isinstance(p, dict) or "property" not in p or "value" not in p:
                 continue
@@ -689,7 +694,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 except:
                     field_updates[f] = 0.0
 
-        # Check if quote is ready
+        # Required Fields Check
         required = [
             "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
             "window_cleaning", "window_count", "blind_cleaning",
@@ -742,6 +747,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 reply = (
                     "Just a heads-up — we can’t continue the quote if abusive language is used. "
                     "Let’s keep things respectful 👍\n\n" + reply
+
                 )
 
         return field_updates, reply.strip()
