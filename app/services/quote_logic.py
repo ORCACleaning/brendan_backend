@@ -2,9 +2,8 @@
 
 from app.models.quote_models import QuoteRequest, QuoteResponse
 
-
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
-    BASE_HOURLY_RATE = 75
+    BASE_HOURLY_RATE = 75.0
     SEASONAL_DISCOUNT_PERCENT = 10
     PROPERTY_MANAGER_DISCOUNT = 5
     GST_PERCENT = 10
@@ -23,53 +22,59 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     }
 
     # === Base Time Calculation ===
-    base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
+    base_minutes = 0
+    try:
+        base_minutes += (data.bedrooms_v2 or 0) * 40
+        base_minutes += (data.bathrooms_v2 or 0) * 30
 
-    for service, time in EXTRA_SERVICE_TIMES.items():
-        if getattr(data, service, False):
-            base_minutes += time
+        for service, time in EXTRA_SERVICE_TIMES.items():
+            if getattr(data, service, False):
+                base_minutes += time
 
-    if data.window_cleaning:
-        base_minutes += (data.window_count or 0) * 10
-        if data.blind_cleaning:
+        if data.window_cleaning:
             base_minutes += (data.window_count or 0) * 10
+            if data.blind_cleaning:
+                base_minutes += (data.window_count or 0) * 10
 
-    if data.oven_cleaning:
-        base_minutes += 30
+        if data.oven_cleaning:
+            base_minutes += 30
 
-    if data.upholstery_cleaning:
-        base_minutes += 45
+        if data.upholstery_cleaning:
+            base_minutes += 45
 
-    if str(data.furnished).strip().lower() == "furnished":
-        base_minutes += 60
+        if str(data.furnished).strip().lower() == "furnished":
+            base_minutes += 60
 
-    base_minutes += (data.carpet_bedroom_count or 0) * 30
-    base_minutes += (data.carpet_mainroom_count or 0) * 45
-    base_minutes += (data.carpet_study_count or 0) * 25
-    base_minutes += (data.carpet_halway_count or 0) * 20
-    base_minutes += (data.carpet_stairs_count or 0) * 35
-    base_minutes += (data.carpet_other_count or 0) * 30
+        base_minutes += (data.carpet_bedroom_count or 0) * 30
+        base_minutes += (data.carpet_mainroom_count or 0) * 45
+        base_minutes += (data.carpet_study_count or 0) * 25
+        base_minutes += (data.carpet_halway_count or 0) * 20
+        base_minutes += (data.carpet_stairs_count or 0) * 35
+        base_minutes += (data.carpet_other_count or 0) * 30
+    except Exception as e:
+        logger.warning(f"⚠️ Error in base time calculation: {e}")
+        base_minutes = 0
 
     # === Special Request Handling ===
     min_total_mins = base_minutes
     max_total_mins = base_minutes
-    note = None
     is_range = False
+    note = None
 
     if data.special_request_minutes_min is not None and data.special_request_minutes_max is not None:
         min_total_mins += data.special_request_minutes_min
         max_total_mins += data.special_request_minutes_max
-        note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
         is_range = True
+        note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
 
     # === Price Calculation ===
     calculated_hours = round(max_total_mins / 60, 2)
-    base_price = calculated_hours * BASE_HOURLY_RATE
+    base_price = round(calculated_hours * BASE_HOURLY_RATE, 2)
 
-    # === Surcharge Handling (% of Base Price) ===
-    weekend_fee = round(base_price * (WEEKEND_SURCHARGE_PERCENT / 100), 2) if data.weekend_cleaning else 0.0
-    after_hours_fee = round(base_price * (AFTER_HOURS_SURCHARGE_PERCENT / 100), 2) if data.after_hours_cleaning else 0.0
-    mandurah_fee = round(base_price * (MANDURAH_SURCHARGE_PERCENT / 100), 2) if data.mandurah_property else 0.0
+    # === Surcharge Handling ===
+    weekend_fee = round(base_price * WEEKEND_SURCHARGE_PERCENT / 100, 2) if data.weekend_cleaning else 0.0
+    after_hours_fee = round(base_price * AFTER_HOURS_SURCHARGE_PERCENT / 100, 2) if data.after_hours_cleaning else 0.0
+    mandurah_fee = round(base_price * MANDURAH_SURCHARGE_PERCENT / 100, 2) if data.mandurah_property else 0.0
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
@@ -78,14 +83,13 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     if str(data.is_property_manager).strip().lower() in {"true", "yes", "1"}:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
 
-    discount_amount = round(total_before_discount * (total_discount_percent / 100), 2)
-    discounted_price = total_before_discount - discount_amount
+    discount_amount = round(total_before_discount * total_discount_percent / 100, 2)
+    discounted_price = round(total_before_discount - discount_amount, 2)
 
     # === GST Calculation ===
-    gst_amount = round(discounted_price * (GST_PERCENT / 100), 2)
+    gst_amount = round(discounted_price * GST_PERCENT / 100, 2)
     total_with_gst = round(discounted_price + gst_amount, 2)
 
-    # === Final Response ===
     return QuoteResponse(
         quote_id=data.quote_id,
         estimated_time_mins=max_total_mins,
