@@ -996,7 +996,7 @@ async def filter_response_entry(request: Request):
         if field_updates.get("quote_stage") == "Quote Calculated":
             try:
                 quote_obj = calculate_quote(QuoteRequest(**merged_fields))
-                field_updates.update(quote_obj.dict())
+                field_updates.update(quote_obj.model_dump())
                 summary = get_inline_quote_summary(quote_obj)
                 reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
             except Exception as e:
