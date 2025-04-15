@@ -346,7 +346,7 @@ def update_quote_record(record_id: str, fields: dict):
             try:
                 value = float(value)
             except Exception:
-                value = 0
+                value = 0.0
 
         elif key == "special_requests":
             if not value or str(value).strip().lower() in {
