@@ -721,16 +721,19 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
     logger.info(f"🚨 Checking for existing session: {session_id}")
 
+    # Check for existing quote unless forced new
     if not force_new:
         existing = get_quote_by_session(session_id)
         if existing:
             logger.warning("⚠️ Duplicate session detected. Returning existing quote.")
             return existing
 
+    # Force new session_id if requested
     if force_new:
         logger.info("🔁 Force creating new quote despite duplicate session ID.")
         session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
 
+    # Generate new quote_id
     quote_id = get_next_quote_id()
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
@@ -739,16 +742,19 @@ def create_new_quote(session_id: str, force_new: bool = False):
         "Content-Type": "application/json"
     }
 
+    # Fields to create new record
     data = {
         "fields": {
             "session_id": session_id,
             "quote_id": quote_id,
             "quote_stage": "Gathering Info",
             "message_log": "",
-            "privacy_acknowledged": False  # Force privacy ack to False
+            "privacy_acknowledged": False,  # Force privacy ack False on creation
+            "source": "Brendan"  # Always tag source as Brendan
         }
     }
 
+    # Attempt to create record
     res = requests.post(url, headers=headers, json=data)
 
     if not res.ok:
@@ -756,18 +762,19 @@ def create_new_quote(session_id: str, force_new: bool = False):
         raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
 
     record_id = res.json().get("id")
-
     logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
 
+    # Append system log entry
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
+    # Return standard tuple for caching
     return quote_id, record_id, "Gathering Info", {
         "quote_stage": "Gathering Info",
         "message_log": "",
         "session_id": session_id,
-        "privacy_acknowledged": False  # Return in local cache too
+        "privacy_acknowledged": False,  # Explicit for cache
+        "source": "Brendan"
     }
-
 
 
 # === GPT Error Email Alert ===
@@ -782,36 +789,46 @@ def send_gpt_error_email(error_msg: str):
     Sends an email to admin if GPT extraction fails.
     """
 
-    try:
-        msg = MIMEText(error_msg)
-        msg["Subject"] = "🚨 Brendan GPT Extraction Error"
-        msg["From"] = "info@orcacleaning.com.au"
-        msg["To"] = "admin@orcacleaning.com.au"
+    import smtplib
+    from email.mime.text import MIMEText
+    from time import sleep
 
-        smtp_pass = settings.SMTP_PASS
+    sender_email = "info@orcacleaning.com.au"
+    recipient_email = "admin@orcacleaning.com.au"
+    smtp_server = "smtp.office365.com"
+    smtp_port = 587
+    smtp_pass = settings.SMTP_PASS
 
-        if not smtp_pass:
-            logger.error("❌ SMTP password is missing in environment variables.")
+    if not smtp_pass:
+        logger.error("❌ Missing SMTP password — cannot send GPT error email.")
+        return
+
+    msg = MIMEText(error_msg)
+    msg["Subject"] = "🚨 Brendan GPT Extraction Error"
+    msg["From"] = sender_email
+    msg["To"] = recipient_email
+
+    for attempt in range(2):
+        try:
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.starttls()
+                server.login(sender_email, smtp_pass)
+                server.sendmail(
+                    from_addr=sender_email,
+                    to_addrs=[recipient_email],
+                    msg=msg.as_string()
+                )
+            logger.info("✅ GPT error email sent successfully.")
+            return  # Exit after success
+        except smtplib.SMTPException as e:
+            logger.warning(f"⚠️ SMTP error (attempt {attempt + 1}/2): {e}")
+            if attempt == 1:
+                logger.error("❌ Failed to send GPT error email after 2 attempts.")
+            else:
+                sleep(5)  # Wait before retrying
+        except Exception as e:
+            logger.error(f"❌ Unexpected error sending GPT error email: {e}")
             return
-
-        with smtplib.SMTP("smtp.office365.com", 587) as server:
-            server.starttls()
-            server.login("info@orcacleaning.com.au", smtp_pass)
-            server.sendmail(
-                from_addr=msg["From"],
-                to_addrs=[msg["To"]],
-                msg=msg.as_string()
-            )
-
-        logger.info("✅ GPT error email sent successfully.")
-
-    except smtplib.SMTPException as e:
-        logger.error(f"⚠️ SMTP error occurred: {e}")
-        sleep(5)  # Retry once
-        send_gpt_error_email(error_msg)
-
-    except Exception as e:
-        logger.error(f"⚠️ Could not send GPT error alert: {e}")
 
 # === Append Message Log ===
 
