@@ -2,10 +2,8 @@ from fastapi import FastAPI
 from app.api import quote
 from fastapi.responses import JSONResponse
 import json
-from app import auto_fixer
 
-app.include_router(auto_fixer.router)
-
+from app import auto_fixer  # Import after built-ins for clarity
 
 app = FastAPI(
     title="Brendan API",
@@ -13,10 +11,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Include the /calculate-quote and /generate-pdf routes
+# Include Auto Fixer Route (AI GitHub Commit System)
+app.include_router(auto_fixer.router)
+
+# Include Quote Calculation and PDF Generation Routes
 app.include_router(quote.router, prefix="/api")
 
-# Welcome endpoint with corrected emoji encoding
+# Root Welcome Endpoint
 @app.get("/")
 def read_root():
     return JSONResponse(
