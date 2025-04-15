@@ -62,7 +62,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     # === Surcharge Calculation ===
     weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
-    after_hours_fee = data.after_hours_surcharge or 0
+    after_hours_fee = float(data.after_hours_surcharge or 0)
     mandurah_fee = MANDURAH_SURCHARGE if data.mandurah_property else 0
 
     # === Price Calculation ===
