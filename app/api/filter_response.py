@@ -183,7 +183,8 @@ VALID_AIRTABLE_FIELDS = {
 
     # Quote Result Fields
     "total_price", "estimated_time_mins", "base_hourly_rate", "gst_applied",
-    "discount_applied", "discount_reason", "price_per_session",
+    "discount_applied", "discount_reason", "price_per_session"
+    "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge",
 
     # Customer Details (After Quote)
     "customer_name", "customer_email", "customer_phone", "real_estate_name", "property_address",
