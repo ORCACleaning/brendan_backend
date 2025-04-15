@@ -16,7 +16,10 @@ from fastapi.responses import JSONResponse
 from app.services.email_sender import send_quote_email
 from app.services.pdf_generator import generate_quote_pdf
 from app.services.quote_id_utils import get_next_quote_id
+from app.services.quote_logic import calculate_quote
+from app.models.quote_models import QuoteRequest
 from app.config import logger, settings  # Logger and Settings loaded from config.py
+
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
