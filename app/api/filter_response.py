@@ -12,7 +12,9 @@ import pytz
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.services.email_sender import handle_pdf_and_email
+# === Correct Brendan Service Imports ===
+from app.services.email_sender import send_quote_email
+from app.services.pdf_generator import generate_quote_pdf
 from app.services.quote_id_utils import get_next_quote_id
 from app.config import logger, settings  # Logger and Settings loaded from config.py
 
@@ -861,6 +863,10 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 
 @router.post("/filter-response")
+from app.services.email_sender import send_quote_email
+from app.services.pdf_generator import generate_quote_pdf
+
+@router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
@@ -921,7 +927,9 @@ async def filter_response_entry(request: Request):
             fields.get("customer_phone")
         ]):
             update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
-            handle_pdf_and_email(record_id, quote_id, fields)
+
+            pdf_path = generate_quote_pdf(fields)
+            send_quote_email(fields.get("customer_email"), pdf_path)
 
             reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
 
@@ -929,66 +937,3 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, reply, "brendan")
 
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
-
-        updated_log = f"{log}\nUSER: {message}".strip()[-LOG_TRUNCATE_LENGTH:]
-        props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
-
-        if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
-            update_quote_record(record_id, props_dict)
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-
-            return JSONResponse(content={"properties": list(props_dict.keys()), "response": reply, "next_actions": [], "session_id": session_id})
-
-        if props_dict.get("quote_stage") == "Quote Calculated":
-            from app.services.quote_logic import QuoteRequest, calculate_quote
-
-            merged_fields = {**fields, **props_dict}
-            quote_request = QuoteRequest(**merged_fields)
-            quote_response = calculate_quote(quote_request)
-            quote_response.quote_id = quote_id
-
-            if not quote_response:
-                logger.error("❌ Quote Response missing during summary generation.")
-                raise HTTPException(status_code=500, detail="Failed to calculate quote.")
-
-            perth_tz = pytz.timezone("Australia/Perth")
-            expiry_date = datetime.now(perth_tz) + timedelta(days=QUOTE_EXPIRY_DAYS)
-            expiry_str = expiry_date.strftime("%Y-%m-%d")
-
-            fields_to_update = props_dict.copy()
-            fields_to_update.update({
-                "total_price": quote_response.total_price,
-                "estimated_time_mins": quote_response.estimated_time_mins,
-                "base_hourly_rate": quote_response.base_hourly_rate,
-                "discount_applied": quote_response.discount_applied,
-                "gst_applied": quote_response.gst_applied,
-                "price_per_session": quote_response.total_price,  # <-- Comma fixed here
-                "mandurah_surcharge": quote_response.mandurah_surcharge,
-                "after_hours_surcharge": quote_response.after_hours_surcharge,
-                "weekend_surcharge": quote_response.weekend_surcharge,
-                "quote_expiry_date": expiry_str
-            })
-
-            update_quote_record(record_id, fields_to_update)
-
-            handle_pdf_and_email(record_id, quote_id, {**props_dict, "total_price": quote_response.total_price, "estimated_time_mins": quote_response.estimated_time_mins, "base_hourly_rate": quote_response.base_hourly_rate, "discount_applied": quote_response.discount_applied, "gst_applied": quote_response.gst_applied, "price_per_session": quote_response.total_price, "quote_expiry_date": expiry_str})
-
-            summary = get_inline_quote_summary(quote_response.dict())
-
-            reply = f"Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n{summary}\n\n⚠️ This quote is valid until {expiry_str}. If it expires, just let me know your quote number and I’ll whip up a new one for you."
-
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-
-            return JSONResponse(content={"properties": list(props_dict.keys()), "response": reply, "next_actions": generate_next_actions(), "session_id": session_id})
-
-        update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
-        append_message_log(record_id, message, "user")
-        append_message_log(record_id, reply, "brendan")
-
-        return JSONResponse(content={"properties": list(props_dict.keys()), "response": reply, "next_actions": [], "session_id": session_id})
-
-    except Exception as e:
-        logger.error(f"❌ Exception in filter_response_entry: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
