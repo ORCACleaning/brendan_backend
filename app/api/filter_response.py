@@ -29,6 +29,16 @@ MAX_LOG_LENGTH = 10000        # Max character limit for message_log and gpt_erro
 QUOTE_EXPIRY_DAYS = 7         # Number of days after which quote expires
 LOG_TRUNCATE_LENGTH = 10000   # Max length of message_log passed to GPT context (sent to GPT-4)
 
+PDF_SYSTEM_MESSAGE = """
+SYSTEM: Brendan has already provided the customer with their full quote summary. 
+The customer has now asked for the quote to be sent as a PDF or emailed.
+
+Do NOT regenerate or repeat the quote summary.
+Your only task is to politely collect their name, email, and phone number so Brendan can send the quote as a PDF.
+
+Once you collect those details, wait for confirmation or further instructions.
+"""
+
 # === FastAPI Router ===
 router = APIRouter()
 
@@ -37,6 +47,7 @@ client = openai.OpenAI()  # Required for openai>=1.0.0 SDK
 
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
+
 
 # === GPT PROMPT ===
 GPT_PROMPT = """
@@ -926,27 +937,12 @@ async def filter_response_entry(request: Request):
         if not record_id:
             raise HTTPException(status_code=404, detail="Quote not found.")
 
-        log = fields.get("message_log", "")
         message_lower = message.lower()
         pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "email quote", "pdf quote"]
 
         # === Stage: Chat Banned ===
         if stage == "Chat Banned":
             reply = "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote."
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
-
-        # === Stage: Quote Calculated | PDF Trigger ===
-        if stage == "Quote Calculated" and message_lower in pdf_keywords:
-            update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
-            fields = get_quote_by_session(session_id)[3]
-            reply = "Sure thing — I’ll just grab your name, email and phone number so I can send that through."
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
             return JSONResponse(content={
                 "properties": [],
                 "response": reply,
@@ -1007,7 +1003,6 @@ async def filter_response_entry(request: Request):
                     )
 
                     update_quote_record(record_id, {"pdf_link": pdf_path})
-
                     reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
 
                 except Exception as e:
@@ -1022,6 +1017,13 @@ async def filter_response_entry(request: Request):
                     "next_actions": [],
                     "session_id": session_id
                 })
+
+        # === Prepare Log for GPT ===
+        log = fields.get("message_log", "")
+        if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords):
+            log = PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]
+        else:
+            log = log[-LOG_TRUNCATE_LENGTH:]
 
         # === Default GPT Extraction & Quote Recalc ===
         append_message_log(record_id, message, "user")
@@ -1054,3 +1056,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         logger.exception("❌ Error in /filter-response route")
         raise HTTPException(status_code=500, detail="Internal server error.")
+
