@@ -529,10 +529,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     import traceback
 
     try:
-        logger.info("🧑‍🧪 Calling GPT-4 to extract properties...")
+        logger.info("🧑‍🧪 Calling GPT-4 Turbo to extract properties...")
 
         response = client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
                 {"role": "user", "content": log[-LOG_TRUNCATE_LENGTH:]}
@@ -633,7 +633,10 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             field_updates["special_request_minutes_min"] = 30
             field_updates["special_request_minutes_max"] = 60
 
-        if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in ["carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"]):
+        if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
+        ]):
             field_updates["carpet_cleaning"] = True
 
         for f in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
@@ -643,7 +646,17 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 except:
                     field_updates[f] = 0.0
 
-        required = ["suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning", "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count", "carpet_stairs_count", "carpet_other_count", "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning", "balcony_cleaning", "garage_cleaning", "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager", "special_requests", "special_request_minutes_min", "special_request_minutes_max"]
+        required = [
+            "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
+            "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
+            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
+            "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
+            "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
+            "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+            "is_property_manager", "special_requests",
+            "special_request_minutes_min", "special_request_minutes_max"
+        ]
 
         missing = []
         for f in required:
