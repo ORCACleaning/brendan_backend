@@ -190,9 +190,6 @@ If any carpet_* field > 0:
 { "property": "carpet_cleaning", "value": true }
 """
 
-# === Airtable Field Rules ===
-
-# Master List of Valid Airtable Fields (Allowed for Read/Write)
 VALID_AIRTABLE_FIELDS = {
     # Core Quote Identifiers
     "quote_id", "timestamp", "source", "session_id", "quote_stage", "quote_notes", "privacy_acknowledged",
@@ -207,7 +204,7 @@ VALID_AIRTABLE_FIELDS = {
     "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager",
 
     # Carpet Cleaning Breakdown
-    "carpet_cleaning",  # Auto-filled from carpet_* counts
+    "carpet_cleaning",
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
     "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
 
@@ -215,9 +212,9 @@ VALID_AIRTABLE_FIELDS = {
     "special_requests", "special_request_minutes_min", "special_request_minutes_max", "extra_hours_requested",
 
     # Quote Result Fields
-    "total_price", "estimated_time_mins", "base_hourly_rate", "gst_applied",
-    "discount_applied", "discount_reason", "price_per_session",
-    "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge",
+    "total_price", "estimated_time_mins", "minimum_time_mins", "calculated_hours",
+    "base_hourly_rate", "gst_applied", "discount_applied", "discount_reason",
+    "price_per_session", "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge",
 
     # Customer Details (After Quote)
     "customer_name", "customer_email", "customer_phone", "real_estate_name", "property_address", "number_of_sessions",
@@ -227,37 +224,6 @@ VALID_AIRTABLE_FIELDS = {
 
     # Traceability
     "message_log", "gpt_error_log"
-}
-
-# Field Mapping (Ready for Aliases or Renames)
-FIELD_MAP = {k: k for k in VALID_AIRTABLE_FIELDS}
-
-# Fields that must always be cast to Integer
-INTEGER_FIELDS = {
-    "bedrooms_v2", "bathrooms_v2", "window_count",
-    "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-    "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-    "special_request_minutes_min", "special_request_minutes_max",
-    "number_of_sessions"
-}
-
-# Fields that must always be Boolean True/False
-BOOLEAN_FIELDS = {
-    "oven_cleaning",
-    "window_cleaning",
-    "blind_cleaning",
-    "garage_cleaning",
-    "balcony_cleaning",
-    "upholstery_cleaning",
-    "deep_cleaning",
-    "fridge_cleaning",
-    "range_hood_cleaning",
-    "wall_cleaning",
-    "after_hours_cleaning",
-    "weekend_cleaning",
-    "mandurah_property",
-    "carpet_cleaning",
-    "is_property_manager"
 }
 
 # Trigger Words for Abuse Detection (Escalation Logic)
@@ -332,7 +298,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # === Furnished Field Normalization ===
+    # === Normalize "furnished" Field ===
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -343,7 +309,7 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
-    # === Normalize + Validate + Map Fields ===
+    # === Normalize & Validate ===
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
 
@@ -375,21 +341,21 @@ def update_quote_record(record_id: str, fields: dict):
         elif key in {
             "gst_applied", "total_price", "base_hourly_rate",
             "price_per_session", "estimated_time_mins", "discount_applied",
-            "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge"
+            "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge",
+            "calculated_hours"
         }:
             try:
                 value = float(value)
             except Exception:
+                logger.warning(f"⚠️ Failed to convert {key} to float — forcing 0.0")
                 value = 0.0
 
-        # === Special Request Normalization ===
+        # === Special Request Field ===
         elif key == "special_requests":
-            if not value or str(value).strip().lower() in {
-                "no", "none", "false", "no special requests", "n/a"
-            }:
+            if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
 
-        # === Extra Hours Requested Normalization ===
+        # === Extra Hours Requested ===
         elif key == "extra_hours_requested":
             if value in [None, ""]:
                 value = 0
@@ -399,16 +365,17 @@ def update_quote_record(record_id: str, fields: dict):
                 except Exception:
                     value = 0
 
-        # === String Fallback ===
+        # === Everything Else as Str ===
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
 
-    # === Force Privacy Field as Boolean ===
+    # === Force Privacy Field (Final Override) ===
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
+    # === Exit Early if Nothing Valid ===
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
         return []
@@ -416,13 +383,13 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # === Final Sanity Check ===
+    # === Final Field Safety Check ===
     for key in list(normalized_fields.keys()):
         if key not in VALID_AIRTABLE_FIELDS:
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
             normalized_fields.pop(key, None)
 
-    # === Bulk Update First ===
+    # === Attempt Bulk Update ===
     res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
     if res.ok:
         logger.info("✅ Airtable bulk update success.")
@@ -434,7 +401,7 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception:
         logger.error("🧾 Error response: (Non-JSON)")
 
-    # === Fallback to Single Field Updates ===
+    # === Fallback to Single-Field Updates ===
     successful = []
     for key, value in normalized_fields.items():
         single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
