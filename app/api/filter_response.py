@@ -984,6 +984,21 @@ async def filter_response_entry(request: Request):
         # === Default GPT Handling ===
         append_message_log(record_id, message, "user")
         field_updates, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
+
+        # === Merge existing fields ===
+        merged_fields = fields.copy()
+        merged_fields.update(field_updates)
+
+        if field_updates.get("quote_stage") == "Quote Calculated":
+            from app.services.quote_logic import calculate_quote
+            from app.models.quote_models import QuoteRequest
+
+            try:
+                quote_obj = calculate_quote(QuoteRequest(**merged_fields))
+                field_updates.update(quote_obj.dict())
+            except Exception as e:
+                logger.warning(f"⚠️ Quote calculation failed: {e}")
+
         update_quote_record(record_id, field_updates)
         append_message_log(record_id, reply, "brendan")
 
