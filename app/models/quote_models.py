@@ -2,15 +2,15 @@ from pydantic import BaseModel
 from typing import Optional
 
 
-# ✅ Input Model for Quote Request
+# === Input Model for Quote Request ===
 class QuoteRequest(BaseModel):
     # 🏠 Basic Property Info
     suburb: str
     bedrooms_v2: int
     bathrooms_v2: int
-    furnished: str  # "Furnished" / "Unfurnished"
+    furnished: str  # "Furnished" or "Unfurnished"
 
-    # 🧼 Standard Cleaning Options (Checkbox fields as bool)
+    # 🧼 Standard Cleaning Options
     oven_cleaning: bool
     window_cleaning: bool
     window_count: Optional[int] = 0
@@ -23,7 +23,7 @@ class QuoteRequest(BaseModel):
     carpet_halway_count: Optional[int] = 0
     carpet_stairs_count: Optional[int] = 0
     carpet_other_count: Optional[int] = 0
-    carpet_cleaning: Optional[bool] = False  # Auto-filled logic
+    carpet_cleaning: Optional[bool] = False  # Auto-filled in backend
 
     # ➕ Optional Extras
     wall_cleaning: bool
@@ -51,12 +51,12 @@ class QuoteRequest(BaseModel):
     special_request_minutes_min: Optional[int] = 0
     special_request_minutes_max: Optional[int] = 0
 
-    # 👤 Customer Details (Post Quote)
+    # 👤 Customer Details (After Quote Calculation)
     customer_name: Optional[str] = None
     customer_email: Optional[str] = None
     customer_phone: Optional[str] = None
 
-    # 📝 Extra / Traceability Fields
+    # 📝 Notes & Logs
     quote_notes: Optional[str] = None
     message_log: Optional[str] = None
 
@@ -69,7 +69,7 @@ class QuoteRequest(BaseModel):
     privacy_acknowledged: Optional[bool] = False
 
 
-# ✅ Output Model for Quote Response
+# === Output Model for Quote Response ===
 class QuoteResponse(BaseModel):
     quote_id: str
     calculated_hours: float
