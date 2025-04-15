@@ -4,28 +4,28 @@ from typing import Optional
 
 # === Input Model for Quote Request ===
 class QuoteRequest(BaseModel):
-    # 🏠 Basic Property Info
+    # === Property Details ===
     suburb: str
     bedrooms_v2: int
     bathrooms_v2: int
     furnished: str  # "Furnished" or "Unfurnished"
 
-    # 🧼 Standard Cleaning Options
+    # === Standard Cleaning Options ===
     oven_cleaning: bool
     window_cleaning: bool
     window_count: Optional[int] = 0
     blind_cleaning: bool
 
-    # 🧹 Carpet Cleaning Breakdown
+    # === Carpet Cleaning Breakdown ===
     carpet_bedroom_count: Optional[int] = 0
     carpet_mainroom_count: Optional[int] = 0
     carpet_study_count: Optional[int] = 0
     carpet_halway_count: Optional[int] = 0
     carpet_stairs_count: Optional[int] = 0
     carpet_other_count: Optional[int] = 0
-    carpet_cleaning: Optional[bool] = False  # Auto-filled in backend
+    carpet_cleaning: Optional[bool] = False  # Auto-filled by backend logic
 
-    # ➕ Optional Extras
+    # === Optional Extra Services ===
     wall_cleaning: bool
     balcony_cleaning: bool
     deep_cleaning: bool
@@ -34,33 +34,31 @@ class QuoteRequest(BaseModel):
     garage_cleaning: bool
     upholstery_cleaning: bool
 
-    # ⏰ Surcharges & Conditions
+    # === Surcharges & Conditions ===
     after_hours_cleaning: bool
     weekend_cleaning: bool
-    after_hours_surcharge: Optional[float] = 0.0
-    weekend_surcharge: Optional[float] = 0.0
     mandurah_property: bool
+    after_hours_surcharge: Optional[float] = 0.0  # Final applied fee in $
+    weekend_surcharge: Optional[float] = 0.0
     mandurah_surcharge: Optional[float] = 0.0
 
-    # 🏢 Real Estate Details
+    # === Real Estate Details ===
     is_property_manager: bool
     real_estate_name: Optional[str] = None
 
-    # 🤖 Special Requests
+    # === Special Requests Handling ===
     special_requests: Optional[str] = ""
     special_request_minutes_min: Optional[int] = 0
     special_request_minutes_max: Optional[int] = 0
 
-    # 👤 Customer Details (After Quote Calculation)
+    # === Customer Contact Details ===
     customer_name: Optional[str] = None
     customer_email: Optional[str] = None
     customer_phone: Optional[str] = None
 
-    # 📝 Notes & Logs
+    # === System & Logging Fields ===
     quote_notes: Optional[str] = None
     message_log: Optional[str] = None
-
-    # 🧠 System Fields
     quote_stage: Optional[str] = "Gathering Info"
     quote_status: Optional[str] = "Pending"
     quote_id: Optional[str] = None
