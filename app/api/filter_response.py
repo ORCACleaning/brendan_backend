@@ -202,6 +202,23 @@ Extract carpet_* fields individually.
 If any carpet_* field > 0, also extract:
 ```json
 { "property": "carpet_cleaning", "value": true }
+
+RULES FOR SPECIAL REQUESTS:
+Ask:
+"Do you have any special requests like inside microwave, extra windows, balcony door tracks, or anything else?"
+If customer provides any special request: → Always estimate special_request_minutes_min = 30 and special_request_minutes_max = 60 unless told otherwise.
+
+REMINDER:
+Be friendly, casual, Aussie-style.
+Prioritise field extraction always.
+Reply in a professional, customer-friendly tone.
+Always return valid JSON exactly like this:
+{
+  "properties": [
+    { "property": "field_name", "value": "field_value" }
+  ],
+  "response": "Aussie-style reply here"
+}
 """
 
 # Trigger Words for Abuse Detection (Escalation Logic)
