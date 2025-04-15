@@ -890,7 +890,6 @@ async def filter_response_entry(request: Request):
         if stage == "Chat Banned":
             return JSONResponse(content={"properties": [], "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.", "next_actions": [], "session_id": session_id})
 
-        # Handle PDF Request After Quote Calculation
         if stage == "Quote Calculated" and message.lower() in ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"]:
             update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
             append_message_log(record_id, message, "user")
@@ -901,7 +900,6 @@ async def filter_response_entry(request: Request):
 
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # Handle Privacy Acknowledgement Before Asking Personal Info
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
             if message.lower() in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
                 update_quote_record(record_id, {"privacy_acknowledged": True})
@@ -914,7 +912,6 @@ async def filter_response_entry(request: Request):
 
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # Auto Trigger PDF Generation After Personal Info Collected
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False) and all([
             fields.get("customer_name"),
             fields.get("customer_email"),
@@ -963,12 +960,14 @@ async def filter_response_entry(request: Request):
                 "base_hourly_rate": quote_response.base_hourly_rate,
                 "discount_applied": quote_response.discount_applied,
                 "gst_applied": quote_response.gst_applied,
-                "price_per_session": quote_response.total_price,
+                "price_per_session": quote_response.total_price,  # <-- Comma fixed here
+                "mandurah_surcharge": quote_response.mandurah_surcharge,
+                "after_hours_surcharge": quote_response.after_hours_surcharge,
+                "weekend_surcharge": quote_response.weekend_surcharge,
                 "quote_expiry_date": expiry_str
             })
 
             update_quote_record(record_id, fields_to_update)
-
 
             handle_pdf_and_email(record_id, quote_id, {**props_dict, "total_price": quote_response.total_price, "estimated_time_mins": quote_response.estimated_time_mins, "base_hourly_rate": quote_response.base_hourly_rate, "discount_applied": quote_response.discount_applied, "gst_applied": quote_response.gst_applied, "price_per_session": quote_response.total_price, "quote_expiry_date": expiry_str})
 
