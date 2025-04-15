@@ -38,7 +38,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     if data.upholstery_cleaning:
         base_minutes += 45
 
-    if str(data.furnished).lower() == "furnished":
+    if str(data.furnished).strip().lower() == "furnished":
         base_minutes += 60
 
     base_minutes += (data.carpet_bedroom_count or 0) * 30
