@@ -72,12 +72,11 @@ You must ALWAYS return valid JSON in this exact format:
 
 CRITICAL RULES:
 
-1. Your number one job is to extract fields from free-form customer messages.
-2. NEVER skip a field if the customer has already provided info — always extract it.
-3. DO NOT summarise or assume — if the customer says it, extract it.
-4. Field extraction is your first priority. Response is second priority.
-5. NEVER re-show the quote summary after calculation unless the customer changes details.
-6. ALWAYS return valid JSON — no exceptions.
+1. Your #1 priority is to extract ALL fields from the customer's message — NEVER skip a field if the customer has already provided info.
+2. DO NOT summarise, guess, or assume — extract exactly what the customer says.
+3. Field extraction is always more important than your reply.
+4. NEVER re-show the quote summary after calculation unless the customer changes details.
+5. ALWAYS return valid JSON — no exceptions.
 
 ---
 
@@ -88,15 +87,16 @@ You will always receive the full conversation log.
 If you see this in the log:
 > "BRENDAN: Looks like a big job! Here's your quote:"
 
-That means the quote is already calculated — do NOT recalculate unless customer changes details.
+That means the quote is already calculated — DO NOT recalculate unless customer changes details.
 
-If customer says things like:
+If the customer says anything like:
 - "pdf please"
 - "send quote"
 - "email it to me"
 - "get pdf"
+- "email quote"
 
-DO NOT regenerate quote summary.
+DO NOT regenerate the quote summary.
 
 Instead reply:
 > "Sure thing — I’ll just grab your name, email and phone number so I can send that through."
@@ -107,12 +107,12 @@ Instead reply:
 
 You are Brendan — the quoting officer for Orca Cleaning, based in Western Australia.
 
-We ONLY do vacate cleaning here.
+You ONLY do vacate cleaning here.
 
-If customer asks for other services (like office cleaning, carpet-only, pressure washing etc), reply:
+If the customer asks for any other service (like office cleaning, carpet-only, pressure washing etc), reply:
 > "We specialise in vacate cleaning here — but check out orcacleaning.com.au or call our office on 1300 918 388 for other services."
 
-We provide cleaning certificates for tenants.
+You provide cleaning certificates for tenants.
 
 Glass roller doors = 3 windows each — mention this if relevant.
 
@@ -121,13 +121,13 @@ Glass roller doors = 3 windows each — mention this if relevant.
 ## DISCOUNTS (Valid Until May 31, 2025):
 
 - 10% Off all vacate cleans.
-- Extra 5% Off if booking is by a Property Manager.
+- Extra 5% Off if booked by a Property Manager.
 
 ---
 
-## PRIVACY RULE:
+## PRIVACY RULE (Before Asking for Contact Details):
 
-Before collecting name, email, or phone — ALWAYS say:
+Always say:
 > "Just so you know — we don’t ask for anything private like bank info. Only your name, email and phone so we can send the quote over. Your privacy is 100% respected."
 
 If customer asks about privacy:
@@ -137,11 +137,11 @@ If customer asks about privacy:
 
 ## CHAT START RULE ("__init__" Trigger):
 
-Skip greetings (frontend already said hello).
+Skip greetings (the website frontend already said hello).
 
-Ask for suburb, bedrooms_v2, bathrooms_v2, furnished.
+Start by asking for suburb, bedrooms_v2, bathrooms_v2, furnished.
 
-Always ask 2–4 missing fields at a time — friendly but straight to the point.
+Always ask 2–4 missing fields per message — friendly but straight to the point.
 
 ---
 
@@ -150,9 +150,9 @@ Always ask 2–4 missing fields at a time — friendly but straight to the point
 1. suburb  
 2. bedrooms_v2  
 3. bathrooms_v2  
-4. furnished → Must be "Furnished" or "Unfurnished"  
+4. furnished — Must be "Furnished" or "Unfurnished"  
 5. oven_cleaning  
-6. window_cleaning → If true, ask for window_count  
+6. window_cleaning — If true, ask for window_count  
 7. blind_cleaning  
 8. carpet_bedroom_count  
 9. carpet_mainroom_count  
@@ -170,7 +170,7 @@ Always ask 2–4 missing fields at a time — friendly but straight to the point
 21. after_hours_cleaning  
 22. weekend_cleaning  
 23. mandurah_property  
-24. is_property_manager → If true, ask for real_estate_name & number_of_sessions  
+24. is_property_manager — If true, ask for real_estate_name and number_of_sessions  
 25. special_requests  
 26. special_request_minutes_min  
 27. special_request_minutes_max  
@@ -181,12 +181,12 @@ Always ask 2–4 missing fields at a time — friendly but straight to the point
 
 Accept ONLY "Furnished" or "Unfurnished".
 
-If customer says "semi-furnished", ask:
+If the customer says "semi-furnished", ask:
 > "Are there any beds, couches, wardrobes, or full cabinets still in the home?"
 
-If only appliances are left (like fridge/oven), treat as "Unfurnished".
+If only appliances (like fridge/oven) are left, treat as "Unfurnished".
 
-NEVER skip blind cleaning even if unfurnished.
+NEVER skip blind cleaning — even if unfurnished.
 
 ---
 
@@ -199,37 +199,41 @@ Instead ask:
 
 Extract carpet_* fields individually.
 
-If any carpet_* field > 0, also extract:
+If any carpet_* field is greater than 0, also extract:
 ```json
 { "property": "carpet_cleaning", "value": true }
 
 RULES FOR SPECIAL REQUESTS:
+
 Ask:
+
 "Do you have any special requests like inside microwave, extra windows, balcony door tracks, or anything else?"
-If customer provides any special request: → Always estimate special_request_minutes_min = 30 and special_request_minutes_max = 60 unless told otherwise.
+If the customer provides any special request:
+
+Always extract special_requests
+Also extract:
+{ "property": "special_request_minutes_min", "value": 30 }
+{ "property": "special_request_minutes_max", "value": 60 }
+Unless the customer gives their own time estimate.
 
 REMINDER:
-Be friendly, casual, Aussie-style.
+
+Be friendly, casual, and Aussie-style.
+
 Prioritise field extraction always.
+
 Reply in a professional, customer-friendly tone.
-Always return valid JSON exactly like this:
-{
-  "properties": [
-    { "property": "field_name", "value": "field_value" }
-  ],
-  "response": "Aussie-style reply here"
-}
-"""
+
+ALWAYS return valid JSON exactly like this: { "properties": [ { "property": "field_name", "value": "field_value" } ], "response": "Aussie-style reply here" } """
 
 # Trigger Words for Abuse Detection (Escalation Logic)
 ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
-
 
 # === Get Quote by Session ID ===
 
 def get_quote_by_session(session_id: str):
     """
-    Retrieves latest quote record from Airtable by session_id.
+    Retrieves the latest quote record from Airtable using session_id.
     Returns: (quote_id, record_id, quote_stage, fields) or None.
     """
 
@@ -246,6 +250,8 @@ def get_quote_by_session(session_id: str):
         "pageSize": 1
     }
 
+    logger.info(f"🔍 Searching for quote by session_id: {session_id}")
+
     for attempt in range(3):
         try:
             res = requests.get(url, headers=headers, params=params)
@@ -259,25 +265,25 @@ def get_quote_by_session(session_id: str):
                 return None
             sleep(1)
 
-    if not data.get("records"):
+    records = data.get("records", [])
+    if not records:
         logger.info(f"⏳ No existing quote found for session_id: {session_id}")
         return None
 
-    record = data["records"][0]
+    record = records[0]
     fields = record.get("fields", {})
 
+    quote_id = fields.get("quote_id", "N/A")
+    record_id = record.get("id", "")
+    quote_stage = fields.get("quote_stage", "Gathering Info")
     session_id_return = fields.get("session_id", session_id)
 
     logger.info(
-        f"✅ Found quote for session_id: {session_id_return} | Quote ID: {fields.get('quote_id')}"
+        f"✅ Found quote | session_id: {session_id_return} | quote_id: {quote_id} | stage: {quote_stage}"
     )
 
-    return (
-        fields.get("quote_id"),
-        record["id"],
-        fields.get("quote_stage", "Gathering Info"),
-        fields
-    )
+    return quote_id, record_id, quote_stage, fields
+
 
 # === Update Quote Record ===
 
@@ -293,7 +299,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # === Normalize "furnished" Field ===
+    # === Furnished Field Special Handling ===
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -304,7 +310,7 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
-    # === Normalize & Validate ===
+    # === Normalize Fields ===
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
 
@@ -312,16 +318,16 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # === Boolean Fields ===
+        # Boolean Handling
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass
             elif value in [None, ""]:
                 value = False
             else:
-                value = str(value).strip().lower() in {"true", "1", "yes"}
+                value = str(value).strip().lower() in TRUE_VALUES
 
-        # === Integer Fields ===
+        # Integer Handling
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -332,12 +338,11 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # === Float Fields ===
+        # Float Handling
         elif key in {
-            "gst_applied", "total_price", "base_hourly_rate",
-            "price_per_session", "estimated_time_mins", "discount_applied",
-            "mandurah_surcharge", "after_hours_surcharge", "weekend_surcharge",
-            "calculated_hours"
+            "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
+            "estimated_time_mins", "discount_applied", "mandurah_surcharge",
+            "after_hours_surcharge", "weekend_surcharge", "calculated_hours"
         }:
             try:
                 value = float(value)
@@ -345,40 +350,37 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to float — forcing 0.0")
                 value = 0.0
 
-        # === Special Request Field ===
+        # Special Requests Normalization
         elif key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
 
-        # === Extra Hours Requested ===
+        # Extra Hours Requested Normalization
         elif key == "extra_hours_requested":
-            if value in [None, ""]:
+            try:
+                value = float(value) if value not in [None, ""] else 0
+            except Exception:
                 value = 0
-            else:
-                try:
-                    value = float(value)
-                except Exception:
-                    value = 0
 
-        # === Everything Else as Str ===
+        # Everything Else = Str
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
 
-    # === Force Privacy Field (Final Override) ===
+    # === Final Force Privacy Handling ===
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
-    # === Exit Early if Nothing Valid ===
+    # === Exit Early if No Valid Fields ===
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
         return []
 
+    # === Final Sanity Check ===
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # === Final Field Safety Check ===
     for key in list(normalized_fields.keys()):
         if key not in VALID_AIRTABLE_FIELDS:
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
@@ -396,7 +398,7 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception:
         logger.error("🧾 Error response: (Non-JSON)")
 
-    # === Fallback to Single-Field Updates ===
+    # === Fallback to Single Field Update ===
     successful = []
     for key, value in normalized_fields.items():
         single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
@@ -527,186 +529,186 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     import json
     import random
     import traceback
+    import re
+    from time import sleep
 
-    try:
-        logger.info("🧑‍🧪 Calling GPT-4 Turbo to extract properties...")
+    logger.info("🧑‍🔬 Calling GPT-4 Turbo to extract properties...")
 
+    def call_gpt(prepared_log: str):
         response = client.chat.completions.create(
             model="gpt-4-turbo",
             messages=[
                 {"role": "system", "content": GPT_PROMPT},
-                {"role": "user", "content": log[-LOG_TRUNCATE_LENGTH:]}
+                {"role": "user", "content": prepared_log}
             ],
             max_tokens=3000,
             temperature=0.4
         )
-
         if not response.choices:
             raise ValueError("No choices returned from GPT-4.")
-
         raw = response.choices[0].message.content.strip()
         raw = raw.replace("```json", "").replace("```", "").strip()
-        logger.debug(f"🔍 RAW GPT OUTPUT:\n{raw}")
+        return raw
 
-        start, end = raw.find("{"), raw.rfind("}")
-        if start == -1 or end == -1:
-            raise ValueError("JSON block not found.")
+    # Preprocess log
+    prepared_log = log[-LOG_TRUNCATE_LENGTH:]
+    prepared_log = re.sub(r'[^ -~\n]', '', prepared_log)  # Remove non-printable chars
 
-        parsed = json.loads(raw[start:end + 1])
-        props = parsed.get("properties", [])
-        reply = parsed.get("response", "")
-        logger.debug(f"✅ Parsed props: {props}")
-        logger.debug(f"✅ Parsed reply: {reply}")
+    # GPT call with retry
+    raw = None
+    for attempt in range(2):
+        try:
+            raw = call_gpt(prepared_log)
+            logger.debug(f"🔍 RAW GPT OUTPUT (attempt {attempt+1}):\n{raw}")
+            start, end = raw.find("{"), raw.rfind("}")
+            if start == -1 or end == -1:
+                raise ValueError("JSON block not found.")
+            parsed = json.loads(raw[start:end + 1])
+            break
+        except Exception as e:
+            logger.warning(f"⚠️ GPT extraction failed (attempt {attempt+1}): {e}")
+            if attempt == 1:
+                raise e
+            sleep(1)
 
-        existing = {}
-        if record_id:
-            url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-            headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
-            res = requests.get(url, headers=headers)
-            if res.ok:
-                existing = res.json().get("fields", {})
+    props = parsed.get("properties", [])
+    reply = parsed.get("response", "")
+    logger.debug(f"✅ Parsed props: {props}")
+    logger.debug(f"✅ Parsed reply: {reply}")
 
-        logger.warning(f"🔍 Existing Airtable Fields: {existing}")
-        current_stage = existing.get("quote_stage", "")
-        field_updates = {}
+    existing = {}
+    if record_id:
+        url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+        headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
+        res = requests.get(url, headers=headers)
+        if res.ok:
+            existing = res.json().get("fields", {})
 
-        if current_stage == "Quote Calculated" and any(x in message.lower() for x in PDF_KEYWORDS):
-            reply = PDF_SYSTEM_MESSAGE
-            return field_updates, reply
+    logger.warning(f"🔍 Existing Airtable Fields: {existing}")
+    current_stage = existing.get("quote_stage", "")
+    field_updates = {}
 
-        for p in props:
-            if not isinstance(p, dict) or "property" not in p or "value" not in p:
-                continue
+    if current_stage == "Quote Calculated" and any(x in message.lower() for x in PDF_KEYWORDS):
+        reply = PDF_SYSTEM_MESSAGE
+        return field_updates, reply
 
-            key, value = p["property"], p["value"]
-
-            if key in BOOLEAN_FIELDS:
-                value = str(value).strip().lower() in TRUE_VALUES
-
-            elif key in INTEGER_FIELDS:
-                try:
-                    value = int(value)
-                except:
-                    value = 0
-
-            elif key == "special_requests":
-                if not value or str(value).strip().lower() in {"no", "none", "false", "n/a"}:
-                    value = ""
-                else:
-                    new_value = str(value).strip()
-                    old = existing.get("special_requests", "").strip()
-                    if old and new_value.lower() not in old.lower():
-                        value = f"{old}\n{new_value}".strip()
-                    elif not old:
-                        value = new_value
-                    else:
-                        value = old
-
-            if key == "quote_stage" and current_stage in {"Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"}:
-                continue
-
-            field_updates[key] = value
-            logger.warning(f"🚨 Updating Field: {key} = {value}")
-
-        field_updates["source"] = "Brendan"
-
-        if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
-            field_updates["is_property_manager"] = True
-
-        if field_updates.get("is_property_manager") or existing.get("is_property_manager"):
-            field_updates["discount_reason"] = "15% Real Estate Property Manager Discount"
-        else:
-            field_updates["discount_reason"] = "10% Vacate Clean Special"
-
-        for field in VALID_AIRTABLE_FIELDS:
-            if field not in field_updates and field not in existing:
-                if field in INTEGER_FIELDS:
-                    field_updates[field] = 0
-                elif field in BOOLEAN_FIELDS or field == "privacy_acknowledged":
-                    field_updates[field] = False
-                elif field == "special_requests":
-                    field_updates[field] = ""
-                else:
-                    field_updates[field] = ""
-
-        if field_updates.get("special_requests") and not field_updates.get("special_request_minutes_min"):
-            field_updates["special_request_minutes_min"] = 30
-            field_updates["special_request_minutes_max"] = 60
-
-        if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
-        ]):
-            field_updates["carpet_cleaning"] = True
-
-        for f in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
-            if f in field_updates:
-                try:
-                    field_updates[f] = float(field_updates[f])
-                except:
-                    field_updates[f] = 0.0
-
-        required = [
-            "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
-            "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-            "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-            "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-            "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
-            "is_property_manager", "special_requests",
-            "special_request_minutes_min", "special_request_minutes_max"
-        ]
-
-        missing = []
-        for f in required:
-            val = field_updates.get(f, existing.get(f, ""))
-            if f == "special_requests" and str(val).strip().lower() in ["", "none", "no", "false", "n/a"]:
-                continue
-            if val in [None, "", False]:
-                missing.append(f)
-
-        logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing}")
-
-        if "special_requests" in missing:
-            reply = ("Awesome — before I whip up your quote, do you have any special requests "
-                     "(like inside microwave, extra windows, balcony door tracks etc)?")
-            return field_updates, reply
-
-        if not missing:
-            field_updates["quote_stage"] = "Quote Calculated"
-        elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
-            field_updates["quote_stage"] = "Gathering Info"
-
-        abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
-        if abuse_detected:
-            if not quote_id and existing:
-                quote_id = existing.get("quote_id", "N/A")
-            if current_stage == "Abuse Warning":
-                field_updates["quote_stage"] = "Chat Banned"
-                reply = random.choice([
-                    f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id}. This chat is now closed.",
-                    f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
-                    f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
-                ])
-                return field_updates, reply
-            else:
-                field_updates["quote_stage"] = "Abuse Warning"
-                reply = ("Just a heads-up — we can’t continue the quote if abusive language is used. "
-                         "Let’s keep things respectful 👍\n\n" + reply)
-
-        return field_updates, reply.strip()
-
-    except Exception as e:
-        raw_fallback = raw if "raw" in locals() else "[No raw GPT output]"
-        error_msg = f"GPT EXTRACT ERROR: {str(e)}\nRAW fallback:\n{raw_fallback}"
-        logger.error(error_msg)
-        if record_id:
+    for p in props:
+        if not isinstance(p, dict) or "property" not in p or "value" not in p:
+            continue
+        key, value = p["property"], p["value"]
+        if key in BOOLEAN_FIELDS:
+            value = str(value).strip().lower() in TRUE_VALUES
+        elif key in INTEGER_FIELDS:
             try:
-                update_quote_record(record_id, {"gpt_error_log": error_msg[:MAX_LOG_LENGTH]})
-            except Exception as airtable_err:
-                logger.warning(f"Failed to log GPT error to Airtable: {airtable_err}")
-        return {}, "Sorry — I couldn’t understand that. Could you rephrase?"
+                value = int(value)
+            except:
+                value = 0
+        elif key == "special_requests":
+            if not value or str(value).strip().lower() in {"no", "none", "false", "n/a"}:
+                value = ""
+            else:
+                new_value = str(value).strip()
+                old = existing.get("special_requests", "").strip()
+                if old and new_value.lower() not in old.lower():
+                    value = f"{old}\n{new_value}".strip()
+                elif not old:
+                    value = new_value
+                else:
+                    value = old
+        if key == "quote_stage" and current_stage in {"Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"}:
+            continue
+        field_updates[key] = value
+        logger.warning(f"🚨 Updating Field: {key} = {value}")
+
+    field_updates["source"] = "Brendan"
+
+    if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
+        field_updates["is_property_manager"] = True
+
+    if field_updates.get("is_property_manager") or existing.get("is_property_manager"):
+        field_updates["discount_reason"] = "15% Real Estate Property Manager Discount"
+    else:
+        field_updates["discount_reason"] = "10% Vacate Clean Special"
+
+    for field in VALID_AIRTABLE_FIELDS:
+        if field not in field_updates and field not in existing:
+            if field in INTEGER_FIELDS:
+                field_updates[field] = 0
+            elif field in BOOLEAN_FIELDS or field == "privacy_acknowledged":
+                field_updates[field] = False
+            elif field == "special_requests":
+                field_updates[field] = ""
+            else:
+                field_updates[field] = ""
+
+    if field_updates.get("special_requests") and not field_updates.get("special_request_minutes_min"):
+        field_updates["special_request_minutes_min"] = 30
+        field_updates["special_request_minutes_max"] = 60
+
+    if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
+        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
+    ]):
+        field_updates["carpet_cleaning"] = True
+
+    for f in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
+        if f in field_updates:
+            try:
+                field_updates[f] = float(field_updates[f])
+            except:
+                field_updates[f] = 0.0
+
+    required = [
+        "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
+        "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
+        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
+        "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
+        "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
+        "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+        "is_property_manager", "special_requests",
+        "special_request_minutes_min", "special_request_minutes_max"
+    ]
+
+    missing = []
+    for f in required:
+        val = field_updates.get(f, existing.get(f, ""))
+        if f == "special_requests" and str(val).strip().lower() in ["", "none", "no", "false", "n/a"]:
+            continue
+        if val in [None, "", False]:
+            missing.append(f)
+
+    logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing}")
+
+    if "special_requests" in missing:
+        reply = ("Awesome — before I whip up your quote, do you have any special requests "
+                 "(like inside microwave, extra windows, balcony door tracks etc)?")
+        return field_updates, reply
+
+    if not missing:
+        field_updates["quote_stage"] = "Quote Calculated"
+    elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
+        field_updates["quote_stage"] = "Gathering Info"
+
+    abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
+    if abuse_detected:
+        if not quote_id and existing:
+            quote_id = existing.get("quote_id", "N/A")
+        if current_stage == "Abuse Warning":
+            field_updates["quote_stage"] = "Chat Banned"
+            reply = random.choice([
+                f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id}. This chat is now closed.",
+                f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
+                f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
+            ])
+            return field_updates, reply
+        else:
+            field_updates["quote_stage"] = "Abuse Warning"
+            reply = ("Just a heads-up — we can’t continue the quote if abusive language is used. "
+                     "Let’s keep things respectful 👍\n\n" + reply)
+
+    return field_updates, reply.strip()
+
 
 
 # === Create New Quote ===
@@ -815,14 +817,14 @@ def send_gpt_error_email(error_msg: str):
 
 def append_message_log(record_id: str, message: str, sender: str):
     """
-    Appends a new message to the message_log field in Airtable.
-    Truncates from the start if log exceeds MAX_LOG_LENGTH.
+    Appends a new message to the 'message_log' field in Airtable.
+    Truncates from the start if the log exceeds MAX_LOG_LENGTH.
     """
 
     from time import sleep
 
     if not record_id:
-        logger.error("❌ Cannot append log — missing record ID")
+        logger.error("❌ Cannot append message log — missing record ID")
         return
 
     message = str(message or "").strip()
@@ -846,16 +848,16 @@ def append_message_log(record_id: str, message: str, sender: str):
             current = res.json()
             break
         except Exception as e:
-            logger.warning(f"⚠️ Airtable fetch failed (attempt {attempt + 1}/3): {e}")
+            logger.warning(f"⚠️ Airtable log fetch failed (attempt {attempt + 1}/3): {e}")
             if attempt == 2:
-                logger.error(f"❌ Failed to fetch message log for record {record_id} after 3 attempts.")
+                logger.error(f"❌ Failed to fetch message_log for record {record_id} after 3 attempts.")
                 return
             sleep(1)
 
     old_log = str(current.get("fields", {}).get("message_log", "")).strip()
-    combined_log = f"{old_log}\n{new_entry}".strip() if old_log else new_entry
+    combined_log = f"{old_log}\n{new_entry}" if old_log else new_entry
 
-    # === Truncate if Exceeds MAX_LOG_LENGTH ===
+    # === Enforce Length Limit ===
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
 
