@@ -6,10 +6,10 @@ from weasyprint import HTML
 from app.config import logger
 
 
-def generate_quote_pdf(data: dict) -> str:
+def generate_quote_pdf(data: dict) -> (str, str):
     """
     Generate a PDF quote using WeasyPrint & Jinja2.
-    Returns: Absolute path of generated PDF.
+    Returns: (Absolute PDF Path, Public PDF URL)
     """
 
     # === Generate Safe Quote ID ===
@@ -17,6 +17,8 @@ def generate_quote_pdf(data: dict) -> str:
     filename = f"{quote_id}.pdf"
     output_path = f"app/static/quotes/{filename}"
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    pdf_url = f"https://orcacleaning.com.au/static/quotes/{filename}"
 
     logger.info(f"📄 Generating PDF Quote: {output_path}")
 
@@ -52,7 +54,7 @@ def generate_quote_pdf(data: dict) -> str:
     ]
 
     for field, label in carpet_map:
-        count = int(data.get(field, 0) or 0)
+        count = int(data.get(field) or 0)
         if count > 0:
             extra_services.append(f"Carpet Steam Cleaning – {count} {label}(s)")
 
@@ -102,4 +104,4 @@ def generate_quote_pdf(data: dict) -> str:
 
     logger.info(f"✅ PDF Generated: {output_path}")
 
-    return output_path
+    return output_path, pdf_url
