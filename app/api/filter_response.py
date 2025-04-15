@@ -843,12 +843,18 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 
 @router.post("/filter-response")
-async def filter_response_entry(request: Request):
-    """
-    Brendan's main route handler.
-    Handles session start, GPT field extraction, quote calculation, abuse handling, PDF flow.
-    """
+from datetime import datetime, timedelta
+import pytz
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+from app.services.email_sender import handle_pdf_and_email
+from app.services.quote_id_utils import get_next_quote_id
+from app.config import logger, settings
 
+# Existing imports assumed above
+
+@router.post("/filter-response")
+async def filter_response_entry(request: Request):
     try:
         body = await request.json()
         message = str(body.get("message", "")).strip()
@@ -857,7 +863,6 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # === New Quote Flow ===
         if message.lower() == "__init__":
             existing = get_quote_by_session(session_id)
             if existing:
@@ -870,14 +875,8 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, message, "user")
             append_message_log(record_id, intro_message, "brendan")
 
-            return JSONResponse(content={
-                "properties": [],
-                "response": intro_message,
-                "next_actions": [],
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": [], "response": intro_message, "next_actions": [], "session_id": session_id})
 
-        # === Existing Quote Flow ===
         quote_id, record_id, stage, fields = get_quote_by_session(session_id)
         if not record_id:
             raise HTTPException(status_code=404, detail="Quote not found.")
@@ -885,99 +884,58 @@ async def filter_response_entry(request: Request):
         log = fields.get("message_log", "")
 
         if stage == "Chat Banned":
-            return JSONResponse(content={
-                "properties": [],
-                "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.",
-                "next_actions": [],
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": [], "response": "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote.", "next_actions": [], "session_id": session_id})
 
-        # === Handle PDF Request After Quote Calculation ===
-        if stage == "Quote Calculated" and message.lower() in [
-            "pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"
-        ]:
+        # Handle PDF Request After Quote Calculation
+        if stage == "Quote Calculated" and message.lower() in ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "pdf quote"]:
             update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
             append_message_log(record_id, message, "user")
 
-            reply = (
-                "No worries — before I collect your name, email, and phone number to send the PDF quote, "
-                "just letting you know we respect your privacy. "
-                "I won’t ask for any sensitive info like bank details — just your contact details for this quote.\n\n"
-                "Do I have your permission to collect these details?"
-            )
+            reply = "No worries — before I collect your name, email, and phone number to send the PDF quote, just letting you know we respect your privacy. I won’t ask for any sensitive info like bank details — just your contact details for this quote.\n\nDo I have your permission to collect these details?"
+
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Handle Privacy Acknowledgement Before Asking Personal Info ===
+        # Handle Privacy Acknowledgement Before Asking Personal Info
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
             if message.lower() in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
                 update_quote_record(record_id, {"privacy_acknowledged": True})
                 reply = "Great! Could you please provide your name, email, and phone number so I can send the PDF quote?"
             else:
-                reply = (
-                    "No problem — we only need your name, email, and phone number to send the quote. "
-                    "Let me know if you'd like to continue or if you have any questions about our privacy policy."
-                )
+                reply = "No problem — we only need your name, email, and phone number to send the quote. Let me know if you'd like to continue or if you have any questions about our privacy policy."
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Auto Trigger PDF Generation After Personal Info Collected ===
+        # Auto Trigger PDF Generation After Personal Info Collected
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False) and all([
             fields.get("customer_name"),
             fields.get("customer_email"),
             fields.get("customer_phone")
         ]):
             update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
-            handle_pdf_and_email(record_id)
+            handle_pdf_and_email(record_id, quote_id, fields)
 
-            reply = (
-                "Thanks so much — I’ve sent your quote through to your email! "
-                "Let me know if there’s anything else I can help with."
-            )
+            reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
+
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Prepare GPT Log Context ===
         updated_log = f"{log}\nUSER: {message}".strip()[-LOG_TRUNCATE_LENGTH:]
-
-        # === GPT Field Extraction ===
         props_dict, reply = extract_properties_from_gpt4(message, updated_log, record_id, quote_id)
 
-        # === Abuse Handling ===
         if props_dict.get("quote_stage") in ["Abuse Warning", "Chat Banned"]:
             update_quote_record(record_id, props_dict)
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={
-                "properties": list(props_dict.keys()),
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": list(props_dict.keys()), "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Quote Calculation Trigger ===
         if props_dict.get("quote_stage") == "Quote Calculated":
             from app.services.quote_logic import QuoteRequest, calculate_quote
 
@@ -1005,35 +963,22 @@ async def filter_response_entry(request: Request):
                 "quote_expiry_date": expiry_str
             })
 
+            handle_pdf_and_email(record_id, quote_id, {**props_dict, "total_price": quote_response.total_price, "estimated_time_mins": quote_response.estimated_time_mins, "base_hourly_rate": quote_response.base_hourly_rate, "discount_applied": quote_response.discount_applied, "gst_applied": quote_response.gst_applied, "price_per_session": quote_response.total_price, "quote_expiry_date": expiry_str})
+
             summary = get_inline_quote_summary(quote_response.dict())
 
-            reply = (
-                "Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n"
-                f"{summary}\n\n"
-                f"⚠️ This quote is valid until {expiry_str}. If it expires, just let me know your quote number and I’ll whip up a new one for you."
-            )
+            reply = f"Thank you! I’ve got what I need to whip up your quote. Hang tight…\n\n{summary}\n\n⚠️ This quote is valid until {expiry_str}. If it expires, just let me know your quote number and I’ll whip up a new one for you."
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={
-                "properties": list(props_dict.keys()),
-                "response": reply,
-                "next_actions": generate_next_actions(),
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": list(props_dict.keys()), "response": reply, "next_actions": generate_next_actions(), "session_id": session_id})
 
-        # === Continue Gathering Info Stage ===
         update_quote_record(record_id, {**props_dict, "quote_stage": "Gathering Info"})
         append_message_log(record_id, message, "user")
         append_message_log(record_id, reply, "brendan")
 
-        return JSONResponse(content={
-            "properties": list(props_dict.keys()),
-            "response": reply,
-            "next_actions": [],
-            "session_id": session_id
-        })
+        return JSONResponse(content={"properties": list(props_dict.keys()), "response": reply, "next_actions": [], "session_id": session_id})
 
     except Exception as e:
         logger.error(f"❌ Exception in filter_response_entry: {e}")
