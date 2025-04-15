@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     AIRTABLE_BASE_ID: str
     BOOKING_URL_BASE: str = "https://orcacleaning.com.au/schedule"
     SMTP_PASS: str
+    GITHUB_TOKEN: str
 
     class Config:
         env_file = ".env"
