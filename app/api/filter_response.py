@@ -451,9 +451,9 @@ def update_quote_record(record_id: str, fields: dict):
 
 def get_inline_quote_summary(data: dict) -> str:
     """
-    Generates a short, clean summary of the quote to show in chat.
-    Shows price, estimated time with number of cleaners, discount applied,
-    and lists all selected cleaning options.
+    Generates a clean, natural-sounding summary of the quote to show in chat.
+    Includes price, estimated time, number of cleaners, discount applied,
+    and all selected cleaning options.
     """
 
     price = float(data.get("total_price", 0) or 0)
@@ -463,34 +463,34 @@ def get_inline_quote_summary(data: dict) -> str:
     special_requests = str(data.get("special_requests", "") or "").strip()
     is_property_manager = str(data.get("is_property_manager", "") or "").lower() in TRUE_VALUES
 
-    # Calculate hours and cleaners (max 5 hours per cleaner)
+    # Calculate hours + cleaners (max 5 hours per cleaner)
     hours = time_est_mins / 60
     cleaners = max(1, (time_est_mins + 299) // 300)
     hours_per_cleaner = hours / cleaners
     hours_per_cleaner_rounded = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
 
-    # Opening based on price / time
+    # Opening message based on price / time
     if price > 800:
-        opening = "Looks like a big job! Here's your quote:\n\n"
+        opening = "Here’s what we’re looking at for this job:\n\n"
     elif price < 300:
-        opening = "Nice and quick job — here’s your quote:\n\n"
+        opening = "Nice and easy — here’s your quote:\n\n"
     elif time_est_mins > 360:
-        opening = "This one will take a fair while — here’s your quote:\n\n"
+        opening = "This one will take a little longer — here’s your quote:\n\n"
     else:
-        opening = "All done! Here's your quote:\n\n"
+        opening = "All sorted — here’s your quote:\n\n"
 
     summary = f"{opening}"
     summary += f"💰 Total Price (incl. GST): ${price:.2f}\n"
     summary += f"⏰ Estimated Time: ~{hours_per_cleaner_rounded} hour(s) per cleaner with {cleaners} cleaner(s)\n"
 
-    # Discount
+    # Discount display logic
     if discount > 0:
         if is_property_manager and discount >= price / 1.1 * 0.15:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special (+5% Property Manager Bonus)\n"
         else:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special\n"
 
-    # Cleaning Options
+    # Cleaning options selected
     selected = []
 
     for field, label in {
@@ -522,34 +522,35 @@ def get_inline_quote_summary(data: dict) -> str:
 
     summary += (
         "\nThis quote is valid for 7 days.\n"
-        "If you'd like this in a PDF or want to make any changes, just let me know!"
+        "Would you like me to send this to your email as a PDF, or would you like to make any changes?"
     )
 
     return summary.strip()
+
 
 # === Generate Next Actions After Quote ===
 
 def generate_next_actions():
     """
-    After quote is calculated, gives customer a list of options to proceed.
+    Generates the next action options after quote is calculated.
     Brendan will:
-    - Offer to generate a PDF quote
+    - Offer to send a PDF quote
     - Offer to email it
     - Offer to edit the quote
-    - Or contact the office
+    - Offer to call the office
     """
     return [
         {
             "action": "offer_next_step",
             "response": (
                 "What would you like to do next?\n\n"
-                "I can generate a formal PDF quote, send it straight to your email, "
-                "or we can tweak the quote if you'd like to change anything.\n\n"
-                "If you'd rather have a chat with our office, you can call us on "
-                "**1300 918 388** — just mention your quote ID and they'll look after you."
+                "I can send you a formal PDF quote, shoot it over to your email, "
+                "or we can adjust the quote if you'd like to make any changes.\n\n"
+                "Otherwise, you're always welcome to call our office on **1300 918 388** — "
+                "just mention your quote number and they'll sort you out."
             ),
             "options": [
-                {"label": "📄 Get PDF Quote", "value": "pdf_quote"},
+                {"label": "📄 Send PDF Quote", "value": "pdf_quote"},
                 {"label": "📧 Email Me the Quote", "value": "email_quote"},
                 {"label": "✏️ Edit the Quote", "value": "edit_quote"},
                 {"label": "📞 Call the Office", "value": "call_office"}
@@ -595,7 +596,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.debug(f"✅ Parsed props: {props}")
         logger.debug(f"✅ Parsed reply: {reply}")
 
-        # === Load Existing Airtable Fields ===
         existing = {}
         if record_id:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -608,9 +608,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         current_stage = existing.get("quote_stage", "")
         field_updates = {}
 
-        # === GPT Reply Suppression for PDF Requests ===
         if current_stage == "Quote Calculated" and any(x in message.lower() for x in PDF_KEYWORDS):
-            reply = "Sure thing — I’ll just grab your name, email and phone number so I can send that through."
+            reply = PDF_SYSTEM_MESSAGE
             return field_updates, reply
 
         for p in props:
@@ -641,33 +640,22 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                     else:
                         value = old
 
-            if key == "quote_stage" and current_stage in {
-                "Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"
-            }:
+            if key == "quote_stage" and current_stage in {"Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"}:
                 continue
 
             field_updates[key] = value
             logger.warning(f"🚨 Updating Field: {key} = {value}")
 
-        # Always set source
         field_updates["source"] = "Brendan"
 
-        # Auto-property manager detection
         if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
             field_updates["is_property_manager"] = True
 
-        # Ask for session count if missing
-        if (field_updates.get("is_property_manager") or existing.get("is_property_manager")) and not (
-            field_updates.get("number_of_sessions") or existing.get("number_of_sessions")
-        ):
-            reply = (
-                "No worries! How many sessions would you like to book for this property? "
-                "Let me know if it's just 1 or more."
-            )
-            field_updates["number_of_sessions"] = 1
-            return field_updates, reply
+        if field_updates.get("is_property_manager") or existing.get("is_property_manager"):
+            field_updates["discount_reason"] = "15% Real Estate Property Manager Discount"
+        else:
+            field_updates["discount_reason"] = "10% Vacate Clean Special"
 
-        # Fill missing fields with safe defaults
         for field in VALID_AIRTABLE_FIELDS:
             if field not in field_updates and field not in existing:
                 if field in INTEGER_FIELDS:
@@ -679,19 +667,13 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 else:
                     field_updates[field] = ""
 
-        # Auto-estimate for special requests
         if field_updates.get("special_requests") and not field_updates.get("special_request_minutes_min"):
             field_updates["special_request_minutes_min"] = 30
             field_updates["special_request_minutes_max"] = 60
 
-        # Auto-check carpet_cleaning
-        if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
-        ]):
+        if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in ["carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"]):
             field_updates["carpet_cleaning"] = True
 
-        # Float normalization
         for f in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
             if f in field_updates:
                 try:
@@ -699,18 +681,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 except:
                     field_updates[f] = 0.0
 
-        # Required Fields Check
-        required = [
-            "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning",
-            "window_cleaning", "window_count", "blind_cleaning",
-            "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-            "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-            "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-            "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-            "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
-            "is_property_manager", "special_requests",
-            "special_request_minutes_min", "special_request_minutes_max"
-        ]
+        required = ["suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning", "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count", "carpet_halway_count", "carpet_stairs_count", "carpet_other_count", "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning", "balcony_cleaning", "garage_cleaning", "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager", "special_requests", "special_request_minutes_min", "special_request_minutes_max"]
 
         missing = []
         for f in required:
@@ -723,10 +694,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing}")
 
         if "special_requests" in missing:
-            reply = (
-                "Awesome — before I whip up your quote, do you have any special requests "
-                "(like inside microwave, extra windows, balcony door tracks etc)?"
-            )
+            reply = ("Awesome — before I whip up your quote, do you have any special requests "
+                     "(like inside microwave, extra windows, balcony door tracks etc)?")
             return field_updates, reply
 
         if not missing:
@@ -734,7 +703,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
             field_updates["quote_stage"] = "Gathering Info"
 
-        # Abuse check
         abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
         if abuse_detected:
             if not quote_id and existing:
@@ -749,11 +717,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 return field_updates, reply
             else:
                 field_updates["quote_stage"] = "Abuse Warning"
-                reply = (
-                    "Just a heads-up — we can’t continue the quote if abusive language is used. "
-                    "Let’s keep things respectful 👍\n\n" + reply
-
-                )
+                reply = ("Just a heads-up — we can’t continue the quote if abusive language is used. "
+                         "Let’s keep things respectful 👍\n\n" + reply)
 
         return field_updates, reply.strip()
 
@@ -927,6 +892,10 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 # === Brendan Filter Response Route ===
 
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import JSONResponse
+import re
+
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -937,7 +906,6 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # === Initialisation Handling ===
         if message.lower() == "__init__":
             existing = get_quote_by_session(session_id)
             if existing:
@@ -950,14 +918,8 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Load Quote Record ===
         quote_id, record_id, stage, fields = get_quote_by_session(session_id)
         if not record_id:
             raise HTTPException(status_code=404, detail="Quote not found.")
@@ -965,95 +927,53 @@ async def filter_response_entry(request: Request):
         message_lower = message.lower()
         pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "email quote", "pdf quote"]
 
-        # === Stage: Chat Banned ===
         if stage == "Chat Banned":
             reply = "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote."
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
+            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Stage: Gathering Personal Info | Privacy Check ===
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
             if message_lower in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
                 update_quote_record(record_id, {"privacy_acknowledged": True})
                 fields = get_quote_by_session(session_id)[3]
-                reply = "Great! Could you please provide your name, email, and phone number so I can send the PDF quote?"
+                reply = "Great! Could you please provide your name, email, phone number, and (optional) property address so I can send the PDF quote?"
             else:
-                reply = (
-                    "No problem — we only need your name, email, and phone number to send the quote. "
-                    "Let me know if you'd like to continue or if you have any questions about our privacy policy."
-                )
+                reply = "No problem — we only need your name, email, phone number (and optional property address) to send the quote. Let me know if you'd like to continue or if you have any questions about our privacy policy."
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
-            return JSONResponse(content={
-                "properties": [],
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
 
-        # === Stage: Gathering Personal Info | Final Step — PDF and Email ===
+            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
-                import re
                 customer_email = str(fields.get("customer_email", "")).strip()
                 if not re.match(r"[^@]+@[^@]+\.[^@]+", customer_email):
                     reply = "That email doesn’t look right — could you double check and send it again?"
                     append_message_log(record_id, message, "user")
                     append_message_log(record_id, reply, "brendan")
-                    return JSONResponse(content={
-                        "properties": [],
-                        "response": reply,
-                        "next_actions": [],
-                        "session_id": session_id
-                    })
+                    return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
                 update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
                 fields = get_quote_by_session(session_id)[3]
 
                 try:
                     pdf_path = generate_quote_pdf(fields)
-                    if not pdf_path:
-                        raise Exception("PDF generation failed")
-
-                    send_quote_email(
-                        to_email=customer_email,
-                        customer_name=fields.get("customer_name"),
-                        pdf_path=pdf_path,
-                        quote_id=quote_id
-                    )
-
+                    send_quote_email(to_email=customer_email, customer_name=fields.get("customer_name"), pdf_path=pdf_path, quote_id=quote_id)
                     update_quote_record(record_id, {"pdf_link": pdf_path})
                     reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
-
                 except Exception as e:
                     logger.exception(f"❌ PDF Generation/Email Sending Failed: {e}")
                     reply = "Sorry — I ran into an issue while generating your PDF quote. Please call our office on 1300 918 388 and we’ll sort it out for you."
 
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
-                return JSONResponse(content={
-                    "properties": [],
-                    "response": reply,
-                    "next_actions": [],
-                    "session_id": session_id
-                })
+                return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Prepare Log for GPT ===
         log = fields.get("message_log", "")
-        if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords):
-            log = PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]
-        else:
-            log = log[-LOG_TRUNCATE_LENGTH:]
+        log = (PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]) if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords) else log[-LOG_TRUNCATE_LENGTH:]
 
-        # === Default GPT Extraction & Quote Recalc ===
         append_message_log(record_id, message, "user")
         field_updates, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
-
         merged_fields = fields.copy()
         merged_fields.update(field_updates)
 
@@ -1081,4 +1001,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         logger.exception("❌ Error in /filter-response route")
         raise HTTPException(status_code=500, detail="Internal server error.")
-
