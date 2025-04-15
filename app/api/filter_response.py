@@ -843,17 +843,6 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 
 @router.post("/filter-response")
-from datetime import datetime, timedelta
-import pytz
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
-from app.services.email_sender import handle_pdf_and_email
-from app.services.quote_id_utils import get_next_quote_id
-from app.config import logger, settings
-
-# Existing imports assumed above
-
-@router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
