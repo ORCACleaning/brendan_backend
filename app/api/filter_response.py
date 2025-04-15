@@ -202,7 +202,7 @@ Extract carpet_* fields individually.
 If any carpet_* field > 0, also extract:
 ```json
 { "property": "carpet_cleaning", "value": true }
-
+"""
 
 # Trigger Words for Abuse Detection (Escalation Logic)
 ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
