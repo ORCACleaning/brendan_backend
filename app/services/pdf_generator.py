@@ -58,7 +58,6 @@ def generate_quote_pdf(data: dict) -> str:
         if count > 0:
             extra_services.append(f"Carpet Steam Cleaning – {count} {label}(s)")
 
-    # Other Extras
     extras_map = {
         "oven_cleaning": "Oven Cleaning",
         "garage_cleaning": "Garage/Shed Cleaning",
@@ -89,6 +88,14 @@ def generate_quote_pdf(data: dict) -> str:
     data["after_hours_note"] = (
         f"✅ After-Hours Cleaning Surcharge (${after_hours:.2f})"
         if after_hours > 0 else "–"
+    )
+
+    # === Weekend Surcharge (Fix for template crash) ===
+    weekend_surcharge = float(data.get("weekend_surcharge") or 0)
+    data["weekend_surcharge"] = weekend_surcharge  # ✅ Ensure always available for Jinja2
+    data["weekend_note"] = (
+        f"✅ Weekend Cleaning Surcharge (${weekend_surcharge:.2f})"
+        if weekend_surcharge > 0 else "–"
     )
 
     # === Render PDF ===
