@@ -1,4 +1,7 @@
+# === quote_logic.py ===
+
 from app.models.quote_models import QuoteRequest, QuoteResponse
+
 
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75
@@ -17,10 +20,9 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         "garage_cleaning": 40,
     }
 
-    # Base time from bedrooms and bathrooms
+    # === Calculate Base Minutes ===
     base_minutes = (data.bedrooms_v2 * 40) + (data.bathrooms_v2 * 30)
 
-    # Add time for extra services
     for service, time in EXTRA_SERVICE_TIMES.items():
         if getattr(data, service, False):
             base_minutes += time
@@ -39,7 +41,6 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     if str(data.furnished).lower() == "furnished":
         base_minutes += 60
 
-    # Carpet times
     base_minutes += (data.carpet_bedroom_count or 0) * 30
     base_minutes += (data.carpet_mainroom_count or 0) * 45
     base_minutes += (data.carpet_study_count or 0) * 25
@@ -47,29 +48,29 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     base_minutes += (data.carpet_stairs_count or 0) * 35
     base_minutes += (data.carpet_other_count or 0) * 30
 
-    # Handle special request minutes
+    # === Special Request Handling ===
     min_total_mins = base_minutes
     max_total_mins = base_minutes
     note = None
+    is_range = False
 
     if data.special_request_minutes_min is not None and data.special_request_minutes_max is not None:
         min_total_mins += data.special_request_minutes_min
         max_total_mins += data.special_request_minutes_max
         note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
+        is_range = True
 
-    is_range = data.special_request_minutes_min is not None and data.special_request_minutes_max is not None
-
-    # Price calculation
-    calculated_hours = round(max_total_mins / 60, 2)
-    base_price = calculated_hours * BASE_HOURLY_RATE
-
+    # === Surcharge Calculation ===
     weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
     after_hours_fee = data.after_hours_surcharge or 0
     mandurah_fee = MANDURAH_SURCHARGE if data.mandurah_property else 0
 
+    # === Price Calculation ===
+    calculated_hours = round(max_total_mins / 60, 2)
+    base_price = calculated_hours * BASE_HOURLY_RATE
+
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
-    # Apply discount logic
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
     if str(data.is_property_manager).strip().lower() in {"true", "yes", "1"}:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
@@ -80,7 +81,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     gst_amount = round(discounted_price * (GST_PERCENT / 100), 2)
     total_with_gst = round(discounted_price + gst_amount, 2)
 
-    # Final return — quote_id is passed from backend/database
+    # === Final Response ===
     return QuoteResponse(
         quote_id=data.quote_id,
         estimated_time_mins=max_total_mins,
