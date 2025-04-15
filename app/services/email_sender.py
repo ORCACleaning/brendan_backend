@@ -1,13 +1,14 @@
 import os
-import requests
 import base64
+import requests
 from dotenv import load_dotenv
 
 from app.services.pdf_generator import generate_quote_pdf
-from app.api import filter_response  # Airtable update logic
 
+# === Load Environment Variables ===
 load_dotenv()
 
+# === Microsoft Graph API Credentials ===
 MS_CLIENT_ID = os.getenv("MS_CLIENT_ID")
 MS_TENANT_ID = os.getenv("MS_TENANT_ID")
 MS_CLIENT_SECRET = os.getenv("MS_CLIENT_SECRET")
@@ -26,6 +27,7 @@ def get_ms_access_token() -> str:
         "scope": "https://graph.microsoft.com/.default",
         "grant_type": "client_credentials",
     }
+
     response = requests.post(url, data=data)
     response.raise_for_status()
     token = response.json().get("access_token")
@@ -38,7 +40,7 @@ def get_ms_access_token() -> str:
 
 def send_email_outlook(to_email: str, subject: str, body_html: str):
     """
-    Send a plain email (no attachment) via MS Graph API.
+    Send a basic HTML email (no attachment) via Microsoft Graph API.
     """
     access_token = get_ms_access_token()
     url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
@@ -65,7 +67,7 @@ def send_email_outlook(to_email: str, subject: str, body_html: str):
 
 def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id: str):
     """
-    Send the quote email with attached PDF.
+    Send the quote email with attached PDF via Microsoft Graph API.
     """
     access_token = get_ms_access_token()
     url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
@@ -115,23 +117,3 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
         print(f"✅ Quote email sent to {to_email}")
     else:
         print(f"❌ Failed to send quote email ({res.status_code}): {res.text}")
-
-
-def handle_pdf_and_email(record_id: str, quote_id: str, fields: dict):
-    """
-    Generate quote PDF, send it via email, and update Airtable record with PDF link.
-    """
-    pdf_path = generate_quote_pdf(fields)
-    to_email = fields.get("customer_email")
-
-    if not to_email:
-        print(f"❌ No customer email found for Quote ID: {quote_id} — skipping email.")
-        return
-
-    customer_name = fields.get("customer_name") or "there"
-
-    print(f"📧 Generating PDF & Sending Email to {to_email} for Quote {quote_id}")
-    send_quote_email(to_email, customer_name, pdf_path, quote_id)
-
-    pdf_url = f"https://orcacleaning.com.au/static/quotes/{os.path.basename(pdf_path)}"
-    filter_response.update_quote_record(record_id, {"pdf_link": pdf_url})
