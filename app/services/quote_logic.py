@@ -8,8 +8,6 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     SEASONAL_DISCOUNT_PERCENT = 10
     PROPERTY_MANAGER_DISCOUNT = 5
     GST_PERCENT = 10
-    WEEKEND_SURCHARGE = 100
-    MANDURAH_SURCHARGE = 50
 
     EXTRA_SERVICE_TIMES = {
         "wall_cleaning": 30,
@@ -61,9 +59,10 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         is_range = True
 
     # === Surcharge Calculation ===
-    weekend_fee = WEEKEND_SURCHARGE if data.weekend_cleaning else 0
+    # These fields come from Airtable directly as fixed $ amounts
+    weekend_fee = float(data.weekend_surcharge or 0)
     after_hours_fee = float(data.after_hours_surcharge or 0)
-    mandurah_fee = MANDURAH_SURCHARGE if data.mandurah_property else 0
+    mandurah_fee = float(data.mandurah_surcharge or 0)
 
     # === Price Calculation ===
     calculated_hours = round(max_total_mins / 60, 2)
