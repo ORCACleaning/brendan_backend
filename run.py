@@ -6,8 +6,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-# === Brendan Debug Logger ===
+from openai import OpenAI
 from app.utils.logging_utils import log_debug_event
+from app.api.quote import router as quote_router
+from app.api.filter_response import router as filter_response_router
+from app.store_customer import router as store_customer_router
+from app import auto_fixer  # ✅ AI Auto-Fix Commit System
+# ❌ brendan_chat import removed (invalid router)
+# from app.brendan_chat import router as brendan_chat_router
 
 # === Load environment variables ===
 load_dotenv()
@@ -33,7 +39,6 @@ else:
     log_debug_event(None, "LOCAL", "Airtable Credentials Error", "Missing airtable_key or base")
 
 # === Initialize OpenAI Client ===
-from openai import OpenAI
 client = OpenAI(api_key=api_key)
 
 # === FastAPI App Init ===
@@ -52,23 +57,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Import Routers ===
-from app.api.quote import router as quote_router
-from app.api.filter_response import router as filter_response_router
-from app.brendan_chat import router as brendan_chat_router
-from app.store_customer import router as store_customer_router
-from app import auto_fixer  # ✅ Add AI Auto-Fix Commit System
-
 # === Register Routes ===
 app.include_router(filter_response_router)
 app.include_router(quote_router)
 app.include_router(store_customer_router)
-app.include_router(brendan_chat_router)
-app.include_router(auto_fixer.router)  # ✅ Route for /auto-fix-code
+app.include_router(auto_fixer.router)
 
 # === Root Welcome Endpoint ===
 @app.get("/")
 def read_root():
+    log_debug_event(None, "LOCAL", "Ping Root", "Root endpoint accessed")
     return JSONResponse(
         content={"message": "Welcome to Brendan Backend! 🎉"},
         media_type="application/json; charset=utf-8"
@@ -77,6 +75,7 @@ def read_root():
 # === Health Check Endpoint ===
 @app.get("/ping")
 def ping():
+    log_debug_event(None, "LOCAL", "Ping /ping", "Health check requested")
     return {"ping": "pong"}
 
 # === Local PDF Test Generator (Optional) ===
