@@ -1,21 +1,24 @@
 # === logging_utils.py ===
 
+import os
+import logging
 import requests
 from app.config import logger
+from app.constants import TABLE_NAME
+from app.settings import settings
 
-# Attempt to import update_airtable_record — fallback to dummy if unavailable
-try:
-    from app.services.airtable_handler import update_airtable_record
-except Exception as e:
-    logger.warning(f"⚠️ DEBUG LOGGER WARNING: Failed to import update_airtable_record: {e}")
-
-    def update_airtable_record(record_id: str, fields: dict, append: bool = False):
-        logger.warning(f"⚠️ Debug fallback: Skipping Airtable update for record {record_id}. Message: {fields.get('message_log')}")
+AIRTABLE_URL = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+HEADERS = {
+    "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
+    "Content-Type": "application/json"
+}
 
 
 def log_debug_event(record_id: str, source: str, stage: str, message: str):
     """
-    Central logging handler that appends trace logs to the Airtable message_log field.
+    Central debug logging function.
+    Writes trace logs into the message_log field in Airtable.
+    Appends the log entry to existing log via PATCH.
     """
     if not record_id:
         return
@@ -23,7 +26,24 @@ def log_debug_event(record_id: str, source: str, stage: str, message: str):
     try:
         log_line = f"{source}: {stage} – {message}"
         logger.info(f"📄 {log_line}")
-        update_airtable_record(record_id, {"message_log": log_line}, append=True)
+
+        # Retrieve existing log (GET)
+        get_url = f"{AIRTABLE_URL}/{record_id}"
+        res = requests.get(get_url, headers=HEADERS)
+        res.raise_for_status()
+
+        existing_log = res.json().get("fields", {}).get("message_log", "")
+        updated_log = (existing_log + "\n" + log_line).strip()
+
+        # Update with appended log
+        update_url = f"{AIRTABLE_URL}/{record_id}"
+        update_payload = {
+            "fields": {
+                "message_log": updated_log
+            }
+        }
+        update_res = requests.patch(update_url, headers=HEADERS, json=update_payload)
+        update_res.raise_for_status()
 
     except Exception as e:
         logger.warning(f"⚠️ Failed to log debug event: {e}")
