@@ -1,9 +1,12 @@
 # === Calculate Quote Function ===
+
 from app.models.quote_models import QuoteRequest, QuoteResponse
 from app.config import logger
-from app.api.filter_response import log_debug_event  # ✅ Logging import
 
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
+    # ✅ Lazy import to avoid circular dependency
+    from app.utils.logging_utils import log_debug_event
+
     BASE_HOURLY_RATE = 75.0
     SEASONAL_DISCOUNT_PERCENT = 10
     PROPERTY_MANAGER_DISCOUNT = 5
