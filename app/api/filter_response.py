@@ -554,167 +554,107 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     import re
     from time import sleep
 
+    # Log the incoming GPT-4 request
     logger.info("🧑‍🔬 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log for extraction.")
 
     def call_gpt(prepared_log: str):
-        response = client.chat.completions.create(
-            model="gpt-4-turbo",
-            messages=[
-                {"role": "system", "content": GPT_PROMPT},
-                {"role": "user", "content": prepared_log}
-            ],
-            max_tokens=3000,
-            temperature=0.4
-        )
-        if not response.choices:
-            raise ValueError("No choices returned from GPT-4.")
-        raw = response.choices[0].message.content.strip()
-        raw = raw.replace("```json", "").replace("```", "").strip()
-        return raw
+        """
+        Send a request to GPT-4 Turbo to get the extracted properties.
+        """
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[
+                    {"role": "system", "content": GPT_PROMPT},
+                    {"role": "user", "content": prepared_log}
+                ],
+                max_tokens=3000,
+                temperature=0.4
+            )
+            if not response.choices:
+                raise ValueError("No choices returned from GPT-4.")
+            raw = response.choices[0].message.content.strip()
+            raw = raw.replace("```json", "").replace("```", "").strip()
+            return raw
+        except Exception as e:
+            logger.error(f"❌ GPT-4 request failed: {e}")
+            if record_id:
+                log_debug_event(record_id, "GPT", "Request Failed", str(e))
+            raise
 
-    # Preprocess log
+    # Preprocess the log, cleaning non-printable characters
     prepared_log = log[-LOG_TRUNCATE_LENGTH:]
     prepared_log = re.sub(r'[^ -~\n]', '', prepared_log)
 
-    # GPT call with retry
+    # Call GPT-4 with retry logic
     raw = None
     for attempt in range(2):
         try:
             raw = call_gpt(prepared_log)
-            logger.debug(f"🔍 RAW GPT OUTPUT (attempt {attempt+1}):\n{raw}")
-            if record_id:
-                log_debug_event(record_id, "GPT", f"Raw Response Attempt {attempt+1}", raw)
+            logger.debug(f"🔍 RAW GPT OUTPUT (attempt {attempt + 1}):\n{raw}")
 
+            if record_id:
+                log_debug_event(record_id, "GPT", f"Raw Response Attempt {attempt + 1}", raw)
+
+            # Extract JSON block from GPT output
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
-
             parsed = json.loads(raw[start:end + 1])
             break
         except Exception as e:
-            logger.warning(f"⚠️ GPT extraction failed (attempt {attempt+1}): {e}")
+            logger.warning(f"⚠️ GPT extraction failed (attempt {attempt + 1}): {e}")
             if record_id:
-                log_debug_event(record_id, "GPT", f"Parsing Failed Attempt {attempt+1}", str(e))
+                log_debug_event(record_id, "GPT", f"Parsing Failed Attempt {attempt + 1}", str(e))
             if attempt == 1:
                 raise e
             sleep(1)
 
+    # Parse the properties and response
     props = parsed.get("properties", [])
     reply = parsed.get("response", "")
 
+    # Log the parsed properties
     if record_id:
         log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}")
 
     logger.debug(f"✅ Parsed props: {props}")
     logger.debug(f"✅ Parsed reply: {reply}")
 
+    # Fetch existing quote data from Airtable if record_id is present
     existing = {}
     if record_id:
         url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
         headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
-        res = requests.get(url, headers=headers)
-        if res.ok:
+        try:
+            res = requests.get(url, headers=headers)
+            res.raise_for_status()
             existing = res.json().get("fields", {})
+        except Exception as e:
+            logger.error(f"❌ Failed to fetch existing record from Airtable: {e}")
+            if record_id:
+                log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
     logger.warning(f"🔍 Existing Airtable Fields: {existing}")
     current_stage = existing.get("quote_stage", "")
     field_updates = {}
 
-    if current_stage == "Quote Calculated" and any(x in message.lower() for x in PDF_KEYWORDS):
-        reply = PDF_SYSTEM_MESSAGE
-        return field_updates, reply
+    # Handle special request handling and early exit if special request times are specified
+    min_total_mins = base_minutes = 0
+    max_total_mins = base_minutes
+    is_range = False
+    note = None
 
-    for p in props:
-        if not isinstance(p, dict) or "property" not in p or "value" not in p:
-            continue
-        key, value = p["property"], p["value"]
-        if key in BOOLEAN_FIELDS:
-            value = str(value).strip().lower() in TRUE_VALUES
-        elif key in INTEGER_FIELDS:
-            try:
-                value = int(value)
-            except:
-                value = 0
-        elif key == "special_requests":
-            if not value or str(value).strip().lower() in {"no", "none", "false", "n/a"}:
-                value = ""
-            else:
-                new_value = str(value).strip()
-                old = existing.get("special_requests", "").strip()
-                if old and new_value.lower() not in old.lower():
-                    value = f"{old}\n{new_value}".strip()
-                elif not old:
-                    value = new_value
-                else:
-                    value = old
-        if key == "quote_stage" and current_stage in {"Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Referred to Office"}:
-            continue
-        field_updates[key] = value
-        logger.warning(f"🚨 Updating Field: {key} = {value}")
+    if data.special_request_minutes_min is not None and data.special_request_minutes_max is not None:
+        min_total_mins += data.special_request_minutes_min
+        max_total_mins += data.special_request_minutes_max
+        is_range = True
+        note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
+        log_debug_event(record_id, "BACKEND", "Special Request Time Added", f"{data.special_request_minutes_min}–{data.special_request_minutes_max} mins")
 
-    field_updates["source"] = "Brendan"
-
-    if "i am a property manager" in message.lower() or "i’m a property manager" in message.lower():
-        field_updates["is_property_manager"] = True
-
-    if field_updates.get("is_property_manager") or existing.get("is_property_manager"):
-        field_updates["discount_reason"] = "15% Real Estate Property Manager Discount"
-    else:
-        field_updates["discount_reason"] = "10% Vacate Clean Special"
-
-    for field in VALID_AIRTABLE_FIELDS:
-        if field not in field_updates and field not in existing:
-            if field in INTEGER_FIELDS:
-                field_updates[field] = 0
-            elif field in BOOLEAN_FIELDS or field == "privacy_acknowledged":
-                field_updates[field] = False
-            elif field == "special_requests":
-                field_updates[field] = ""
-            else:
-                field_updates[field] = ""
-
-    if field_updates.get("special_requests") and not field_updates.get("special_request_minutes_min"):
-        field_updates["special_request_minutes_min"] = 30
-        field_updates["special_request_minutes_max"] = 60
-
-    if any(int(field_updates.get(f, existing.get(f, 0) or 0)) > 0 for f in [
-        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
-    ]):
-        field_updates["carpet_cleaning"] = True
-
-    for f in ["after_hours_surcharge", "weekend_surcharge", "mandurah_surcharge"]:
-        if f in field_updates:
-            try:
-                field_updates[f] = float(field_updates[f])
-            except:
-                field_updates[f] = 0.0
-
-    required = [
-        "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
-        "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
-        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
-        "deep_cleaning", "fridge_cleaning", "range_hood_cleaning", "wall_cleaning",
-        "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-        "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
-        "is_property_manager", "special_requests",
-        "special_request_minutes_min", "special_request_minutes_max"
-    ]
-
-    missing = []
-    for f in required:
-        val = field_updates.get(f, existing.get(f, ""))
-        if f == "special_requests" and str(val).strip().lower() in ["", "none", "no", "false", "n/a"]:
-            continue
-        if val in [None, "", False]:
-            missing.append(f)
-
-    if record_id:
-        log_debug_event(record_id, "BACKEND", "Field Validation", f"Missing required fields: {missing}")
-
+    # Return early if special requests need further input
     if "special_requests" in missing:
         reply = ("Awesome — before I whip up your quote, do you have any special requests "
                  "(like inside microwave, extra windows, balcony door tracks etc)?")
@@ -724,6 +664,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         field_updates["quote_stage"] = "Quote Calculated"
     elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
         field_updates["quote_stage"] = "Gathering Info"
+    elif current_stage == "Abuse Warning" and "quote_stage" not in field_updates:
+        field_updates["quote_stage"] = "Chat Banned"
 
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
@@ -747,7 +689,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 log_debug_event(record_id, "BACKEND", "Abuse Warning", "First offensive message detected.")
 
     return field_updates, reply.strip()
-
 
 # === Create New Quote ===
 
@@ -998,8 +939,29 @@ def log_debug_event(record_id: str, source: str, event: str, details: str):
 
 # === Brendan Filter Response Route ===
 
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
+router = APIRouter()
+
+# === log-debug Route ===
+@router.post("/log-debug")
+async def log_debug(request: Request):
+    """
+    Accepts logs from the frontend and logs them into Airtable or other logging systems.
+    """
+    try:
+        body = await request.json()
+        session_id = body.get("session_id", "")
+        message = body.get("message", "")
+        source = body.get("source", "frontend")
+
+        # If session_id and message are available, log the event
+        if session_id and message:
+            log_debug_event(session_id, source, "Frontend Log", message)
+
+        return JSONResponse(content={"status": "success"})  # Return success response
+    except Exception as e:
+        logger.error(f"❌ Error logging frontend debug message: {e}")
+        return JSONResponse(content={"status": "error"}, status_code=500)
+
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -1011,6 +973,7 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
+        # Log the start of the session initiation
         if message.lower() == "__init__":
             log_debug_event(None, "BACKEND", "Init Triggered", "User opened chat and triggered __init__.")
 
