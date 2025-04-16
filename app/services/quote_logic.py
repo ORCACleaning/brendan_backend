@@ -1,6 +1,7 @@
+# === Calculate Quote Function ===
 from app.models.quote_models import QuoteRequest, QuoteResponse
 from app.config import logger
-from app.routes.filter_response import log_debug_event  # ✅ Logging import
+from app.api.filter_response import log_debug_event  # ✅ Logging import
 
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75.0
