@@ -4,7 +4,7 @@ import base64
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 from app.config import logger
-from app.routes.filter_response import log_debug_event  # <-- Required for logging
+from app.api.filter_response import log_debug_event  # ✅ Logging import
 
 def generate_quote_pdf(data: dict) -> (str, str):
     """
