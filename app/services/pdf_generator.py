@@ -3,7 +3,10 @@ import uuid
 import base64
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
+
 from app.config import logger
+from app.utils.logging_utils import log_debug_event
+
 
 def generate_quote_pdf(data: dict) -> (str, str):
     """
@@ -22,11 +25,7 @@ def generate_quote_pdf(data: dict) -> (str, str):
 
     logger.info(f"📄 Generating PDF Quote: {output_path}")
     if record_id:
-        try:
-            from app.api.filter_response import log_debug_event
-            log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
-        except Exception:
-            pass
+        log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
 
     # === Load Logo Base64 ===
     logo_path = "app/static/orca_logo.png"
@@ -37,11 +36,7 @@ def generate_quote_pdf(data: dict) -> (str, str):
         logger.error(f"❌ Failed to load logo: {e}")
         logo_base64 = ""
         if record_id:
-            try:
-                from app.api.filter_response import log_debug_event
-                log_debug_event(record_id, "BACKEND", "PDF Logo Error", str(e))
-            except Exception:
-                pass
+            log_debug_event(record_id, "BACKEND", "PDF Logo Error", str(e))
 
     data["logo_base64"] = logo_base64
 
@@ -115,10 +110,6 @@ def generate_quote_pdf(data: dict) -> (str, str):
 
     logger.info(f"✅ PDF Generated: {output_path}")
     if record_id:
-        try:
-            from app.api.filter_response import log_debug_event
-            log_debug_event(record_id, "BACKEND", "PDF Generated", f"PDF saved to {output_path}, URL: {pdf_url}")
-        except Exception:
-            pass
+        log_debug_event(record_id, "BACKEND", "PDF Generated", f"PDF saved to {output_path}, URL: {pdf_url}")
 
     return output_path, pdf_url
