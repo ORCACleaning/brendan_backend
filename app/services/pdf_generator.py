@@ -4,7 +4,6 @@ import base64
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 from app.config import logger
-from app.api.filter_response import log_debug_event  # ✅ Logging import
 
 def generate_quote_pdf(data: dict) -> (str, str):
     """
@@ -22,6 +21,7 @@ def generate_quote_pdf(data: dict) -> (str, str):
 
     logger.info(f"📄 Generating PDF Quote: {output_path}")
     if record_id := data.get("record_id"):
+        from app.api.filter_response import log_debug_event  # Move import here to avoid circular import
         log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
 
     # === Load Logo Base64 ===
