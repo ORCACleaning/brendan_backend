@@ -4,7 +4,6 @@ import requests
 from dotenv import load_dotenv
 
 from app.services.pdf_generator import generate_quote_pdf
-from app.routes.filter_response import log_debug_event  # Required for debug logging
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -113,12 +112,13 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
         "Content-Type": "application/json",
     }
 
-    # Log before send
+    # Log before sending the email
     try:
-        record_id = pdf_path.split("/")[-1].replace(".pdf", "")  # use quote_id as fallback for record_id
+        record_id = quote_id  # Use quote_id as record_id
+        from app.api.filter_response import log_debug_event  # Lazy import to avoid circular import
         log_debug_event(record_id, "BACKEND", "Email Sending", f"Sending quote email to {to_email}")
     except Exception as e:
-        pass  # do not block if logging fails
+        pass  # Do not block if logging fails
 
     res = requests.post(url, json=payload, headers=headers)
     if res.status_code == 202:
