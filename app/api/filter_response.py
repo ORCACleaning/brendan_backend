@@ -705,10 +705,9 @@ def create_new_quote(session_id: str, force_new: bool = False):
     Creates a new quote record in Airtable.
     Returns: (quote_id, record_id, quote_stage, fields)
     """
+    from app.utils.logging_utils import log_debug_event
 
     logger.info(f"🚨 Checking for existing session: {session_id}")
-
-    # Log the initiation of the quote creation
     log_debug_event(None, "BACKEND", "Quote Creation Initiated", f"Checking for existing quote with session_id: {session_id}")
 
     # Check for existing quote unless forced new
@@ -736,19 +735,17 @@ def create_new_quote(session_id: str, force_new: bool = False):
         "Content-Type": "application/json"
     }
 
-    # Fields to create new record
     data = {
         "fields": {
             "session_id": session_id,
             "quote_id": quote_id,
             "quote_stage": "Gathering Info",
             "message_log": "",
-            "privacy_acknowledged": False,  # Force privacy ack False on creation
-            "source": "Brendan"  # Always tag source as Brendan
+            "privacy_acknowledged": False,
+            "source": "Brendan"
         }
     }
 
-    # Attempt to create record
     try:
         res = requests.post(url, headers=headers, json=data)
         res.raise_for_status()
@@ -757,22 +754,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
         log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote record created with session_id: {session_id}, quote_id: {quote_id}")
 
-        # Append system log entry
-        append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
-
-        # Return standard tuple for caching
-        return quote_id, record_id, "Gathering Info", {
-            "quote_stage": "Gathering Info",
-            "message_log": "",
-            "session_id": session_id,
-            "privacy_acknowledged": False,  # Explicit for cache
-            "source": "Brendan"
-        }
-
-    except requests.RequestException as e:
-        logger.error(f"❌ FAILED to create quote: {e}")
-        log_debug_event(None, "BACKEND", "Quote Creation Failed", f"Error creating quote: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
+        append_message_log(record_id, "SYSTEM_TRIGGER
 
 
 # === GPT Error Email Alert ===
