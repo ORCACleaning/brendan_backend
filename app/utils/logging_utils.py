@@ -3,45 +3,38 @@
 import requests
 from app.config import logger, settings
 
-TABLE_NAME = "Vacate Quotes"  # ✅ No external import
+# ✅ Pull actual Airtable table name here
+TABLE_NAME = "Vacate Quotes"
 AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
 AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
 
 
 def log_debug_event(record_id: str, source: str, stage: str, message: str):
     """
-    Central logging handler that appends trace logs to the Airtable message_log field.
+    Append a debug line to the Airtable message_log field of the given record_id.
     """
     if not record_id:
         return
 
-    try:
-        log_line = f"{source}: {stage} – {message}"
-        logger.info(f"📄 {log_line}")
+    log_line = f"{source}: {stage} – {message}"
+    logger.info(f"📄 {log_line}")
 
+    try:
         url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
         headers = {
             "Authorization": f"Bearer {AIRTABLE_API_KEY}",
             "Content-Type": "application/json"
         }
 
-        # Fetch current message_log
-        current_log = ""
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            fields = res.json().get("fields", {})
-            current_log = fields.get("message_log", "")
-
-        new_log = (current_log + "\n" + log_line).strip()
-
-        payload = {
+        # Patch only the message_log field (append to existing value)
+        patch_payload = {
             "fields": {
-                "message_log": new_log
+                "message_log": log_line
             }
         }
 
-        res = requests.patch(url, headers=headers, json=payload)
-        res.raise_for_status()
+        # Use Airtable append behavior via our main update path
+        requests.patch(url, headers=headers, json=patch_payload)
 
     except Exception as e:
         logger.warning(f"⚠️ Failed to log event: {e}")
