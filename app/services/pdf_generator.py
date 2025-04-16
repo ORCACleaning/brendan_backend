@@ -4,7 +4,7 @@ import base64
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 from app.config import logger
-
+from app.routes.filter_response import log_debug_event  # <-- Required for logging
 
 def generate_quote_pdf(data: dict) -> (str, str):
     """
@@ -21,6 +21,8 @@ def generate_quote_pdf(data: dict) -> (str, str):
     pdf_url = f"https://orcacleaning.com.au/static/quotes/{filename}"
 
     logger.info(f"📄 Generating PDF Quote: {output_path}")
+    if record_id := data.get("record_id"):
+        log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
 
     # === Load Logo Base64 ===
     logo_path = "app/static/orca_logo.png"
@@ -30,6 +32,8 @@ def generate_quote_pdf(data: dict) -> (str, str):
     except Exception as e:
         logger.error(f"❌ Failed to load logo: {e}")
         logo_base64 = ""
+        if record_id:
+            log_debug_event(record_id, "BACKEND", "PDF Logo Error", str(e))
 
     data["logo_base64"] = logo_base64
 
@@ -95,7 +99,6 @@ def generate_quote_pdf(data: dict) -> (str, str):
         f"✅ Weekend Cleaning Surcharge (${weekend_surcharge:.2f})" if weekend_surcharge > 0 else "–"
     )
 
-    # === Ensure Surcharge Exists in Data for Template ===
     data["weekend_surcharge"] = weekend_surcharge
 
     # === Render & Export PDF ===
@@ -103,5 +106,7 @@ def generate_quote_pdf(data: dict) -> (str, str):
     HTML(string=html_out, base_url=".").write_pdf(output_path)
 
     logger.info(f"✅ PDF Generated: {output_path}")
+    if record_id:
+        log_debug_event(record_id, "BACKEND", "PDF Generated", f"PDF saved to {output_path}, URL: {pdf_url}")
 
     return output_path, pdf_url
