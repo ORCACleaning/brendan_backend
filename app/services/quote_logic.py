@@ -1,6 +1,6 @@
-# === quote_logic.py ===
-
 from app.models.quote_models import QuoteRequest, QuoteResponse
+from app.config import logger
+from app.routes.filter_response import log_debug_event  # ✅ Logging import
 
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     BASE_HOURLY_RATE = 75.0
@@ -20,6 +20,12 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         "range_hood_cleaning": 20,
         "garage_cleaning": 40,
     }
+
+    record_id = getattr(data, "record_id", None)
+    try:
+        log_debug_event(record_id, "BACKEND", "Quote Calculation Started", f"quote_id: {data.quote_id}")
+    except:
+        pass
 
     # === Base Time Calculation ===
     base_minutes = 0
@@ -51,9 +57,13 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         base_minutes += (data.carpet_halway_count or 0) * 20
         base_minutes += (data.carpet_stairs_count or 0) * 35
         base_minutes += (data.carpet_other_count or 0) * 30
+
+        log_debug_event(record_id, "BACKEND", "Base Time Calculated", f"{base_minutes} mins")
+
     except Exception as e:
         logger.warning(f"⚠️ Error in base time calculation: {e}")
         base_minutes = 0
+        log_debug_event(record_id, "BACKEND", "Calculation Error", f"Base time error: {e}")
 
     # === Special Request Handling ===
     min_total_mins = base_minutes
@@ -66,6 +76,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         max_total_mins += data.special_request_minutes_max
         is_range = True
         note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
+        log_debug_event(record_id, "BACKEND", "Special Request Time Added", f"{data.special_request_minutes_min}–{data.special_request_minutes_max} mins")
 
     # === Price Calculation ===
     calculated_hours = round(max_total_mins / 60, 2)
@@ -86,9 +97,13 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     discount_amount = round(total_before_discount * total_discount_percent / 100, 2)
     discounted_price = round(total_before_discount - discount_amount, 2)
 
+    log_debug_event(record_id, "BACKEND", "Discount Applied", f"{total_discount_percent}% = -${discount_amount:.2f}")
+
     # === GST Calculation ===
     gst_amount = round(discounted_price * GST_PERCENT / 100, 2)
     total_with_gst = round(discounted_price + gst_amount, 2)
+
+    log_debug_event(record_id, "BACKEND", "Quote Total Calculated", f"${total_with_gst:.2f} incl GST")
 
     return QuoteResponse(
         quote_id=data.quote_id,
