@@ -12,8 +12,6 @@ from app.api.quote import router as quote_router
 from app.api.filter_response import router as filter_response_router
 from app.store_customer import router as store_customer_router
 from app import auto_fixer  # ✅ AI Auto-Fix Commit System
-# ❌ brendan_chat import removed (invalid router)
-# from app.brendan_chat import router as brendan_chat_router
 
 # === Load environment variables ===
 load_dotenv()
@@ -23,21 +21,27 @@ api_key = os.getenv("OPENAI_API_KEY")
 airtable_key = os.getenv("AIRTABLE_API_KEY")
 airtable_base = os.getenv("AIRTABLE_BASE_ID")
 
-# === Debug key loading ===
-if api_key:
-    print("✅ Loaded OpenAI Key.")
-    log_debug_event(None, "LOCAL", "OpenAI Key Loaded", "API key loaded successfully.")
-    
-else:
-    print("❌ ERROR: OPENAI_API_KEY not loaded!")
-    log_debug_event(None, "LOCAL", "OpenAI Key Error", "OPENAI_API_KEY not found in .env")
+# === Debug key loading (with Fix #2 and Fix #4 applied) ===
+try:
+    if api_key:
+        print(f"✅ Loaded OpenAI Key: {api_key}")
+        log_debug_event(None, "LOCAL", "OpenAI Key Loaded", f"Key = {api_key}")
+    else:
+        print("❌ ERROR: OPENAI_API_KEY not loaded!")
+        log_debug_event(None, "LOCAL", "OpenAI Key Error", "OPENAI_API_KEY not found in .env")
+except Exception as e:
+    print(f"⚠️ Error logging OpenAI Key load: {e}")
 
-if airtable_key and airtable_base:
-    print("✅ Airtable Key and Base ID loaded successfully.")
-    log_debug_event(None, "LOCAL", "Airtable Credentials Loaded", "API Key and Base ID present")
-else:
-    print("❌ ERROR: Airtable credentials not loaded! Check .env.")
-    log_debug_event(None, "LOCAL", "Airtable Credentials Error", "Missing airtable_key or base")
+try:
+    if airtable_key and airtable_base:
+        print(f"✅ Airtable Key: {airtable_key}")
+        print(f"✅ Airtable Base ID: {airtable_base}")
+        log_debug_event(None, "LOCAL", "Airtable Credentials Loaded", f"Key = {airtable_key}, Base = {airtable_base}")
+    else:
+        print("❌ ERROR: Airtable credentials not loaded! Check .env.")
+        log_debug_event(None, "LOCAL", "Airtable Credentials Error", "Missing airtable_key or base")
+except Exception as e:
+    print(f"⚠️ Error logging Airtable credential load: {e}")
 
 # === Initialize OpenAI Client ===
 client = OpenAI(api_key=api_key)
@@ -67,7 +71,10 @@ app.include_router(auto_fixer.router)
 # === Root Welcome Endpoint ===
 @app.get("/")
 def read_root():
-    log_debug_event(None, "LOCAL", "Ping Root", "Root endpoint accessed")
+    try:
+        log_debug_event(None, "LOCAL", "Ping Root", "Root endpoint accessed")
+    except Exception as e:
+        print(f"⚠️ Error logging root ping: {e}")
     return JSONResponse(
         content={"message": "Welcome to Brendan Backend! 🎉"},
         media_type="application/json; charset=utf-8"
@@ -76,7 +83,10 @@ def read_root():
 # === Health Check Endpoint ===
 @app.get("/ping")
 def ping():
-    log_debug_event(None, "LOCAL", "Ping /ping", "Health check requested")
+    try:
+        log_debug_event(None, "LOCAL", "Ping /ping", "Health check requested")
+    except Exception as e:
+        print(f"⚠️ Error logging ping: {e}")
     return {"ping": "pong"}
 
 # === Local PDF Test Generator (Optional) ===
@@ -137,6 +147,9 @@ if __name__ == "__main__":
         log_debug_event(None, "LOCAL", "PDF Generation Successful", output_path)
     except Exception as e:
         print(f"❌ Failed to generate PDF: {e}")
-        log_debug_event(None, "LOCAL", "PDF Generation Failed", str(e))
+        try:
+            log_debug_event(None, "LOCAL", "PDF Generation Failed", str(e))
+        except Exception as log_e:
+            print(f"⚠️ Logging PDF failure also failed: {log_e}")
 
     uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True, log_config=None, access_log=False)
