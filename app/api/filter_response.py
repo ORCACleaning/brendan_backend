@@ -531,19 +531,46 @@ def generate_next_actions():
 # === GPT Extraction (Production-Grade) ===
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
- 
+    import json
+    import random
+    import re
+    from time import sleep
+
     logger.info("🧑‍🔬 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log for extraction.")
 
-    def call_gpt(prepared_log: str):
+    # === Filter out useless messages like "hi" ===
+    weak_inputs = ["hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"]
+    if message.lower().strip() in weak_inputs:
+        reply = ("Hey there! I’m here to help — just let me know which suburb you're in, how many bedrooms and "
+                 "bathrooms you’ve got, and whether the place is furnished or unfurnished.")
+        if record_id:
+            log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Message: {message}")
+        return {}, reply
+
+    # === Prepare message log into GPT-4 Turbo format ===
+    prepared_log = log[-LOG_TRUNCATE_LENGTH:]
+    prepared_log = re.sub(r'[^ -~\n]', '', prepared_log)  # Strip unicode
+
+    messages = []
+    for line in prepared_log.split("\n"):
+        if line.startswith("USER:"):
+            messages.append({"role": "user", "content": line[5:].strip()})
+        elif line.startswith("BRENDAN:"):
+            messages.append({"role": "assistant", "content": line[8:].strip()})
+        elif line.startswith("SYSTEM:"):
+            messages.append({"role": "system", "content": line[7:].strip()})
+
+    # Add the latest user message again for clarity
+    messages.append({"role": "user", "content": message.strip()})
+
+    # === Call GPT Function ===
+    def call_gpt(messages_block):
         try:
             response = client.chat.completions.create(
                 model="gpt-4-turbo",
-                messages=[
-                    {"role": "system", "content": GPT_PROMPT},
-                    {"role": "user", "content": prepared_log}
-                ],
+                messages=[{"role": "system", "content": GPT_PROMPT}] + messages_block,
                 max_tokens=3000,
                 temperature=0.4
             )
@@ -558,21 +585,18 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 log_debug_event(record_id, "GPT", "Request Failed", str(e))
             raise
 
-    prepared_log = log[-LOG_TRUNCATE_LENGTH:]
-    prepared_log = re.sub(r'[^ -~\n]', '', prepared_log)
-
-    raw = None
+    parsed = {}
     for attempt in range(2):
         try:
-            raw = call_gpt(prepared_log)
+            raw = call_gpt(messages)
             logger.debug(f"🔍 RAW GPT OUTPUT (attempt {attempt + 1}):\n{raw}")
-
             if record_id:
                 log_debug_event(record_id, "GPT", f"Raw Response Attempt {attempt + 1}", raw)
 
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
-                raise ValueError("JSON block not found.")
+                raise ValueError("JSON block not found in GPT response.")
+
             parsed = json.loads(raw[start:end + 1])
             break
         except Exception as e:
@@ -580,7 +604,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if record_id:
                 log_debug_event(record_id, "GPT", f"Parsing Failed Attempt {attempt + 1}", str(e))
             if attempt == 1:
-                raise e
+                return {}, "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
             sleep(1)
 
     props = parsed.get("properties", [])
@@ -588,15 +612,15 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
     if record_id:
         log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}")
-
     logger.debug(f"✅ Parsed props: {props}")
     logger.debug(f"✅ Parsed reply: {reply}")
 
+    # === Fetch existing record (for abuse logic) ===
     existing = {}
     if record_id:
-        url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-        headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
         try:
+            url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+            headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
             res = requests.get(url, headers=headers)
             res.raise_for_status()
             existing = res.json().get("fields", {})
@@ -608,7 +632,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     current_stage = existing.get("quote_stage", "")
     field_updates = {}
 
-    # Abuse detection
+    # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         if not quote_id and existing:
@@ -629,89 +653,13 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First offensive message detected.")
             return field_updates, reply.strip()
 
-    # Default quote_stage handling
+    # === Final Fallback for Empty Props ===
     if not props:
         reply = "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
-        return field_updates, reply
+        return {}, reply
 
     field_updates["quote_stage"] = "Gathering Info"
     return props, reply.strip()
-
-# === Create New Quote ===
-
-def create_new_quote(session_id: str, force_new: bool = False):
-    """
-    Creates a new quote record in Airtable.
-    Returns: (quote_id, record_id, quote_stage, fields)
-    """
-    logger.info(f"🚨 Checking for existing session: {session_id}")
-    log_debug_event(None, "BACKEND", "Quote Creation Initiated", f"Checking for existing quote with session_id: {session_id}")
-
-    # === STEP 1: Check for existing quote ===
-    if not force_new:
-        log_debug_event(None, "BACKEND", "Session Lookup", f"Attempting to retrieve quote for session_id: {session_id}")
-        existing = get_quote_by_session(session_id)
-        if existing:
-            logger.warning("⚠️ Duplicate session detected. Returning existing quote.")
-            log_debug_event(None, "BACKEND", "Duplicate Session", f"Returning existing quote for session_id: {session_id}")
-            return existing
-
-    # === STEP 2: Handle force-new ===
-    if force_new:
-        logger.info("🔁 Force creating new quote despite duplicate session ID.")
-        session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
-        log_debug_event(None, "BACKEND", "Force New Quote", f"Session ID forced to be unique: {session_id}")
-
-    # === STEP 3: Generate Quote ID ===
-    quote_id = get_next_quote_id()
-    logger.info(f"🔑 Generated new quote_id: {quote_id}")
-    log_debug_event(None, "BACKEND", "New Quote ID", f"Generated new quote ID: {quote_id}")
-
-    # === STEP 4: Prepare Airtable Payload ===
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
-    headers = {
-        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    data = {
-        "fields": {
-            "session_id": session_id,
-            "quote_id": quote_id,
-            "quote_stage": "Gathering Info",
-            "message_log": "",
-            "privacy_acknowledged": False,
-            "source": "Brendan"
-        }
-    }
-
-    log_debug_event(None, "BACKEND", "Airtable Request", f"Sending POST to Airtable with session_id: {session_id}, quote_id: {quote_id}")
-
-    # === STEP 5: Create Record in Airtable ===
-    try:
-        res = requests.post(url, headers=headers, json=data)
-        res.raise_for_status()
-
-        record_id = res.json().get("id")
-        logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
-        log_debug_event(record_id, "BACKEND", "Quote Created", f"New Airtable record created. session_id: {session_id}, quote_id: {quote_id}")
-
-        # === STEP 6: Add System Log Message ===
-        append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
-        log_debug_event(record_id, "BACKEND", "System Log Appended", "Added SYSTEM_TRIGGER message to message_log.")
-
-        return quote_id, record_id, "Gathering Info", {
-            "quote_stage": "Gathering Info",
-            "message_log": "",
-            "session_id": session_id,
-            "privacy_acknowledged": False,
-            "source": "Brendan"
-        }
-
-    except requests.RequestException as e:
-        logger.error(f"❌ FAILED to create quote: {e}")
-        log_debug_event(None, "BACKEND", "Quote Creation Failed", f"Error creating Airtable record: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
 
 # === GPT Error Email Alert ===
 
