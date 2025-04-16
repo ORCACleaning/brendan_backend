@@ -7,7 +7,6 @@ import requests
 
 from fastapi import HTTPException
 from app.config import logger, settings  # Load from config.py
-from app.routes.filter_response import log_debug_event  # Debug log support
 
 # Airtable Settings
 AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
@@ -31,8 +30,9 @@ def get_next_quote_id(prefix: str = "VC") -> str:
 
     # Optional debug log if passed into create flow
     try:
+        from app.api.filter_response import log_debug_event  # Lazy import
         log_debug_event(None, "BACKEND", "Quote ID Generated", f"Auto quote_id: {quote_id}")
-    except:
+    except Exception:
         pass
 
     return quote_id
@@ -57,8 +57,9 @@ def get_next_manual_quote_id() -> str:
     except Exception as e:
         logger.error(f"❌ Failed to fetch Quote ID Counter: {e}")
         try:
+            from app.api.filter_response import log_debug_event
             log_debug_event(None, "BACKEND", "Quote ID Counter Fetch Failed", str(e))
-        except:
+        except Exception:
             pass
         raise HTTPException(status_code=500, detail="Failed to fetch Quote ID Counter.")
 
@@ -66,8 +67,9 @@ def get_next_manual_quote_id() -> str:
     if not records:
         logger.error("❌ No Quote ID Counter record found in Airtable.")
         try:
+            from app.api.filter_response import log_debug_event
             log_debug_event(None, "BACKEND", "Quote ID Counter Missing", "No records found")
-        except:
+        except Exception:
             pass
         raise HTTPException(status_code=500, detail="No Quote ID Counter record found.")
 
@@ -86,15 +88,17 @@ def get_next_manual_quote_id() -> str:
     if not patch_res.ok:
         logger.error(f"❌ Failed to update Quote ID Counter: {patch_res.text}")
         try:
+            from app.api.filter_response import log_debug_event
             log_debug_event(record_id, "BACKEND", "Quote ID Counter Update Failed", patch_res.text)
-        except:
+        except Exception:
             pass
         raise HTTPException(status_code=500, detail="Failed to update Quote ID Counter.")
 
     logger.info(f"✅ Generated Manual quote_id: {next_quote_id}")
     try:
+        from app.api.filter_response import log_debug_event
         log_debug_event(record_id, "BACKEND", "Manual Quote ID Generated", f"Manual quote_id: {next_quote_id}")
-    except:
+    except Exception:
         pass
 
     return next_quote_id
