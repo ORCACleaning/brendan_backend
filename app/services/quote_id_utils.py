@@ -6,7 +6,8 @@ import pytz
 import requests
 
 from fastapi import HTTPException
-from app.config import logger, settings  # Load from config.py
+from app.config import logger, settings
+from app.utils.logging_utils import log_debug_event  # ✅ Central logging
 
 # Airtable Settings
 AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
@@ -23,14 +24,12 @@ def get_next_quote_id(prefix: str = "VC") -> str:
     """
     now = datetime.now(pytz.timezone("Australia/Perth"))
     timestamp = now.strftime("%y%m%d-%H%M%S")
-    random_suffix = str(uuid.uuid4().int)[-3:]  # Use last 3 digits for randomness
+    random_suffix = str(uuid.uuid4().int)[-3:]
 
     quote_id = f"{prefix}-{timestamp}-{random_suffix}"
     logger.info(f"✅ Generated Brendan quote_id: {quote_id}")
 
-    # Optional debug log if passed into create flow
     try:
-        from app.api.filter_response import log_debug_event  # Lazy import
         log_debug_event(None, "BACKEND", "Quote ID Generated", f"Auto quote_id: {quote_id}")
     except Exception:
         pass
@@ -57,7 +56,6 @@ def get_next_manual_quote_id() -> str:
     except Exception as e:
         logger.error(f"❌ Failed to fetch Quote ID Counter: {e}")
         try:
-            from app.api.filter_response import log_debug_event
             log_debug_event(None, "BACKEND", "Quote ID Counter Fetch Failed", str(e))
         except Exception:
             pass
@@ -67,7 +65,6 @@ def get_next_manual_quote_id() -> str:
     if not records:
         logger.error("❌ No Quote ID Counter record found in Airtable.")
         try:
-            from app.api.filter_response import log_debug_event
             log_debug_event(None, "BACKEND", "Quote ID Counter Missing", "No records found")
         except Exception:
             pass
@@ -77,7 +74,7 @@ def get_next_manual_quote_id() -> str:
     current_counter = records[0]["fields"].get("counter", 0)
 
     next_counter = current_counter + 1
-    next_quote_id = f"VC-{str(next_counter).zfill(6)}"  # Format: VC-000123
+    next_quote_id = f"VC-{str(next_counter).zfill(6)}"
 
     patch_res = requests.patch(
         f"{url}/{record_id}",
@@ -88,7 +85,6 @@ def get_next_manual_quote_id() -> str:
     if not patch_res.ok:
         logger.error(f"❌ Failed to update Quote ID Counter: {patch_res.text}")
         try:
-            from app.api.filter_response import log_debug_event
             log_debug_event(record_id, "BACKEND", "Quote ID Counter Update Failed", patch_res.text)
         except Exception:
             pass
@@ -96,7 +92,6 @@ def get_next_manual_quote_id() -> str:
 
     logger.info(f"✅ Generated Manual quote_id: {next_quote_id}")
     try:
-        from app.api.filter_response import log_debug_event
         log_debug_event(record_id, "BACKEND", "Manual Quote ID Generated", f"Manual quote_id: {next_quote_id}")
     except Exception:
         pass
