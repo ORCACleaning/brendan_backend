@@ -18,12 +18,15 @@ def generate_quote_pdf(data: dict) -> (str, str):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     pdf_url = f"https://orcacleaning.com.au/static/quotes/{filename}"
+    record_id = data.get("record_id")
 
     logger.info(f"📄 Generating PDF Quote: {output_path}")
-    if record_id := data.get("record_id"):
-        # Move import here to avoid circular import
-        from app.api.filter_response import log_debug_event
-        log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
+    if record_id:
+        try:
+            from app.api.filter_response import log_debug_event
+            log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
+        except Exception:
+            pass
 
     # === Load Logo Base64 ===
     logo_path = "app/static/orca_logo.png"
@@ -34,7 +37,11 @@ def generate_quote_pdf(data: dict) -> (str, str):
         logger.error(f"❌ Failed to load logo: {e}")
         logo_base64 = ""
         if record_id:
-            log_debug_event(record_id, "BACKEND", "PDF Logo Error", str(e))
+            try:
+                from app.api.filter_response import log_debug_event
+                log_debug_event(record_id, "BACKEND", "PDF Logo Error", str(e))
+            except Exception:
+                pass
 
     data["logo_base64"] = logo_base64
 
@@ -108,6 +115,10 @@ def generate_quote_pdf(data: dict) -> (str, str):
 
     logger.info(f"✅ PDF Generated: {output_path}")
     if record_id:
-        log_debug_event(record_id, "BACKEND", "PDF Generated", f"PDF saved to {output_path}, URL: {pdf_url}")
+        try:
+            from app.api.filter_response import log_debug_event
+            log_debug_event(record_id, "BACKEND", "PDF Generated", f"PDF saved to {output_path}, URL: {pdf_url}")
+        except Exception:
+            pass
 
     return output_path, pdf_url
