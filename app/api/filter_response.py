@@ -833,6 +833,7 @@ def send_gpt_error_email(error_msg: str):
     import smtplib
     from email.mime.text import MIMEText
     from time import sleep
+    from app.routes.filter_response import log_debug_event  # ✅ Import for logging
 
     sender_email = "info@orcacleaning.com.au"
     recipient_email = "admin@orcacleaning.com.au"
@@ -842,6 +843,10 @@ def send_gpt_error_email(error_msg: str):
 
     if not smtp_pass:
         logger.error("❌ Missing SMTP password — cannot send GPT error email.")
+        try:
+            log_debug_event(None, "BACKEND", "Email Send Failed", "Missing SMTP_PASS environment variable")
+        except:
+            pass
         return
 
     msg = MIMEText(error_msg)
@@ -860,15 +865,27 @@ def send_gpt_error_email(error_msg: str):
                     msg=msg.as_string()
                 )
             logger.info("✅ GPT error email sent successfully.")
+            try:
+                log_debug_event(None, "BACKEND", "GPT Error Email Sent", f"Error email sent to admin@orcacleaning.com.au (attempt {attempt + 1})")
+            except:
+                pass
             return  # Exit after success
         except smtplib.SMTPException as e:
             logger.warning(f"⚠️ SMTP error (attempt {attempt + 1}/2): {e}")
             if attempt == 1:
                 logger.error("❌ Failed to send GPT error email after 2 attempts.")
+                try:
+                    log_debug_event(None, "BACKEND", "GPT Error Email Failed", str(e))
+                except:
+                    pass
             else:
                 sleep(5)  # Wait before retrying
         except Exception as e:
             logger.error(f"❌ Unexpected error sending GPT error email: {e}")
+            try:
+                log_debug_event(None, "BACKEND", "Unexpected Email Error", str(e))
+            except:
+                pass
             return
 
 # === Append Message Log ===
