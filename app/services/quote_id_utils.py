@@ -7,6 +7,7 @@ import requests
 
 from fastapi import HTTPException
 from app.config import logger, settings  # Load from config.py
+from app.routes.filter_response import log_debug_event  # Debug log support
 
 # Airtable Settings
 AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
@@ -27,6 +28,13 @@ def get_next_quote_id(prefix: str = "VC") -> str:
 
     quote_id = f"{prefix}-{timestamp}-{random_suffix}"
     logger.info(f"✅ Generated Brendan quote_id: {quote_id}")
+
+    # Optional debug log if passed into create flow
+    try:
+        log_debug_event(None, "BACKEND", "Quote ID Generated", f"Auto quote_id: {quote_id}")
+    except:
+        pass
+
     return quote_id
 
 
@@ -48,11 +56,19 @@ def get_next_manual_quote_id() -> str:
         res.raise_for_status()
     except Exception as e:
         logger.error(f"❌ Failed to fetch Quote ID Counter: {e}")
+        try:
+            log_debug_event(None, "BACKEND", "Quote ID Counter Fetch Failed", str(e))
+        except:
+            pass
         raise HTTPException(status_code=500, detail="Failed to fetch Quote ID Counter.")
 
     records = res.json().get("records", [])
     if not records:
         logger.error("❌ No Quote ID Counter record found in Airtable.")
+        try:
+            log_debug_event(None, "BACKEND", "Quote ID Counter Missing", "No records found")
+        except:
+            pass
         raise HTTPException(status_code=500, detail="No Quote ID Counter record found.")
 
     record_id = records[0]["id"]
@@ -69,7 +85,16 @@ def get_next_manual_quote_id() -> str:
 
     if not patch_res.ok:
         logger.error(f"❌ Failed to update Quote ID Counter: {patch_res.text}")
+        try:
+            log_debug_event(record_id, "BACKEND", "Quote ID Counter Update Failed", patch_res.text)
+        except:
+            pass
         raise HTTPException(status_code=500, detail="Failed to update Quote ID Counter.")
 
     logger.info(f"✅ Generated Manual quote_id: {next_quote_id}")
+    try:
+        log_debug_event(record_id, "BACKEND", "Manual Quote ID Generated", f"Manual quote_id: {next_quote_id}")
+    except:
+        pass
+
     return next_quote_id
