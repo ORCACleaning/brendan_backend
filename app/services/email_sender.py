@@ -4,6 +4,7 @@ import requests
 from dotenv import load_dotenv
 
 from app.services.pdf_generator import generate_quote_pdf
+from app.utils.logging_utils import log_debug_event  # ✅ Centralized logging
 
 # === Load Environment Variables ===
 load_dotenv()
@@ -112,32 +113,23 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
         "Content-Type": "application/json",
     }
 
-    # Lazy import to avoid circular import
+    # Logging
     try:
-        from app.api.filter_response import log_debug_event
+        log_debug_event(quote_id, "BACKEND", "Email Sending", f"Sending quote email to {to_email}")
     except Exception:
-        log_debug_event = None
-
-    # Log before sending the email
-    if log_debug_event:
-        try:
-            log_debug_event(quote_id, "BACKEND", "Email Sending", f"Sending quote email to {to_email}")
-        except:
-            pass
+        pass
 
     res = requests.post(url, json=payload, headers=headers)
 
     if res.status_code == 202:
         print(f"✅ Quote email sent to {to_email}")
-        if log_debug_event:
-            try:
-                log_debug_event(quote_id, "BACKEND", "Email Sent", f"Quote email successfully sent to {to_email}")
-            except:
-                pass
+        try:
+            log_debug_event(quote_id, "BACKEND", "Email Sent", f"Quote email successfully sent to {to_email}")
+        except Exception:
+            pass
     else:
         print(f"❌ Failed to send quote email ({res.status_code}): {res.text}")
-        if log_debug_event:
-            try:
-                log_debug_event(quote_id, "BACKEND", "Email Send Failed", f"{res.status_code}: {res.text}")
-            except:
-                pass
+        try:
+            log_debug_event(quote_id, "BACKEND", "Email Send Failed", f"{res.status_code}: {res.text}")
+        except Exception:
+            pass
