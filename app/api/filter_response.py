@@ -5,23 +5,26 @@ import logging
 import requests
 import inflect
 import openai
-
+import smtplib
+import re
+import base64
+from time import sleep
 from datetime import datetime, timedelta
-import pytz
+from email.mime.text import MIMEText
 
+import pytz
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-# === Correct Brendan Service Imports ===
+# === Config, Constants, and SDKs ===
+from app.config import logger, settings
+from app.models.quote_models import QuoteRequest
 from app.services.email_sender import send_quote_email
 from app.services.pdf_generator import generate_quote_pdf
 from app.services.quote_id_utils import get_next_quote_id
 from app.services.quote_logic import calculate_quote
-from app.models.quote_models import QuoteRequest
-from app.config import logger, settings  # Logger and Settings loaded from config.py
-
-# === Field Rules / Validations ===
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
+from app.utils.logging_utils import log_debug_event, append_message_log
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
@@ -236,8 +239,6 @@ def get_quote_by_session(session_id: str):
     Retrieves the latest quote record from Airtable using session_id.
     Returns: (quote_id, record_id, quote_stage, fields) or None.
     """
-    from time import sleep
-
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
@@ -298,8 +299,7 @@ def get_quote_by_session(session_id: str):
 # === Update Quote Record ===
 
 def update_quote_record(record_id: str, fields: dict):
-    import json
-
+   
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
@@ -309,7 +309,6 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # === Furnished Field Special Handling ===
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -320,7 +319,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
-    # === Normalize Fields ===
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
 
@@ -328,7 +326,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Boolean Handling
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass
@@ -337,7 +334,6 @@ def update_quote_record(record_id: str, fields: dict):
             else:
                 value = str(value).strip().lower() in TRUE_VALUES
 
-        # Integer Handling
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -348,7 +344,6 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Float Handling
         elif key in {
             "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
             "estimated_time_mins", "discount_applied", "mandurah_surcharge",
@@ -360,35 +355,29 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to float — forcing 0.0")
                 value = 0.0
 
-        # Special Requests Normalization
         elif key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
 
-        # Extra Hours Requested Normalization
         elif key == "extra_hours_requested":
             try:
                 value = float(value) if value not in [None, ""] else 0
             except Exception:
                 value = 0
 
-        # Everything Else = Str
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
 
-    # === Final Force Privacy Handling ===
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
-    # === Exit Early if No Valid Fields ===
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
         log_debug_event(record_id, "BACKEND", "No Valid Fields", "No valid fields to update in this request.")
         return []
 
-    # === Final Sanity Check ===
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
@@ -397,7 +386,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
             normalized_fields.pop(key, None)
 
-    # === Attempt Bulk Update ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
         if res.ok:
@@ -415,7 +403,6 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Exception during Airtable bulk update: {e}")
         log_debug_event(record_id, "BACKEND", "Airtable Update Error", str(e))
 
-    # === Fallback to Single Field Update ===
     successful = []
     for key, value in normalized_fields.items():
         try:
@@ -552,25 +539,15 @@ def generate_next_actions():
         }
     ]
 
-
 # === GPT Extraction (Production-Grade) ===
 
 def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
-    import json
-    import random
-    import traceback
-    import re
-    from time import sleep
-
-    # Log the incoming GPT-4 request
+ 
     logger.info("🧑‍🔬 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log for extraction.")
 
     def call_gpt(prepared_log: str):
-        """
-        Send a request to GPT-4 Turbo to get the extracted properties.
-        """
         try:
             response = client.chat.completions.create(
                 model="gpt-4-turbo",
@@ -592,11 +569,9 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 log_debug_event(record_id, "GPT", "Request Failed", str(e))
             raise
 
-    # Preprocess the log, cleaning non-printable characters
     prepared_log = log[-LOG_TRUNCATE_LENGTH:]
     prepared_log = re.sub(r'[^ -~\n]', '', prepared_log)
 
-    # Call GPT-4 with retry logic
     raw = None
     for attempt in range(2):
         try:
@@ -606,7 +581,6 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if record_id:
                 log_debug_event(record_id, "GPT", f"Raw Response Attempt {attempt + 1}", raw)
 
-            # Extract JSON block from GPT output
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
@@ -620,18 +594,15 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 raise e
             sleep(1)
 
-    # Parse the properties and response
     props = parsed.get("properties", [])
     reply = parsed.get("response", "")
 
-    # Log the parsed properties
     if record_id:
         log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}")
 
     logger.debug(f"✅ Parsed props: {props}")
     logger.debug(f"✅ Parsed reply: {reply}")
 
-    # Fetch existing quote data from Airtable if record_id is present
     existing = {}
     if record_id:
         url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -642,39 +613,13 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             existing = res.json().get("fields", {})
         except Exception as e:
             logger.error(f"❌ Failed to fetch existing record from Airtable: {e}")
-            if record_id:
-                log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
+            log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
     logger.warning(f"🔍 Existing Airtable Fields: {existing}")
     current_stage = existing.get("quote_stage", "")
     field_updates = {}
 
-    # Handle special request handling and early exit if special request times are specified
-    min_total_mins = base_minutes = 0
-    max_total_mins = base_minutes
-    is_range = False
-    note = None
-
-    if data.special_request_minutes_min is not None and data.special_request_minutes_max is not None:
-        min_total_mins += data.special_request_minutes_min
-        max_total_mins += data.special_request_minutes_max
-        is_range = True
-        note = f"Includes {data.special_request_minutes_min}–{data.special_request_minutes_max} min for special request"
-        log_debug_event(record_id, "BACKEND", "Special Request Time Added", f"{data.special_request_minutes_min}–{data.special_request_minutes_max} mins")
-
-    # Return early if special requests need further input
-    if "special_requests" in missing:
-        reply = ("Awesome — before I whip up your quote, do you have any special requests "
-                 "(like inside microwave, extra windows, balcony door tracks etc)?")
-        return field_updates, reply
-
-    if not missing:
-        field_updates["quote_stage"] = "Quote Calculated"
-    elif current_stage == "Gathering Info" and "quote_stage" not in field_updates:
-        field_updates["quote_stage"] = "Gathering Info"
-    elif current_stage == "Abuse Warning" and "quote_stage" not in field_updates:
-        field_updates["quote_stage"] = "Chat Banned"
-
+    # Abuse detection
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         if not quote_id and existing:
@@ -686,17 +631,22 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
                 f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
             ])
-            if record_id:
-                log_debug_event(record_id, "BACKEND", "Chat Banned", f"User repeated abusive language. Quote ID: {quote_id}")
+            log_debug_event(record_id, "BACKEND", "Chat Banned", f"User repeated abusive language. Quote ID: {quote_id}")
             return field_updates, reply
         else:
             field_updates["quote_stage"] = "Abuse Warning"
             reply = ("Just a heads-up — we can’t continue the quote if abusive language is used. "
                      "Let’s keep things respectful 👍\n\n" + reply)
-            if record_id:
-                log_debug_event(record_id, "BACKEND", "Abuse Warning", "First offensive message detected.")
+            log_debug_event(record_id, "BACKEND", "Abuse Warning", "First offensive message detected.")
+            return field_updates, reply.strip()
 
-    return field_updates, reply.strip()
+    # Default quote_stage handling
+    if not props:
+        reply = "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
+        return field_updates, reply
+
+    field_updates["quote_stage"] = "Gathering Info"
+    return props, reply.strip()
 
 # === Create New Quote ===
 
@@ -705,8 +655,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
     Creates a new quote record in Airtable.
     Returns: (quote_id, record_id, quote_stage, fields)
     """
-    from app.utils.logging_utils import log_debug_event
-
+    
     logger.info(f"🚨 Checking for existing session: {session_id}")
     log_debug_event(None, "BACKEND", "Quote Creation Initiated", f"Checking for existing quote with session_id: {session_id}")
 
@@ -754,25 +703,28 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
         log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote record created with session_id: {session_id}, quote_id: {quote_id}")
 
-        append_message_log(record_id, "SYSTEM_TRIGGER
+        # Append system log entry
+        append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
+        return quote_id, record_id, "Gathering Info", {
+            "quote_stage": "Gathering Info",
+            "message_log": "",
+            "session_id": session_id,
+            "privacy_acknowledged": False,
+            "source": "Brendan"
+        }
+
+    except requests.RequestException as e:
+        logger.error(f"❌ FAILED to create quote: {e}")
+        log_debug_event(None, "BACKEND", "Quote Creation Failed", f"Error creating quote: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
 
 # === GPT Error Email Alert ===
-
-import smtplib
-from email.mime.text import MIMEText
-from time import sleep
-
 
 def send_gpt_error_email(error_msg: str):
     """
     Sends an email to admin if GPT extraction fails and logs the error event.
     """
-
-    import smtplib
-    from email.mime.text import MIMEText
-    from time import sleep
-    from app.routes.filter_response import log_debug_event  # ✅ Import for logging
 
     sender_email = "info@orcacleaning.com.au"
     recipient_email = "admin@orcacleaning.com.au"
@@ -835,13 +787,11 @@ def append_message_log(record_id: str, message: str, sender: str):
     Appends a new message to the 'message_log' field in Airtable.
     Truncates from the start if the log exceeds MAX_LOG_LENGTH.
     """
-
-    from time import sleep
-
+  
     if not record_id:
         logger.error("❌ Cannot append message log — missing record ID")
         try:
-            log_debug_event(record_id, "BACKEND", "Log Failed", "Missing record ID for appending message log")
+            log_debug_event(None, "BACKEND", "Log Failed", "Missing record ID for appending message log")
         except Exception as e:
             logger.error(f"❌ Error logging message append failure due to missing record ID: {e}")
         return
@@ -913,11 +863,6 @@ def append_message_log(record_id: str, message: str, sender: str):
             logger.error(f"❌ Error logging debug event failure: {log_e}")
 
 # === Log Debugs At Airtable ===
-
-import requests
-import json
-from app.config import settings, logger
-
 # Airtable Settings
 AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
 AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
