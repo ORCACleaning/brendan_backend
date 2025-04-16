@@ -236,7 +236,6 @@ def get_quote_by_session(session_id: str):
     Retrieves the latest quote record from Airtable using session_id.
     Returns: (quote_id, record_id, quote_stage, fields) or None.
     """
-
     from time import sleep
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
@@ -281,6 +280,12 @@ def get_quote_by_session(session_id: str):
     logger.info(
         f"✅ Found quote | session_id: {session_id_return} | quote_id: {quote_id} | stage: {quote_stage}"
     )
+
+    # ✅ Add debug log to Airtable
+    try:
+        log_debug_event(record_id, "BACKEND", "Session Lookup", f"Quote found for session_id: {session_id_return}, stage: {quote_stage}")
+    except:
+        pass  # Avoid blocking return if logging fails
 
     return quote_id, record_id, quote_stage, fields
 
@@ -387,26 +392,39 @@ def update_quote_record(record_id: str, fields: dict):
             normalized_fields.pop(key, None)
 
     # === Attempt Bulk Update ===
-    res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
-    if res.ok:
-        logger.info("✅ Airtable bulk update success.")
-        return list(normalized_fields.keys())
-
-    logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
     try:
-        logger.error(f"🧾 Error response: {res.json()}")
-    except Exception:
-        logger.error("🧾 Error response: (Non-JSON)")
+        res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
+        if res.ok:
+            logger.info("✅ Airtable bulk update success.")
+            log_debug_event(record_id, "BACKEND", "Record Updated (Bulk)", f"Fields updated: {list(normalized_fields.keys())}")
+            return list(normalized_fields.keys())
+
+        logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
+        try:
+            logger.error(f"🧾 Error response: {res.json()}")
+        except Exception:
+            logger.error("🧾 Error response: (Non-JSON)")
+
+    except Exception as e:
+        logger.error(f"❌ Exception during Airtable bulk update: {e}")
 
     # === Fallback to Single Field Update ===
     successful = []
     for key, value in normalized_fields.items():
-        single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
-        if single_res.ok:
-            logger.info(f"✅ Field '{key}' updated successfully.")
-            successful.append(key)
-        else:
-            logger.error(f"❌ Field '{key}' failed to update.")
+        try:
+            single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
+            if single_res.ok:
+                logger.info(f"✅ Field '{key}' updated successfully.")
+                successful.append(key)
+            else:
+                logger.error(f"❌ Field '{key}' failed to update.")
+        except Exception as e:
+            logger.error(f"❌ Exception updating field '{key}': {e}")
+
+    if successful:
+        log_debug_event(record_id, "BACKEND", "Record Updated (Fallback)", f"Fields updated one-by-one: {successful}")
+    else:
+        log_debug_event(record_id, "BACKEND", "Update Failed", "No fields could be updated (bulk and fallback both failed).")
 
     return successful
 
@@ -537,6 +555,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
     from time import sleep
 
     logger.info("🧑‍🔬 Calling GPT-4 Turbo to extract properties...")
+    if record_id:
+        log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log for extraction.")
 
     def call_gpt(prepared_log: str):
         response = client.chat.completions.create(
@@ -556,7 +576,7 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
 
     # Preprocess log
     prepared_log = log[-LOG_TRUNCATE_LENGTH:]
-    prepared_log = re.sub(r'[^ -~\n]', '', prepared_log)  # Remove non-printable chars
+    prepared_log = re.sub(r'[^ -~\n]', '', prepared_log)
 
     # GPT call with retry
     raw = None
@@ -564,19 +584,29 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         try:
             raw = call_gpt(prepared_log)
             logger.debug(f"🔍 RAW GPT OUTPUT (attempt {attempt+1}):\n{raw}")
+            if record_id:
+                log_debug_event(record_id, "GPT", f"Raw Response Attempt {attempt+1}", raw)
+
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
+
             parsed = json.loads(raw[start:end + 1])
             break
         except Exception as e:
             logger.warning(f"⚠️ GPT extraction failed (attempt {attempt+1}): {e}")
+            if record_id:
+                log_debug_event(record_id, "GPT", f"Parsing Failed Attempt {attempt+1}", str(e))
             if attempt == 1:
                 raise e
             sleep(1)
 
     props = parsed.get("properties", [])
     reply = parsed.get("response", "")
+
+    if record_id:
+        log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}")
+
     logger.debug(f"✅ Parsed props: {props}")
     logger.debug(f"✅ Parsed reply: {reply}")
 
@@ -682,7 +712,8 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         if val in [None, "", False]:
             missing.append(f)
 
-    logger.warning(f"❗ Missing required fields preventing Quote Calculated stage: {missing}")
+    if record_id:
+        log_debug_event(record_id, "BACKEND", "Field Validation", f"Missing required fields: {missing}")
 
     if "special_requests" in missing:
         reply = ("Awesome — before I whip up your quote, do you have any special requests "
@@ -705,14 +736,17 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
                 f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
                 f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
             ])
+            if record_id:
+                log_debug_event(record_id, "BACKEND", "Chat Banned", f"User repeated abusive language. Quote ID: {quote_id}")
             return field_updates, reply
         else:
             field_updates["quote_stage"] = "Abuse Warning"
             reply = ("Just a heads-up — we can’t continue the quote if abusive language is used. "
                      "Let’s keep things respectful 👍\n\n" + reply)
+            if record_id:
+                log_debug_event(record_id, "BACKEND", "Abuse Warning", "First offensive message detected.")
 
     return field_updates, reply.strip()
-
 
 
 # === Create New Quote ===
@@ -767,6 +801,9 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
     record_id = res.json().get("id")
     logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
+
+    # Log to Airtable debug_log
+    log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote with session_id: {session_id}, quote_id: {quote_id}")
 
     # Append system log entry
     append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
@@ -841,7 +878,6 @@ def append_message_log(record_id: str, message: str, sender: str):
     Appends a new message to the 'message_log' field in Airtable.
     Truncates from the start if the log exceeds MAX_LOG_LENGTH.
     """
-
     from time import sleep
 
     if not record_id:
@@ -879,20 +915,74 @@ def append_message_log(record_id: str, message: str, sender: str):
     combined_log = f"{old_log}\n{new_entry}" if old_log else new_entry
 
     # === Enforce Length Limit ===
+    was_truncated = False
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
+        was_truncated = True
 
     logger.info(f"📚 Appending to message log for record {record_id}")
     logger.debug(f"📝 New message_log length: {len(combined_log)} characters")
 
     update_quote_record(record_id, {"message_log": combined_log})
 
+    # === Debug Log Event ===
+    try:
+        detail_msg = f"{sender_clean} message logged ({len(message)} chars)"
+        if was_truncated:
+            detail_msg += " | ⚠️ Truncated message_log due to size"
+        log_debug_event(record_id, "BACKEND", "Message Appended", detail_msg)
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to log debug event from append_message_log: {e}")
+
+# === Log Debugs At Airtable ===
+
+def log_debug_event(record_id: str, source: str, event: str, details: str):
+    """
+    Appends a structured debug event to the 'debug_log' field in Airtable.
+
+    Args:
+        record_id (str): Airtable record ID for the quote.
+        source (str): Source of the log (e.g., BACKEND, FRONTEND, GPT, AIRTABLE).
+        event (str): Short label for the event (e.g., 'Quote Calculated', 'Init Triggered').
+        details (str): Descriptive information about the event.
+    """
+    from app.constants import AIRTABLE_URL, AIRTABLE_HEADERS
+    from datetime import datetime
+
+    try:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        new_log_entry = f"[{timestamp}] {source} → {event}: {details}"
+
+        # Fetch existing debug_log (if it exists)
+        url = f"{AIRTABLE_URL}/{record_id}"
+        response = requests.get(url, headers=AIRTABLE_HEADERS)
+        response.raise_for_status()
+        current_log = response.json().get("fields", {}).get("debug_log", "")
+
+        # Append and truncate if over limit
+        combined_log = f"{current_log}\n{new_log_entry}".strip()
+        if len(combined_log) > 90000:
+            combined_log = combined_log[-90000:]  # Truncate oldest part
+
+        # Update debug_log in Airtable
+        data = {
+            "fields": {
+                "debug_log": combined_log
+            }
+        }
+        patch = requests.patch(url, headers=AIRTABLE_HEADERS, json=data)
+        patch.raise_for_status()
+
+    except Exception as e:
+        logging.warning(f"⚠️ Failed to log debug event: {e}")
+
+
+
 
 # === Brendan Filter Response Route ===
 
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
-import re
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -905,17 +995,22 @@ async def filter_response_entry(request: Request):
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
         if message.lower() == "__init__":
+            log_debug_event(None, "BACKEND", "Init Triggered", "User opened chat and triggered __init__.")
+
             existing = get_quote_by_session(session_id)
             if existing:
                 quote_id, record_id, stage, fields = existing
+                log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Session: {session_id}")
             else:
                 quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
                 session_id = fields.get("session_id", session_id)
+                log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote created with session_id: {session_id}")
 
             reply = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
+            log_debug_event(record_id, "BACKEND", "Greeting Sent", reply)
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
         quote_id, record_id, stage, fields = get_quote_by_session(session_id)
@@ -927,6 +1022,7 @@ async def filter_response_entry(request: Request):
 
         if stage == "Chat Banned":
             reply = "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote."
+            log_debug_event(record_id, "BACKEND", "Blocked Message", "User is banned.")
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
@@ -934,8 +1030,10 @@ async def filter_response_entry(request: Request):
                 update_quote_record(record_id, {"privacy_acknowledged": True})
                 fields = get_quote_by_session(session_id)[3]
                 reply = "Great! Could you please provide your name, email, phone number, and (optional) property address so I can send the PDF quote?"
+                log_debug_event(record_id, "BACKEND", "Privacy Acknowledged", "User accepted privacy policy.")
             else:
                 reply = "No problem — we only need your name, email, phone number (and optional property address) to send the quote. Let me know if you'd like to continue or if you have any questions about our privacy policy."
+                log_debug_event(record_id, "BACKEND", "Privacy Denied", "User has not yet accepted privacy policy.")
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
@@ -949,6 +1047,7 @@ async def filter_response_entry(request: Request):
                     reply = "That email doesn’t look right — could you double check and send it again?"
                     append_message_log(record_id, message, "user")
                     append_message_log(record_id, reply, "brendan")
+                    log_debug_event(record_id, "BACKEND", "Email Validation Failed", f"Input: {customer_email}")
                     return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
                 update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
@@ -959,19 +1058,27 @@ async def filter_response_entry(request: Request):
                     send_quote_email(to_email=customer_email, customer_name=fields.get("customer_name"), pdf_path=pdf_path, quote_id=quote_id)
                     update_quote_record(record_id, {"pdf_link": pdf_path})
                     reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
+                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"Quote emailed to {customer_email}")
                 except Exception as e:
                     logger.exception(f"❌ PDF Generation/Email Sending Failed: {e}")
                     reply = "Sorry — I ran into an issue while generating your PDF quote. Please call our office on 1300 918 388 and we’ll sort it out for you."
+                    log_debug_event(record_id, "BACKEND", "PDF Error", str(e))
 
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
                 return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
         log = fields.get("message_log", "")
-        log = (PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]) if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords) else log[-LOG_TRUNCATE_LENGTH:]
+        if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords):
+            log = PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]
+        else:
+            log = log[-LOG_TRUNCATE_LENGTH:]
 
         append_message_log(record_id, message, "user")
+        log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log to extract properties.")
+
         field_updates, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
+
         merged_fields = fields.copy()
         merged_fields.update(field_updates)
 
@@ -981,8 +1088,10 @@ async def filter_response_entry(request: Request):
                 field_updates.update(quote_obj.model_dump())
                 summary = get_inline_quote_summary(quote_obj.model_dump())
                 reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
+                log_debug_event(record_id, "BACKEND", "Quote Calculated", f"Total: ${field_updates.get('total_price')}, Time: {field_updates.get('estimated_time_mins')} mins")
             except Exception as e:
                 logger.warning(f"⚠️ Quote calculation failed: {e}")
+                log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
 
         update_quote_record(record_id, field_updates)
         append_message_log(record_id, reply, "brendan")
@@ -998,4 +1107,5 @@ async def filter_response_entry(request: Request):
 
     except Exception as e:
         logger.exception("❌ Error in /filter-response route")
+        log_debug_event(None, "BACKEND", "Route Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
