@@ -1,34 +1,41 @@
-import logging
+# === Imports ===
 import os
+import logging
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-# === Load environment variables ===
-load_dotenv()
+from openai import OpenAI
 
-# === Load API Keys ===
+# === Brendan App Services ===
+from app.api.quote import router as quote_router
+from app.api.filter_response import router as filter_response_router
+from app.store_customer import router as store_customer_router
+from app import auto_fixer  # ✅ Auto-fix commit system
+from app.services.pdf_generator import generate_quote_pdf
+
+# === Load Environment ===
+load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
 airtable_key = os.getenv("AIRTABLE_API_KEY")
 airtable_base = os.getenv("AIRTABLE_BASE_ID")
 
-# === Debug key loading ===
+# === Log Key Load Status ===
 if api_key:
     print(f"✅ Loaded OpenAI Key: {api_key[:10]}...{api_key[-5:]}")
 else:
     print("❌ ERROR: OPENAI_API_KEY not loaded!")
 
 if airtable_key and airtable_base:
-    print(f"✅ Airtable Key and Base ID loaded successfully.")
+    print("✅ Airtable Key and Base ID loaded successfully.")
 else:
     print("❌ ERROR: Airtable credentials not loaded! Check .env.")
 
-# === Initialize OpenAI Client ===
-from openai import OpenAI
+# === OpenAI Client ===
 client = OpenAI(api_key=api_key)
 
-# === FastAPI App Init ===
+# === FastAPI App ===
 app = FastAPI(
     title="Brendan API",
     description="Backend for Orca Cleaning's AI Quote Assistant - Brendan",
@@ -44,19 +51,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Import Routers ===
-from app.api.quote import router as quote_router
-from app.api.filter_response import router as filter_response_router
-from app.brendan_chat import router as brendan_chat_router
-from app.store_customer import router as store_customer_router
-from app import auto_fixer  # ✅ Add AI Auto-Fix Commit System
-
 # === Register Routes ===
 app.include_router(filter_response_router)
 app.include_router(quote_router)
 app.include_router(store_customer_router)
-app.include_router(brendan_chat_router)
-app.include_router(auto_fixer.router)  # ✅ Route for /auto-fix-code
+app.include_router(auto_fixer.router)
 
 # === Root Welcome Endpoint ===
 @app.get("/")
@@ -66,13 +65,12 @@ def read_root():
         media_type="application/json; charset=utf-8"
     )
 
-# === Health Check Endpoint ===
+# === Health Check ===
 @app.get("/ping")
 def ping():
     return {"ping": "pong"}
 
-# === Local PDF Test Generator (Optional) ===
-from app.services.pdf_generator import generate_quote_pdf
+# === Test PDF Function (Local Only) ===
 def get_test_pdf_data():
     return {
         "quote_id": "VAC-LOGOTEST01",
@@ -116,7 +114,7 @@ def get_test_pdf_data():
         "logo_base64": open("app/static/orca_logo.b64.txt", "r").read(),
     }
 
-# === Run Locally ===
+# === Run App Locally ===
 if __name__ == "__main__":
     import uvicorn
     logging.basicConfig(encoding="utf-8")
