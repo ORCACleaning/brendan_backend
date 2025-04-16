@@ -24,7 +24,7 @@ from app.services.pdf_generator import generate_quote_pdf
 from app.services.quote_id_utils import get_next_quote_id
 from app.services.quote_logic import calculate_quote
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
-from app.utils.logging_utils import log_debug_event, append_message_log
+from app.utils.logging_utils import log_debug_event
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
@@ -867,55 +867,6 @@ def append_message_log(record_id: str, message: str, sender: str):
 AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
 AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
 QUOTE_TABLE_NAME = "Vacate Quotes"  # The name of your existing table
-
-def log_debug_event(record_id: str, source: str, message: str, raw_data: str = ""):
-    """
-    Logs a debug event to the existing Vacate Quotes table in Airtable under the `debug_log` field.
-    """
-
-    url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{QUOTE_TABLE_NAME}/{record_id}"
-    headers = {
-        "Authorization": f"Bearer {AIRTABLE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    # Prepare the log data to be sent to Airtable
-    log_entry = f"[{source}] {message}\nRaw Data: {raw_data}\n"
-
-    # Fetch the current debug log for this record
-    try:
-        res = requests.get(url, headers=headers)
-        res.raise_for_status()
-        record = res.json()
-        existing_log = record.get("fields", {}).get("debug_log", "")
-        combined_log = f"{existing_log}\n{log_entry}" if existing_log else log_entry
-    except Exception as e:
-        logger.error(f"❌ Failed to fetch existing debug log for record {record_id}: {e}")
-        combined_log = log_entry
-
-    # Update the `debug_log` field with the new log entry
-    update_data = {
-        "fields": {
-            "debug_log": combined_log
-        }
-    }
-
-    try:
-        res = requests.patch(url, headers=headers, json=update_data)
-        if res.ok:
-            logger.info(f"✅ Log sent to Airtable for record {record_id}: {message}")
-        else:
-            logger.error(f"❌ Failed to send log to Airtable for record {record_id}: {res.text}")
-            try:
-                log_debug_event(record_id, "BACKEND", "Failed to send log", f"Airtable response: {res.text}")
-            except Exception as inner_e:
-                logger.error(f"❌ Failed to log error after failed log send: {inner_e}")
-    except Exception as e:
-        logger.error(f"❌ Error sending log to Airtable: {e}")
-        try:
-            log_debug_event(record_id, "BACKEND", "Error sending log", str(e))
-        except Exception as inner_e:
-            logger.error(f"❌ Failed to log error during log send failure: {inner_e}")
 
 
 # === Brendan Filter Response Route ===
