@@ -1,24 +1,16 @@
 # === logging_utils.py ===
 
-import os
-import logging
 import requests
-from app.config import logger
-from app.constants import TABLE_NAME
-from app.settings import settings
+from app.config import logger, settings
 
-AIRTABLE_URL = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
-HEADERS = {
-    "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
-    "Content-Type": "application/json"
-}
+TABLE_NAME = "Vacate Quotes"  # ✅ No external import
+AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
+AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
 
 
 def log_debug_event(record_id: str, source: str, stage: str, message: str):
     """
-    Central debug logging function.
-    Writes trace logs into the message_log field in Airtable.
-    Appends the log entry to existing log via PATCH.
+    Central logging handler that appends trace logs to the Airtable message_log field.
     """
     if not record_id:
         return
@@ -27,23 +19,29 @@ def log_debug_event(record_id: str, source: str, stage: str, message: str):
         log_line = f"{source}: {stage} – {message}"
         logger.info(f"📄 {log_line}")
 
-        # Retrieve existing log (GET)
-        get_url = f"{AIRTABLE_URL}/{record_id}"
-        res = requests.get(get_url, headers=HEADERS)
-        res.raise_for_status()
+        url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+        headers = {
+            "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+            "Content-Type": "application/json"
+        }
 
-        existing_log = res.json().get("fields", {}).get("message_log", "")
-        updated_log = (existing_log + "\n" + log_line).strip()
+        # Fetch current message_log
+        current_log = ""
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            fields = res.json().get("fields", {})
+            current_log = fields.get("message_log", "")
 
-        # Update with appended log
-        update_url = f"{AIRTABLE_URL}/{record_id}"
-        update_payload = {
+        new_log = (current_log + "\n" + log_line).strip()
+
+        payload = {
             "fields": {
-                "message_log": updated_log
+                "message_log": new_log
             }
         }
-        update_res = requests.patch(update_url, headers=HEADERS, json=update_payload)
-        update_res.raise_for_status()
+
+        res = requests.patch(url, headers=headers, json=payload)
+        res.raise_for_status()
 
     except Exception as e:
-        logger.warning(f"⚠️ Failed to log debug event: {e}")
+        logger.warning(f"⚠️ Failed to log event: {e}")
