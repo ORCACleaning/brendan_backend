@@ -25,8 +25,9 @@ airtable_base = os.getenv("AIRTABLE_BASE_ID")
 
 # === Debug key loading ===
 if api_key:
-    print(f"✅ Loaded OpenAI Key: {api_key[:10]}...{api_key[-5:]}")
-    log_debug_event(None, "LOCAL", "OpenAI Key Loaded", f"{api_key[:10]}...{api_key[-5:]}")
+    print("✅ Loaded OpenAI Key.")
+    log_debug_event(None, "LOCAL", "OpenAI Key Loaded", "API key loaded successfully.")
+    
 else:
     print("❌ ERROR: OPENAI_API_KEY not loaded!")
     log_debug_event(None, "LOCAL", "OpenAI Key Error", "OPENAI_API_KEY not found in .env")
