@@ -1,41 +1,42 @@
 # === Imports ===
-import os
 import logging
+import os
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from openai import OpenAI
+# === Brendan Debug Logger ===
+from app.utils.logging_utils import log_debug_event
 
-# === Brendan App Services ===
-from app.api.quote import router as quote_router
-from app.api.filter_response import router as filter_response_router
-from app.store_customer import router as store_customer_router
-from app import auto_fixer  # ✅ Auto-fix commit system
-from app.services.pdf_generator import generate_quote_pdf
-
-# === Load Environment ===
+# === Load environment variables ===
 load_dotenv()
+
+# === Load API Keys ===
 api_key = os.getenv("OPENAI_API_KEY")
 airtable_key = os.getenv("AIRTABLE_API_KEY")
 airtable_base = os.getenv("AIRTABLE_BASE_ID")
 
-# === Log Key Load Status ===
+# === Debug key loading ===
 if api_key:
     print(f"✅ Loaded OpenAI Key: {api_key[:10]}...{api_key[-5:]}")
+    log_debug_event(None, "LOCAL", "OpenAI Key Loaded", f"{api_key[:10]}...{api_key[-5:]}")
 else:
     print("❌ ERROR: OPENAI_API_KEY not loaded!")
+    log_debug_event(None, "LOCAL", "OpenAI Key Error", "OPENAI_API_KEY not found in .env")
 
 if airtable_key and airtable_base:
     print("✅ Airtable Key and Base ID loaded successfully.")
+    log_debug_event(None, "LOCAL", "Airtable Credentials Loaded", "API Key and Base ID present")
 else:
     print("❌ ERROR: Airtable credentials not loaded! Check .env.")
+    log_debug_event(None, "LOCAL", "Airtable Credentials Error", "Missing airtable_key or base")
 
-# === OpenAI Client ===
+# === Initialize OpenAI Client ===
+from openai import OpenAI
 client = OpenAI(api_key=api_key)
 
-# === FastAPI App ===
+# === FastAPI App Init ===
 app = FastAPI(
     title="Brendan API",
     description="Backend for Orca Cleaning's AI Quote Assistant - Brendan",
@@ -51,11 +52,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# === Import Routers ===
+from app.api.quote import router as quote_router
+from app.api.filter_response import router as filter_response_router
+from app.brendan_chat import router as brendan_chat_router
+from app.store_customer import router as store_customer_router
+from app import auto_fixer  # ✅ Add AI Auto-Fix Commit System
+
 # === Register Routes ===
 app.include_router(filter_response_router)
 app.include_router(quote_router)
 app.include_router(store_customer_router)
-app.include_router(auto_fixer.router)
+app.include_router(brendan_chat_router)
+app.include_router(auto_fixer.router)  # ✅ Route for /auto-fix-code
 
 # === Root Welcome Endpoint ===
 @app.get("/")
@@ -65,12 +74,13 @@ def read_root():
         media_type="application/json; charset=utf-8"
     )
 
-# === Health Check ===
+# === Health Check Endpoint ===
 @app.get("/ping")
 def ping():
     return {"ping": "pong"}
 
-# === Test PDF Function (Local Only) ===
+# === Local PDF Test Generator (Optional) ===
+from app.services.pdf_generator import generate_quote_pdf
 def get_test_pdf_data():
     return {
         "quote_id": "VAC-LOGOTEST01",
@@ -114,16 +124,19 @@ def get_test_pdf_data():
         "logo_base64": open("app/static/orca_logo.b64.txt", "r").read(),
     }
 
-# === Run App Locally ===
+# === Run Locally ===
 if __name__ == "__main__":
     import uvicorn
     logging.basicConfig(encoding="utf-8")
 
     try:
+        log_debug_event(None, "LOCAL", "Test Mode", "Attempting PDF generation")
         data = get_test_pdf_data()
         output_path = generate_quote_pdf(data)
         print(f"✅ PDF generated at: {output_path}")
+        log_debug_event(None, "LOCAL", "PDF Generation Successful", output_path)
     except Exception as e:
         print(f"❌ Failed to generate PDF: {e}")
+        log_debug_event(None, "LOCAL", "PDF Generation Failed", str(e))
 
     uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True, log_config=None, access_log=False)
