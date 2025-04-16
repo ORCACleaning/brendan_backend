@@ -117,7 +117,7 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
         record_id = quote_id  # Use quote_id as record_id
         from app.api.filter_response import log_debug_event  # Lazy import to avoid circular import
         log_debug_event(record_id, "BACKEND", "Email Sending", f"Sending quote email to {to_email}")
-    except Exception as e:
+    except Exception:
         pass  # Do not block if logging fails
 
     res = requests.post(url, json=payload, headers=headers)
@@ -125,11 +125,11 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
         print(f"✅ Quote email sent to {to_email}")
         try:
             log_debug_event(record_id, "BACKEND", "Email Sent", f"Quote email successfully sent to {to_email}")
-        except:
+        except Exception:
             pass
     else:
         print(f"❌ Failed to send quote email ({res.status_code}): {res.text}")
         try:
             log_debug_event(record_id, "BACKEND", "Email Send Failed", f"{res.status_code}: {res.text}")
-        except:
+        except Exception:
             pass
