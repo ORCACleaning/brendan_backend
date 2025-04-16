@@ -251,48 +251,40 @@ def get_quote_by_session(session_id: str):
     }
 
     logger.info(f"🔍 Searching for quote by session_id: {session_id}")
-
-    # Log the session lookup attempt
-    log_debug_event(None, "BACKEND", "Session Lookup Attempt", f"Attempting to fetch quote for session_id: {session_id}")
+    log_debug_event(None, "BACKEND", "Session Lookup Attempt", f"Initiating lookup for session_id: {session_id}")
 
     for attempt in range(3):
         try:
+            log_debug_event(None, "BACKEND", "Airtable Request Sent", f"Attempt {attempt + 1}: Sending GET to Airtable with session_id filter")
             res = requests.get(url, headers=headers, params=params)
             res.raise_for_status()
             data = res.json()
+            log_debug_event(None, "BACKEND", "Airtable Response Received", f"Attempt {attempt + 1}: Successfully received response from Airtable")
             break
         except Exception as e:
             logger.warning(f"⚠️ Airtable fetch failed (attempt {attempt + 1}/3): {e}")
-            log_debug_event(None, "BACKEND", "Session Lookup Failed", f"Attempt {attempt + 1} failed with error: {e}")
+            log_debug_event(None, "BACKEND", "Session Lookup Failed", f"Airtable attempt {attempt + 1} failed: {str(e)}")
             if attempt == 2:
-                logger.error(f"❌ Failed to fetch quote for session_id {session_id} after 3 attempts.")
-                log_debug_event(None, "BACKEND", "Session Lookup Final Failure", f"Failed to fetch quote after 3 attempts: {e}")
+                logger.error(f"❌ Final failure fetching quote for session_id {session_id} after 3 attempts.")
+                log_debug_event(None, "BACKEND", "Session Lookup Final Failure", f"Failed after 3 attempts: {str(e)}")
                 return None
             sleep(1)
 
     records = data.get("records", [])
     if not records:
         logger.info(f"⏳ No existing quote found for session_id: {session_id}")
-        log_debug_event(None, "BACKEND", "No Quote Found", f"No quote found for session_id: {session_id}")
+        log_debug_event(None, "BACKEND", "No Quote Found", f"No record found in Airtable for session_id: {session_id}")
         return None
 
     record = records[0]
     fields = record.get("fields", {})
-
     quote_id = fields.get("quote_id", "N/A")
     record_id = record.get("id", "")
     quote_stage = fields.get("quote_stage", "Gathering Info")
     session_id_return = fields.get("session_id", session_id)
 
-    logger.info(
-        f"✅ Found quote | session_id: {session_id_return} | quote_id: {quote_id} | stage: {quote_stage}"
-    )
-
-    # ✅ Log the found session and quote details
-    try:
-        log_debug_event(record_id, "BACKEND", "Session Lookup Success", f"Quote found for session_id: {session_id_return}, quote_id: {quote_id}, stage: {quote_stage}")
-    except Exception as e:
-        logger.warning(f"⚠️ Failed to log debug event for session lookup: {e}")
+    logger.info(f"✅ Found quote | session_id: {session_id_return} | quote_id: {quote_id} | stage: {quote_stage}")
+    log_debug_event(record_id, "BACKEND", "Session Lookup Success", f"Retrieved quote_id: {quote_id}, stage: {quote_stage}, session_id: {session_id_return}")
 
     return quote_id, record_id, quote_stage, fields
 
@@ -655,29 +647,30 @@ def create_new_quote(session_id: str, force_new: bool = False):
     Creates a new quote record in Airtable.
     Returns: (quote_id, record_id, quote_stage, fields)
     """
-    
     logger.info(f"🚨 Checking for existing session: {session_id}")
     log_debug_event(None, "BACKEND", "Quote Creation Initiated", f"Checking for existing quote with session_id: {session_id}")
 
-    # Check for existing quote unless forced new
+    # === STEP 1: Check for existing quote ===
     if not force_new:
+        log_debug_event(None, "BACKEND", "Session Lookup", f"Attempting to retrieve quote for session_id: {session_id}")
         existing = get_quote_by_session(session_id)
         if existing:
             logger.warning("⚠️ Duplicate session detected. Returning existing quote.")
             log_debug_event(None, "BACKEND", "Duplicate Session", f"Returning existing quote for session_id: {session_id}")
             return existing
 
-    # Force new session_id if requested
+    # === STEP 2: Handle force-new ===
     if force_new:
         logger.info("🔁 Force creating new quote despite duplicate session ID.")
         session_id = f"{session_id}-new-{str(uuid.uuid4())[:6]}"
         log_debug_event(None, "BACKEND", "Force New Quote", f"Session ID forced to be unique: {session_id}")
 
-    # Generate new quote_id
+    # === STEP 3: Generate Quote ID ===
     quote_id = get_next_quote_id()
     logger.info(f"🔑 Generated new quote_id: {quote_id}")
-    log_debug_event(None, "BACKEND", "New Quote ID", f"New quote ID generated: {quote_id}")
+    log_debug_event(None, "BACKEND", "New Quote ID", f"Generated new quote ID: {quote_id}")
 
+    # === STEP 4: Prepare Airtable Payload ===
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
@@ -695,16 +688,20 @@ def create_new_quote(session_id: str, force_new: bool = False):
         }
     }
 
+    log_debug_event(None, "BACKEND", "Airtable Request", f"Sending POST to Airtable with session_id: {session_id}, quote_id: {quote_id}")
+
+    # === STEP 5: Create Record in Airtable ===
     try:
         res = requests.post(url, headers=headers, json=data)
         res.raise_for_status()
 
         record_id = res.json().get("id")
         logger.info(f"✅ Created new quote record: {record_id} with ID {quote_id}")
-        log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote record created with session_id: {session_id}, quote_id: {quote_id}")
+        log_debug_event(record_id, "BACKEND", "Quote Created", f"New Airtable record created. session_id: {session_id}, quote_id: {quote_id}")
 
-        # Append system log entry
+        # === STEP 6: Add System Log Message ===
         append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
+        log_debug_event(record_id, "BACKEND", "System Log Appended", "Added SYSTEM_TRIGGER message to message_log.")
 
         return quote_id, record_id, "Gathering Info", {
             "quote_stage": "Gathering Info",
@@ -716,7 +713,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
     except requests.RequestException as e:
         logger.error(f"❌ FAILED to create quote: {e}")
-        log_debug_event(None, "BACKEND", "Quote Creation Failed", f"Error creating quote: {str(e)}")
+        log_debug_event(None, "BACKEND", "Quote Creation Failed", f"Error creating Airtable record: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to create Airtable record.")
 
 # === GPT Error Email Alert ===
@@ -885,13 +882,12 @@ async def log_debug(request: Request):
         message = body.get("message", "")
         source = body.get("source", "frontend")
 
-        # If session_id and message are available, log the event
         if session_id and message:
             log_debug_event(session_id, source, "Frontend Log", message)
 
-        return JSONResponse(content={"status": "success"})  # Return success response
+        return JSONResponse(content={"status": "success"})
     except Exception as e:
-        logger.error(f"❌ Error logging frontend debug message: {e}")
+        logging.error(f"❌ Error logging frontend debug message: {e}")
         return JSONResponse(content={"status": "error"}, status_code=500)
 
 
@@ -902,11 +898,12 @@ async def filter_response_entry(request: Request):
         message = str(body.get("message", "")).strip()
         session_id = str(body.get("session_id", "")).strip()
 
+        log_debug_event(None, "BACKEND", "Incoming Message", f"Session: {session_id}, Message: {message}")
+
         if not session_id:
             log_debug_event(None, "BACKEND", "Missing Session ID", "Session ID is required but not provided.")
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # Log the start of the session initiation
         if message.lower() == "__init__":
             log_debug_event(None, "BACKEND", "Init Triggered", "User opened chat and triggered __init__.")
 
@@ -919,17 +916,13 @@ async def filter_response_entry(request: Request):
                 session_id = fields.get("session_id", session_id)
                 log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote created with session_id: {session_id}")
 
-            # Send greeting and update log
             reply = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
-
-            # Debugging info about message and session
             log_debug_event(record_id, "BACKEND", "Greeting Sent", reply)
 
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # Fetch existing quote data
         quote_id, record_id, stage, fields = get_quote_by_session(session_id)
         if not record_id:
             log_debug_event(None, "BACKEND", "Quote Not Found", f"No quote found for session: {session_id}")
@@ -938,13 +931,11 @@ async def filter_response_entry(request: Request):
         message_lower = message.lower()
         pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "email quote", "pdf quote"]
 
-        # Blocked Chat Handling
         if stage == "Chat Banned":
             reply = "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote."
             log_debug_event(record_id, "BACKEND", "Blocked Message", "User is banned.")
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # Privacy Acknowledgement Flow
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
             if message_lower in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
                 update_quote_record(record_id, {"privacy_acknowledged": True})
@@ -960,7 +951,6 @@ async def filter_response_entry(request: Request):
 
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # Handle Personal Info Received Stage
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
                 customer_email = str(fields.get("customer_email", "")).strip()
@@ -981,7 +971,7 @@ async def filter_response_entry(request: Request):
                     reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
                     log_debug_event(record_id, "BACKEND", "PDF Sent", f"Quote emailed to {customer_email}")
                 except Exception as e:
-                    logger.exception(f"❌ PDF Generation/Email Sending Failed: {e}")
+                    logging.exception(f"❌ PDF Generation/Email Sending Failed: {e}")
                     reply = "Sorry — I ran into an issue while generating your PDF quote. Please call our office on 1300 918 388 and we’ll sort it out for you."
                     log_debug_event(record_id, "BACKEND", "PDF Error", str(e))
 
@@ -989,7 +979,6 @@ async def filter_response_entry(request: Request):
                 append_message_log(record_id, reply, "brendan")
                 return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # Handle Quote Calculated Stage
         log = fields.get("message_log", "")
         if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords):
             log = PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]
@@ -1000,7 +989,6 @@ async def filter_response_entry(request: Request):
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log to extract properties.")
 
         field_updates, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
-
         merged_fields = fields.copy()
         merged_fields.update(field_updates)
 
@@ -1012,12 +1000,11 @@ async def filter_response_entry(request: Request):
                 reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
                 log_debug_event(record_id, "BACKEND", "Quote Calculated", f"Total: ${field_updates.get('total_price')}, Time: {field_updates.get('estimated_time_mins')} mins")
             except Exception as e:
-                logger.warning(f"⚠️ Quote calculation failed: {e}")
+                logging.warning(f"⚠️ Quote calculation failed: {e}")
                 log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
 
         update_quote_record(record_id, field_updates)
         append_message_log(record_id, reply, "brendan")
-
         next_actions = generate_next_actions() if field_updates.get("quote_stage") == "Quote Calculated" else []
 
         return JSONResponse(content={
@@ -1028,6 +1015,6 @@ async def filter_response_entry(request: Request):
         })
 
     except Exception as e:
-        logger.exception("❌ Error in /filter-response route")
+        logging.exception("❌ Error in /filter-response route")
         log_debug_event(None, "BACKEND", "Route Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
