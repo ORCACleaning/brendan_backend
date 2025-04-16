@@ -44,9 +44,6 @@ Your only task is to politely collect their name, email, and phone number so Bre
 Once you collect those details, wait for confirmation or further instructions.
 """
 
-# === FastAPI Router ===
-router = APIRouter()
-
 # === OpenAI Client Setup ===
 client = openai.OpenAI()  # Required for openai>=1.0.0 SDK
 
