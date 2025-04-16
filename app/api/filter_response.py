@@ -1041,11 +1041,14 @@ async def filter_response_entry(request: Request):
                 session_id = fields.get("session_id", session_id)
                 log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote created with session_id: {session_id}")
 
+            # Send greeting and update log
             reply = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
 
+            # Debugging info about message and session
             log_debug_event(record_id, "BACKEND", "Greeting Sent", reply)
+
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
         # Fetch existing quote data
