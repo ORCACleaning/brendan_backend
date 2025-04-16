@@ -781,7 +781,7 @@ def append_message_log(record_id: str, message: str, sender: str):
     Appends a new message to the 'message_log' field in Airtable.
     Truncates from the start if the log exceeds MAX_LOG_LENGTH.
     """
-  
+
     if not record_id:
         logger.error("❌ Cannot append message log — missing record ID")
         try:
@@ -796,7 +796,12 @@ def append_message_log(record_id: str, message: str, sender: str):
         return
 
     sender_clean = str(sender or "user").strip().upper()
-    new_entry = f"{sender_clean}: {message}"
+
+    # === Fix 5: Handle special __init__ case ===
+    if sender_clean == "USER" and message.lower() == "__init__":
+        new_entry = "SYSTEM_TRIGGER: Brendan started a new quote"
+    else:
+        new_entry = f"{sender_clean}: {message}"
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
@@ -846,6 +851,8 @@ def append_message_log(record_id: str, message: str, sender: str):
     # === Debug Log Event ===
     try:
         detail_msg = f"{sender_clean} message logged ({len(message)} chars)"
+        if sender_clean == "USER" and message.lower() == "__init__":
+            detail_msg = "SYSTEM_TRIGGER: Brendan started a new quote"
         if was_truncated:
             detail_msg += " | ⚠️ Truncated message_log due to size"
         log_debug_event(record_id, "BACKEND", "Message Appended", detail_msg)
@@ -855,13 +862,6 @@ def append_message_log(record_id: str, message: str, sender: str):
             log_debug_event(record_id, "BACKEND", "Debug Log Event Failed", f"Error logging debug event: {e}")
         except Exception as log_e:
             logger.error(f"❌ Error logging debug event failure: {log_e}")
-
-# === Log Debugs At Airtable ===
-# Airtable Settings
-AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
-AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
-QUOTE_TABLE_NAME = "Vacate Quotes"  # The name of your existing table
-
 
 # === Brendan Filter Response Route ===
 
