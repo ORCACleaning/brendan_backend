@@ -21,7 +21,8 @@ def generate_quote_pdf(data: dict) -> (str, str):
 
     logger.info(f"📄 Generating PDF Quote: {output_path}")
     if record_id := data.get("record_id"):
-        from app.api.filter_response import log_debug_event  # Move import here to avoid circular import
+        # Move import here to avoid circular import
+        from app.api.filter_response import log_debug_event
         log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
 
     # === Load Logo Base64 ===
