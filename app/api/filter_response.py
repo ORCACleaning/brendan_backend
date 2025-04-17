@@ -27,7 +27,6 @@ from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS
 from app.utils.logging_utils import log_debug_event
 from app.services.quote_id_utils import get_next_quote_id
 from urllib.parse import quote  # ✅ Ensure this import is at the top of your file
-from urllib.parse import quote  # ✅ Required for Airtable-safe table names
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
@@ -240,12 +239,10 @@ def create_new_quote(session_id: str, force_new: bool = False):
     Returns: (quote_id, record_id, "Gathering Info", fields)
     """
     quote_id = get_next_quote_id()
-    timestamp = datetime.now(pytz.timezone("Australia/Perth")).isoformat()
 
     fields = {
         "session_id": session_id,
         "quote_id": quote_id,
-        "timestamp": timestamp,
         "quote_stage": "Gathering Info",
         "privacy_acknowledged": False,
         "source": "Brendan"
@@ -285,8 +282,6 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
 
 # === Get Quote by Session ID ===
-
-from urllib.parse import quote  # ✅ Ensure this is imported at the top of your file
 
 def get_quote_by_session(session_id: str):
     """
