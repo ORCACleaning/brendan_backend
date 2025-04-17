@@ -341,8 +341,6 @@ def get_quote_by_session(session_id: str):
 
 # === Update Quote Record ===
 
-from urllib.parse import quote  # ✅ Add this at top if not already
-
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
