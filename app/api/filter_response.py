@@ -26,6 +26,8 @@ from app.services.quote_logic import calculate_quote
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
 from app.utils.logging_utils import log_debug_event
 from app.services.quote_id_utils import get_next_quote_id
+from urllib.parse import quote  # ✅ Ensure this import is at the top of your file
+from urllib.parse import quote  # ✅ Required for Airtable-safe table names
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
@@ -231,6 +233,7 @@ ALWAYS return valid JSON exactly like this: { "properties": [ { "property": "fie
 ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
 
 # === Create New Quote ID ===
+
 def create_new_quote(session_id: str, force_new: bool = False):
     """
     Creates a new Airtable quote record for Brendan.
@@ -253,8 +256,11 @@ def create_new_quote(session_id: str, force_new: bool = False):
         "Content-Type": "application/json"
     }
 
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{quote(TABLE_NAME)}"
     payload = {"fields": fields}
+
+    # ✅ Log payload before sending to Airtable
+    logger.error(f"🚨 Payload before Airtable POST:\n{json.dumps(fields, indent=2)}")
 
     try:
         res = requests.post(url, headers=headers, json=payload)
@@ -266,20 +272,29 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"✅ New quote created | session_id: {session_id} | quote_id: {quote_id}")
         return quote_id, record_id, "Gathering Info", fields
 
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"Airtable 422 Error — Status Code: {res.status_code}, Response: {res.text}"
+        logger.error(f"❌ Failed to create new quote: {error_msg}")
+        log_debug_event(None, "BACKEND", "Quote Creation Failed", error_msg)
+        raise HTTPException(status_code=500, detail="Failed to create new quote.")
+
     except Exception as e:
-        logger.error(f"❌ Failed to create new quote: {e}")
-        log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
+        logger.error(f"❌ Exception during quote creation: {e}")
+        log_debug_event(None, "BACKEND", "Quote Creation Exception", str(e))
         raise HTTPException(status_code=500, detail="Failed to create new quote.")
 
 
 # === Get Quote by Session ID ===
+
+from urllib.parse import quote  # ✅ Ensure this is imported at the top of your file
 
 def get_quote_by_session(session_id: str):
     """
     Retrieves the latest quote record from Airtable using session_id.
     Returns: (quote_id, record_id, quote_stage, fields) or None.
     """
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    safe_table_name = quote(TABLE_NAME)
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
     }
@@ -328,11 +343,18 @@ def get_quote_by_session(session_id: str):
 
     return quote_id, record_id, quote_stage, fields
 
+
 # === Update Quote Record ===
 
+from urllib.parse import quote  # ✅ Add this at top if not already
+
 def update_quote_record(record_id: str, fields: dict):
-   
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+    """
+    Updates a record in Airtable with normalized fields.
+    Handles type conversion, validation, and fallbacks for partial updates.
+    """
+    safe_table_name = quote(TABLE_NAME)
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}/{record_id}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
@@ -413,11 +435,13 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
+    # Sanity filter before sending
     for key in list(normalized_fields.keys()):
         if key not in VALID_AIRTABLE_FIELDS:
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
             normalized_fields.pop(key, None)
 
+    # === Bulk Update Attempt ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
         if res.ok:
@@ -430,11 +454,11 @@ def update_quote_record(record_id: str, fields: dict):
             logger.error(f"🧾 Error response: {res.json()}")
         except Exception:
             logger.error("🧾 Error response: (Non-JSON)")
-
     except Exception as e:
         logger.error(f"❌ Exception during Airtable bulk update: {e}")
         log_debug_event(record_id, "BACKEND", "Airtable Update Error", str(e))
 
+    # === Fallback: One-by-One Update ===
     successful = []
     for key, value in normalized_fields.items():
         try:
@@ -876,6 +900,7 @@ async def log_debug(request: Request):
         return JSONResponse(content={"status": "error"}, status_code=500)
 
 
+# === filter-response Route ===
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -899,7 +924,7 @@ async def filter_response_entry(request: Request):
                     quote_id, record_id, stage, fields = existing
                     log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Session: {session_id}")
 
-                    # Force a new quote if existing one is too old or already used
+                    # Force a new quote if stage is already complete or timestamp missing
                     timestamp = fields.get("timestamp")
                     if stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not timestamp:
                         raise ValueError("Triggering new quote due to expired or complete quote")
@@ -929,6 +954,7 @@ async def filter_response_entry(request: Request):
         message_lower = message.lower()
         pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "email quote", "pdf quote"]
 
+        # === If user is banned ===
         if stage == "Chat Banned":
             reply = "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote."
             log_debug_event(record_id, "BACKEND", "Blocked Message", "User is banned.")
@@ -949,11 +975,11 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, reply, "brendan")
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Personal Info Received ===
+        # === Personal Info Received + Email Validation ===
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
                 customer_email = str(fields.get("customer_email", "")).strip()
-                if not re.match(r"[^@]+@[^@]+\\.[^@]+", customer_email):
+                if not re.match(r"[^@]+@[^@]+\.[^@]+", customer_email):
                     reply = "That email doesn’t look right — could you double check and send it again?"
                     append_message_log(record_id, message, "user")
                     append_message_log(record_id, reply, "brendan")
@@ -965,7 +991,12 @@ async def filter_response_entry(request: Request):
 
                 try:
                     pdf_path = generate_quote_pdf(fields)
-                    send_quote_email(to_email=customer_email, customer_name=fields.get("customer_name"), pdf_path=pdf_path, quote_id=quote_id)
+                    send_quote_email(
+                        to_email=customer_email,
+                        customer_name=fields.get("customer_name"),
+                        pdf_path=pdf_path,
+                        quote_id=quote_id
+                    )
                     update_quote_record(record_id, {"pdf_link": pdf_path})
                     reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
                     log_debug_event(record_id, "BACKEND", "PDF Sent", f"Quote emailed to {customer_email}")
@@ -1018,4 +1049,3 @@ async def filter_response_entry(request: Request):
         logging.exception("❌ Error in /filter-response route")
         log_debug_event(None, "BACKEND", "Route Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
-
