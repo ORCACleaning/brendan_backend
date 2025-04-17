@@ -855,8 +855,13 @@ async def filter_response_entry(request: Request):
                 try:
                     quote_id, record_id, stage, fields = existing
                     log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Session: {session_id}")
+
+                    # Force a new quote if existing one is too old or already used
+                    timestamp = fields.get("timestamp")
+                    if stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not timestamp:
+                        raise ValueError("Triggering new quote due to expired or complete quote")
                 except Exception as e:
-                    log_debug_event(None, "BACKEND", "Unpacking Error", f"Error unpacking existing quote: {str(e)}")
+                    log_debug_event(None, "BACKEND", "Forced New Quote", f"Reason: {str(e)}")
                     existing = None
 
             if not existing:
@@ -970,3 +975,4 @@ async def filter_response_entry(request: Request):
         logging.exception("❌ Error in /filter-response route")
         log_debug_event(None, "BACKEND", "Route Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
+
