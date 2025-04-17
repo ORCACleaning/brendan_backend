@@ -875,19 +875,21 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 # === Brendan Filter Response Route ===
 
+# === Brendan API Router ===
 router = APIRouter()
 
-# === log-debug Route ===
+# === /log-debug Route ===
 @router.post("/log-debug")
 async def log_debug(request: Request):
     try:
         body = await request.json()
-        session_id = body.get("session_id", "")
-        message = body.get("message", "")
-        source = body.get("source", "frontend")
+        session_id = str(body.get("session_id", "")).strip()
+        message = str(body.get("message", "")).strip()
+        source = str(body.get("source", "frontend")).strip()
 
         if session_id and message:
-            log_debug_event(session_id, source, "Frontend Log", message)
+            formatted = f"(Session ID: {session_id}) {message}"
+            log_debug_event(None, source.upper(), "Frontend Log", formatted)
 
         return JSONResponse(content={"status": "success"})
     except Exception as e:
@@ -895,7 +897,7 @@ async def log_debug(request: Request):
         return JSONResponse(content={"status": "error"}, status_code=500)
 
 
-# === filter-response Route ===
+# === /filter-response Route ===
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -919,7 +921,6 @@ async def filter_response_entry(request: Request):
                     quote_id, record_id, stage, fields = existing
                     log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Session: {session_id}")
 
-                    # Force a new quote if stage is already complete or timestamp missing
                     timestamp = fields.get("timestamp")
                     if stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not timestamp:
                         raise ValueError("Triggering new quote due to expired or complete quote")
