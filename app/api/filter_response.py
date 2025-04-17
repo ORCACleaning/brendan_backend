@@ -346,7 +346,8 @@ from urllib.parse import quote  # ✅ Add this at top if not already
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
-    Handles type conversion, validation, and fallbacks for partial updates.
+    Always includes message_log and debug_log even if unchanged.
+    Handles type conversion, validation, and fallback logic.
     """
     safe_table_name = quote(TABLE_NAME)
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}/{record_id}"
@@ -422,6 +423,11 @@ def update_quote_record(record_id: str, fields: dict):
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
+    # Always force-include logs, even if empty
+    for log_field in ["message_log", "debug_log"]:
+        if log_field in fields:
+            normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
+
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
         log_debug_event(record_id, "BACKEND", "No Valid Fields", "No valid fields to update in this request.")
@@ -430,7 +436,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Sanity filter before sending
+    # Final validation before update
     for key in list(normalized_fields.keys()):
         if key not in VALID_AIRTABLE_FIELDS:
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
