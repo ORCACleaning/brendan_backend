@@ -25,6 +25,7 @@ from app.services.quote_id_utils import get_next_quote_id
 from app.services.quote_logic import calculate_quote
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
 from app.utils.logging_utils import log_debug_event
+from app.services.quote_id_utils import get_next_quote_id
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
@@ -228,6 +229,48 @@ ALWAYS return valid JSON exactly like this: { "properties": [ { "property": "fie
 
 # Trigger Words for Abuse Detection (Escalation Logic)
 ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
+
+# === Create New Quote ID ===
+def create_new_quote(session_id: str, force_new: bool = False):
+    """
+    Creates a new Airtable quote record for Brendan.
+    Returns: (quote_id, record_id, "Gathering Info", fields)
+    """
+    quote_id = get_next_quote_id()
+    timestamp = datetime.now(pytz.timezone("Australia/Perth")).isoformat()
+
+    fields = {
+        "session_id": session_id,
+        "quote_id": quote_id,
+        "timestamp": timestamp,
+        "quote_stage": "Gathering Info",
+        "privacy_acknowledged": False,
+        "source": "Brendan"
+    }
+
+    headers = {
+        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}"
+    payload = {"fields": fields}
+
+    try:
+        res = requests.post(url, headers=headers, json=payload)
+        res.raise_for_status()
+        record = res.json()
+        record_id = record["id"]
+
+        log_debug_event(record_id, "BACKEND", "New Quote Created", f"Quote ID: {quote_id}")
+        logger.info(f"✅ New quote created | session_id: {session_id} | quote_id: {quote_id}")
+        return quote_id, record_id, "Gathering Info", fields
+
+    except Exception as e:
+        logger.error(f"❌ Failed to create new quote: {e}")
+        log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
+        raise HTTPException(status_code=500, detail="Failed to create new quote.")
+
 
 # === Get Quote by Session ID ===
 
