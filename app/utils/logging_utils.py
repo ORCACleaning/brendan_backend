@@ -9,39 +9,35 @@ AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
 AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
 
 
-def log_debug_event(record_id: str, source: str, stage: str, message: str):
+def log_debug_event(record_id: str, source: str, event: str, message: str):
     """
-    Appends a debug log entry to the message_log field in Airtable.
+    Logs a debug message to Airtable for the given record_id.
+    Truncates message if too long for Airtable field.
     """
     if not record_id:
         return
 
-    log_line = f"{source}: {stage} – {message}"
-    logger.info(f"📄 {log_line}")
-
     try:
-        # Fetch current message_log
-        url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+        url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
         headers = {
-            "Authorization": f"Bearer {AIRTABLE_API_KEY}",
+            "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
             "Content-Type": "application/json"
         }
 
-        # Get existing log (only message_log field to keep light)
-        res = requests.get(url, headers=headers, params={"fields[]": ["message_log"]})
-        res.raise_for_status()
-        existing_log = res.json().get("fields", {}).get("message_log", "")
-        new_log = f"{existing_log}\n{log_line}".strip()
+        max_length = 10000  # Airtable field size safety
+        if message and len(message) > max_length:
+            logger.warning(f"⚠️ Message too long for Airtable logging — truncating from {len(message)} to {max_length} characters.")
+            message = message[:max_length]
 
-        # Update with appended log
-        patch_payload = {
+        payload = {
             "fields": {
-                "message_log": new_log
+                "message_log": f"{source.upper()}: {event}: {message}"
             }
         }
-        patch_url = f"https://api.airtable.com/v0/{AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-        patch_res = requests.patch(patch_url, headers=headers, json=patch_payload)
-        patch_res.raise_for_status()
+
+        res = requests.patch(url, headers=headers, json=payload)
+        res.raise_for_status()
+        logger.info(f"📄 BACKEND: Logged debug event – {event}")
 
     except Exception as e:
         logger.warning(f"⚠️ Failed to log event: {e}")
