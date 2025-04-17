@@ -1015,27 +1015,29 @@ async def filter_response_entry(request: Request):
         append_message_log(record_id, message, "user")
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log to extract properties.")
 
-        field_updates, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
-        merged_fields = fields.copy()
-        merged_fields.update(field_updates)
+        properties, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
+        parsed_dict = {prop["property"]: prop["value"] for prop in properties if "property" in prop and "value" in prop}
 
-        if field_updates.get("quote_stage") == "Quote Calculated" and message_lower not in pdf_keywords:
+        merged_fields = fields.copy()
+        merged_fields.update(parsed_dict)
+
+        if parsed_dict.get("quote_stage") == "Quote Calculated" and message_lower not in pdf_keywords:
             try:
                 quote_obj = calculate_quote(QuoteRequest(**merged_fields))
-                field_updates.update(quote_obj.model_dump())
+                parsed_dict.update(quote_obj.model_dump())
                 summary = get_inline_quote_summary(quote_obj.model_dump())
                 reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
-                log_debug_event(record_id, "BACKEND", "Quote Calculated", f"Total: ${field_updates.get('total_price')}, Time: {field_updates.get('estimated_time_mins')} mins")
+                log_debug_event(record_id, "BACKEND", "Quote Calculated", f"Total: ${parsed_dict.get('total_price')}, Time: {parsed_dict.get('estimated_time_mins')} mins")
             except Exception as e:
                 logging.warning(f"⚠️ Quote calculation failed: {e}")
                 log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
 
-        update_quote_record(record_id, field_updates)
+        update_quote_record(record_id, parsed_dict)
         append_message_log(record_id, reply, "brendan")
-        next_actions = generate_next_actions() if field_updates.get("quote_stage") == "Quote Calculated" else []
+        next_actions = generate_next_actions() if parsed_dict.get("quote_stage") == "Quote Calculated" else []
 
         return JSONResponse(content={
-            "properties": [{"property": k, "value": v} for k, v in field_updates.items()],
+            "properties": properties,
             "response": reply,
             "next_actions": next_actions,
             "session_id": session_id
