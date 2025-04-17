@@ -818,9 +818,6 @@ router = APIRouter()
 # === log-debug Route ===
 @router.post("/log-debug")
 async def log_debug(request: Request):
-    """
-    Accepts logs from the frontend and logs them into Airtable or other logging systems.
-    """
     try:
         body = await request.json()
         session_id = body.get("session_id", "")
@@ -849,14 +846,20 @@ async def filter_response_entry(request: Request):
             log_debug_event(None, "BACKEND", "Missing Session ID", "Session ID is required but not provided.")
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
+        # === INIT FLOW ===
         if message.lower() == "__init__":
             log_debug_event(None, "BACKEND", "Init Triggered", "User opened chat and triggered __init__.")
 
             existing = get_quote_by_session(session_id)
-            if existing:
-                quote_id, record_id, stage, fields = existing
-                log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Session: {session_id}")
-            else:
+            if existing is not None:
+                try:
+                    quote_id, record_id, stage, fields = existing
+                    log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Session: {session_id}")
+                except Exception as e:
+                    log_debug_event(None, "BACKEND", "Unpacking Error", f"Error unpacking existing quote: {str(e)}")
+                    existing = None
+
+            if not existing:
                 quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
                 session_id = fields.get("session_id", session_id)
                 log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote created with session_id: {session_id}")
@@ -868,11 +871,13 @@ async def filter_response_entry(request: Request):
 
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        quote_id, record_id, stage, fields = get_quote_by_session(session_id)
-        if not record_id:
+        # === Quote Lookup ===
+        quote_data = get_quote_by_session(session_id)
+        if not quote_data:
             log_debug_event(None, "BACKEND", "Quote Not Found", f"No quote found for session: {session_id}")
             raise HTTPException(status_code=404, detail="Quote not found.")
 
+        quote_id, record_id, stage, fields = quote_data
         message_lower = message.lower()
         pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "email quote", "pdf quote"]
 
@@ -881,6 +886,7 @@ async def filter_response_entry(request: Request):
             log_debug_event(record_id, "BACKEND", "Blocked Message", "User is banned.")
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
+        # === Privacy Consent Flow ===
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
             if message_lower in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
                 update_quote_record(record_id, {"privacy_acknowledged": True})
@@ -893,13 +899,13 @@ async def filter_response_entry(request: Request):
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
-
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
+        # === Personal Info Received ===
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
                 customer_email = str(fields.get("customer_email", "")).strip()
-                if not re.match(r"[^@]+@[^@]+\.[^@]+", customer_email):
+                if not re.match(r"[^@]+@[^@]+\\.[^@]+", customer_email):
                     reply = "That email doesn’t look right — could you double check and send it again?"
                     append_message_log(record_id, message, "user")
                     append_message_log(record_id, reply, "brendan")
@@ -924,6 +930,7 @@ async def filter_response_entry(request: Request):
                 append_message_log(record_id, reply, "brendan")
                 return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
+        # === Normal Message Flow ===
         log = fields.get("message_log", "")
         if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords):
             log = PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]
