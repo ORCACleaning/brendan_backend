@@ -33,8 +33,7 @@ from app.services.quote_id_utils import get_next_quote_id
 
 # === Field Rules and Logging ===
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
-from app.utils.logging_utils import log_debug_event
-
+from app.utils.logging_utils import log_debug_event, flush_debug_log
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
