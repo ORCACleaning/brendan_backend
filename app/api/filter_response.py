@@ -611,13 +611,11 @@ def generate_next_actions():
 
 # === GPT Extraction (Production-Grade) ===
 
-async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
-   
-    logger.info("🧑‍🔬 Calling GPT-4 Turbo to extract properties...")
+async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
+    logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
-        log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log for extraction.")
+        log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
 
-    # === Skip weak small talk ===
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
         reply = (
@@ -628,10 +626,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Message: {message}")
         return [], reply
 
-    # === Retrieve current Airtable state (needed for quote_stage awareness and abuse escalation) ===
+    # === Retrieve existing Airtable record ===
     existing = {}
     current_stage = ""
-    if record_id:
+    if not skip_log_lookup and record_id:
         try:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
             headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
@@ -640,10 +638,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             existing = res.json().get("fields", {})
             current_stage = existing.get("quote_stage", "")
         except Exception as e:
-            logger.error(f"❌ Airtable fetch failed: {e}")
+            logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
-    # === Format log and inject SYSTEM guard for calculated quotes ===
+    # === Format log into OpenAI messages ===
     prepared_log = re.sub(r'[^ -~\n]', '', log[-LOG_TRUNCATE_LENGTH:])
     messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
@@ -654,11 +652,21 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
-    # Inject quote-stage message to stop premature confirmation
-    if current_stage == "Quote Calculated":
+    if message == "__init__":
         messages.append({
             "role": "system",
-            "content": "REMINDER: The quote has already been calculated. Do NOT confirm or imply quote readiness again unless user requests changes."
+            "content": (
+                "The user has just opened the chat. You are Brendan, the quoting assistant. "
+                "DO NOT greet the user. That has already been done by the frontend. "
+                "Start by asking a friendly, Aussie-style question to gather suburb, bedrooms, bathrooms, or furnishing. "
+                "Be efficient, natural, and never say welcome or hello again."
+            )
+        })
+
+    elif current_stage == "Quote Calculated":
+        messages.append({
+            "role": "system",
+            "content": "REMINDER: The quote has already been calculated. DO NOT regenerate the quote unless the customer changes details."
         })
 
     messages.append({"role": "user", "content": message.strip()})
@@ -673,22 +681,22 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 temperature=0.4
             )
             if not res.choices:
-                raise ValueError("No choices returned.")
+                raise ValueError("No choices returned from GPT-4.")
             return res.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
         except Exception as e:
-            logger.error(f"❌ GPT-4 request failed: {e}")
+            logger.error(f"❌ GPT-4 call failed: {e}")
             if record_id:
-                log_debug_event(record_id, "GPT", "Request Failed", str(e))
+                log_debug_event(record_id, "GPT", "Call Failed", str(e))
             raise
 
-    # === Call GPT and parse JSON ===
+    # === Parse GPT JSON ===
     parsed = {}
     for attempt in range(2):
         try:
             raw = call_gpt(messages)
-            logger.debug(f"🔍 RAW GPT OUTPUT (attempt {attempt + 1}):\n{raw}")
+            logger.debug(f"GPT-4 Raw Output:\n{raw}")
             if record_id:
-                log_debug_event(record_id, "GPT", f"Raw Response Attempt {attempt + 1}", raw)
+                log_debug_event(record_id, "GPT", f"Raw Attempt {attempt + 1}", raw)
 
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
@@ -696,9 +704,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             parsed = json.loads(raw[start:end + 1])
             break
         except Exception as e:
-            logger.warning(f"⚠️ GPT parsing failed (attempt {attempt + 1}): {e}")
+            logger.warning(f"⚠️ GPT JSON Parse Failed (Attempt {attempt + 1}): {e}")
             if record_id:
-                log_debug_event(record_id, "GPT", f"Parse Error Attempt {attempt + 1}", str(e))
+                log_debug_event(record_id, "GPT", "Parse Failed", str(e))
             if attempt == 1:
                 return [], raw.strip()
             sleep(1)
@@ -717,22 +725,18 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
     ensure_field("carpet_study_count", 0)
-    ensure_field("upholstery_cleaning", False)
     ensure_field("carpet_cleaning", False)
+    ensure_field("upholstery_cleaning", False)
 
-    carpet_count = sum(
+    carpet_total = sum(
         int(p.get("value", 0)) for p in props
         if p["property"] in carpet_fields and isinstance(p.get("value"), (int, float))
     )
-    if carpet_count > 0:
-        for p in props:
-            if p["property"] == "carpet_cleaning":
-                p["value"] = True
-                break
-        else:
+    if carpet_total > 0:
+        if "carpet_cleaning" not in existing_keys:
             props.append({"property": "carpet_cleaning", "value": True})
 
-    # === Ask for missing carpet counts if any are missing ===
+    # === Ask for missing carpet fields ===
     missing_carpet = [f for f in carpet_fields if f not in existing_keys]
     if missing_carpet:
         msg = (
@@ -743,11 +747,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Missing Carpet Fields", f"Missing: {missing_carpet}")
         return props, msg
 
-    # === Abuse detection ===
+    # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
-        if not quote_id and existing:
-            quote_id = existing.get("quote_id", "N/A")
+        quote_id = quote_id or existing.get("quote_id", "N/A")
         if current_stage == "Abuse Warning":
             reply = random.choice([
                 f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id}. This chat is now closed.",
@@ -761,11 +764,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
-    # === Fallback if nothing useful returned ===
+    # === Fallback reply ===
     if not props:
         return [], "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
 
-    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | Reply: {reply[:100]}...")
+    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Reply Line: {reply[:100]}")
     return props, reply
 
 # === GPT Error Email Alert ===
