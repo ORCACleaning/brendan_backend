@@ -908,12 +908,11 @@ def append_message_log(record_id: str, message: str, sender: str):
         logger.warning(f"⚠️ Failed to log debug message: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Event Failed", str(e))
 
-# === Brendan Filter Response Route ===
-# === Brendan API Router ===
-# === Brendan API Router ===
+# === Brendan Filter Response Route ====
+
 router = APIRouter()
 
-# === /log-debug Route ===
+# === /log-debug Route ==========
 @router.post("/log-debug")
 async def log_debug(request: Request):
     try:
