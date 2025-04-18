@@ -28,7 +28,7 @@ from app.models.quote_models import QuoteRequest
 # === Services ===
 from app.services.email_sender import send_quote_email
 from app.services.pdf_generator import generate_quote_pdf
-from app.services.quote_logic import calculate_quote, get_quote_by_session
+from app.services.quote_logic import calculate_quote
 from app.services.quote_id_utils import get_next_quote_id
 
 # === Field Rules and Logging ===
