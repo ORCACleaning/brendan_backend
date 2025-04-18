@@ -903,21 +903,6 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 # === Brendan Filter Response Route ===
 # === Brendan API Router ===
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
-import re
-
-from app.utils.logging_utils import log_debug_event, flush_debug_log
-from app.services.quote_id_utils import get_next_quote_id
-from app.services.pdf_generator import generate_quote_pdf
-from app.services.email_sender import send_quote_email
-from app.services.quote_logic import calculate_quote
-from app.models.quote_models import QuoteRequest
-from app.api.field_rules import LOG_TRUNCATE_LENGTH, PDF_SYSTEM_MESSAGE
-from app.core.airtable import get_quote_by_session, create_new_quote, update_quote_record, append_message_log
-from app.core.gpt import extract_properties_from_gpt4
-from app.core.actions import generate_next_actions
-
 router = APIRouter()
 
 
