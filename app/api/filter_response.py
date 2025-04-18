@@ -616,6 +616,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
 
+    # === Skip weak inputs ===
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
         reply = (
@@ -623,13 +624,12 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "bathrooms you’ve got, and whether the place is furnished or unfurnished."
         )
         if record_id:
-            log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Message: {message}")
+            log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
         return [], reply
 
-    # === Retrieve Airtable fields ===
-    existing = {}
-    current_stage = ""
-    if not skip_log_lookup and record_id:
+    # === Load Airtable state if required ===
+    existing, current_stage = {}, ""
+    if record_id and not skip_log_lookup:
         try:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
             headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
@@ -641,8 +641,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
-    # === Build GPT messages ===
-    prepared_log = re.sub(r'[^ -~\n]', '', log[-LOG_TRUNCATE_LENGTH:])
+    # === Prepare GPT messages ===
+    prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
     messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
         if line.startswith("USER:"):
@@ -658,16 +658,12 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "content": (
                 "The user has just opened the chat — this is the very first message after frontend greeting.\n"
                 "You are Brendan, the quoting assistant for vacate cleans in Perth and Mandurah.\n\n"
-                "IMPORTANT:\n"
                 "- DO NOT greet the user (frontend already did that).\n"
                 "- DO NOT assume the customer has said anything yet.\n"
-                "- DO NOT ask about carpet or extras.\n\n"
-                "Your job is to start the quote by asking in a friendly, casual tone:\n"
-                "> 'What suburb are we quoting for today, and how many bedrooms and bathrooms are we looking at?'\n\n"
-                "Alternate with variations like:\n"
-                "> 'Let’s kick off — what suburb’s the clean in, and how many beds and baths?'\n\n"
-                "Make it sound natural, human, and short. Do NOT give more than one sentence.\n"
-                "You are NOT allowed to mention special requests, carpet, or services yet — only suburb, bedroom, bathroom, furnished."
+                "- DO NOT ask about carpet or services.\n\n"
+                "Start by asking:\n"
+                "> 'What suburb are we quoting for today, and how many bedrooms and bathrooms are we looking at?'\n"
+                "Make it natural, casual, and only one line. Do NOT mention extras or prices yet."
             )
         })
     elif current_stage == "Quote Calculated":
@@ -678,7 +674,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     messages.append({"role": "user", "content": message.strip()})
 
-    # === GPT Call ===
+    # === GPT Call and Retry Logic ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -687,11 +683,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 max_tokens=3000,
                 temperature=0.4
             )
-            if not res.choices:
-                raise ValueError("No choices returned from GPT-4.")
             return res.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
         except Exception as e:
-            logger.error(f"❌ GPT-4 call failed: {e}")
             if record_id:
                 log_debug_event(record_id, "GPT", "Call Failed", str(e))
             raise
@@ -700,19 +693,16 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     for attempt in range(2):
         try:
             raw = call_gpt(messages)
-            logger.debug(f"GPT-4 Raw Output:\n{raw}")
             if record_id:
                 log_debug_event(record_id, "GPT", f"Raw Attempt {attempt + 1}", raw)
-
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
             parsed = json.loads(raw[start:end + 1])
             break
         except Exception as e:
-            logger.warning(f"⚠️ GPT JSON Parse Failed (Attempt {attempt + 1}): {e}")
             if record_id:
-                log_debug_event(record_id, "GPT", "Parse Failed", str(e))
+                log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt + 1})", str(e))
             if attempt == 1:
                 return [], raw.strip()
             sleep(1)
@@ -738,9 +728,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         int(p.get("value", 0)) for p in props
         if p["property"] in carpet_fields and isinstance(p.get("value"), (int, float))
     )
-    if carpet_total > 0:
-        if "carpet_cleaning" not in existing_keys:
-            props.append({"property": "carpet_cleaning", "value": True})
+    if carpet_total > 0 and "carpet_cleaning" not in existing_keys:
+        props.append({"property": "carpet_cleaning", "value": True})
 
     missing_carpet = [f for f in carpet_fields if f not in existing_keys]
     if missing_carpet:
@@ -749,7 +738,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
         )
         if record_id:
-            log_debug_event(record_id, "GPT", "Missing Carpet Fields", f"Missing: {missing_carpet}")
+            log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing_carpet))
         return props, msg
 
     # === Abuse Detection ===
@@ -769,10 +758,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
+    # === Fallback if nothing useful ===
     if not props:
         return [], "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
 
-    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Reply Line: {reply[:100]}")
+    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Line: {reply[:100]}")
     return props, reply
 
 # === GPT Error Email Alert ===
