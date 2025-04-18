@@ -903,8 +903,8 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 # === Brendan Filter Response Route ===
 # === Brendan API Router ===
+# === Brendan API Router ===
 router = APIRouter()
-
 
 # === /log-debug Route ===
 @router.post("/log-debug")
@@ -962,11 +962,12 @@ async def filter_response_entry(request: Request):
             if flush:
                 update_quote_record(record_id, {"debug_log": flush})
 
-            # === GPT Message (Start of chat) ===
-            properties, reply = await extract_properties_from_gpt4("__init__", "USER: __init__", record_id)
-            
+            properties, reply = await extract_properties_from_gpt4(
+                "__init__", "USER: __init__", record_id, quote_id=None, skip_log_lookup=True
+            )
+
             append_message_log(record_id, reply, "brendan")
-            log_debug_event(record_id, "BACKEND", "Init Complete", "Started chat with GPT-generated question.")
+            log_debug_event(record_id, "BACKEND", "Init Complete", "Started chat with GPT-generated message.")
 
             return JSONResponse(content={
                 "properties": properties,
@@ -975,7 +976,6 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Normal message flow ===
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Quote not found.")
