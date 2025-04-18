@@ -7,9 +7,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Add TRUE_VALUES here since it’s not inside field_rules
 TRUE_VALUES = {"true", "yes", "1", "y", "yeah", "yep"}
-
 TABLE_NAME = "Vacate Quotes"
 _log_cache = {}  # Global in-memory debug cache
 
@@ -52,7 +50,6 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # === Furnished Field Special Handling ===
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -63,7 +60,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
-    # === Normalize Fields ===
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
 
@@ -71,7 +67,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # Boolean Handling
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass
@@ -80,7 +75,6 @@ def update_quote_record(record_id: str, fields: dict):
             else:
                 value = str(value).strip().lower() in TRUE_VALUES
 
-        # Integer Handling
         elif key in INTEGER_FIELDS:
             try:
                 value = int(value)
@@ -91,7 +85,6 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
                 value = 0
 
-        # Float Handling
         elif key in {
             "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
             "estimated_time_mins", "discount_applied", "mandurah_surcharge",
@@ -103,34 +96,29 @@ def update_quote_record(record_id: str, fields: dict):
                 logger.warning(f"⚠️ Failed to convert {key} to float — forcing 0.0")
                 value = 0.0
 
-        # Special Requests Normalization
         elif key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
 
-        # Extra Hours Requested
         elif key == "extra_hours_requested":
             try:
                 value = float(value) if value not in [None, ""] else 0
             except Exception:
                 value = 0
 
-        # All else as string
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
 
-    # Final Privacy Boolean Force
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
-    # Inject debug log
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
+        log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(debug_log)} chars flushed to Airtable")
 
-    # No valid fields to update
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
         return []
@@ -143,7 +131,6 @@ def update_quote_record(record_id: str, fields: dict):
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
             normalized_fields.pop(key, None)
 
-    # === Bulk Update Attempt ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
         if res.ok:
@@ -160,7 +147,6 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception as e:
         logger.error(f"❌ Exception during Airtable bulk update: {e}")
 
-    # === Fallback: Update Fields Individually ===
     successful = []
     for key, value in normalized_fields.items():
         try:
@@ -179,5 +165,3 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Failed", "No fields could be updated (bulk and fallback both failed).")
 
     return successful
-
-
