@@ -1,6 +1,44 @@
+import json
+import requests
+import logging
+from app.utils.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS, TRUE_VALUES
+from app.config import settings
+
+logger = logging.getLogger(__name__)
+
+TABLE_NAME = "Vacate Quotes"
+_log_cache = {}  # Global in-memory debug cache
+
+# === Debug Logger ===
+def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str = "", message: str = ""):
+    from datetime import datetime
+    timestamp = datetime.utcnow().isoformat()
+    entry = f"[{timestamp}] [{source}] {label}: {message}"
+
+    if not record_id:
+        print(f"📄 Debug (no record_id): {entry}")
+        return
+
+    if record_id not in _log_cache:
+        _log_cache[record_id] = []
+
+    _log_cache[record_id].append(entry)
+
+    if len(_log_cache[record_id]) > 50:
+        _log_cache[record_id] = _log_cache[record_id][-50:]
+
+# === Flush Debug Log ===
+def flush_debug_log(record_id: str):
+    logs = _log_cache.get(record_id, [])
+    if not logs:
+        return ""
+
+    combined = "\n".join(logs).strip()
+    _log_cache[record_id] = []  # Clear cache after flush
+    return combined
+
+# === Update Airtable Record ===
 def update_quote_record(record_id: str, fields: dict):
-    import json
-    from app.services.logging_utils import flush_debug_log
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
@@ -79,16 +117,16 @@ def update_quote_record(record_id: str, fields: dict):
 
         normalized_fields[key] = value
 
-    # === Final Force Privacy Handling ===
+    # Final Privacy Boolean Force
     if "privacy_acknowledged" in fields:
         normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
-    # === Flush and include debug log ===
+    # Inject debug log
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
 
-    # === Exit Early if No Valid Fields ===
+    # No valid fields to update
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
         return []
@@ -101,7 +139,7 @@ def update_quote_record(record_id: str, fields: dict):
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
             normalized_fields.pop(key, None)
 
-    # === Attempt Bulk Update ===
+    # === Bulk Update Attempt ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
         if res.ok:
@@ -118,7 +156,7 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception as e:
         logger.error(f"❌ Exception during Airtable bulk update: {e}")
 
-    # === Fallback to Single Field Update ===
+    # === Fallback: Update Fields Individually ===
     successful = []
     for key, value in normalized_fields.items():
         try:
