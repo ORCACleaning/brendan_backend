@@ -358,7 +358,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # Furnished normalization
+    # Normalize furnished
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -371,12 +371,11 @@ def update_quote_record(record_id: str, fields: dict):
 
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
-
         if key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
-        # === Normalize by type ===
+        # Normalize by field type
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass
@@ -387,12 +386,12 @@ def update_quote_record(record_id: str, fields: dict):
 
         elif key in INTEGER_FIELDS:
             try:
-                value = int(float(value))  # supports float as int
+                value = int(float(value))  # Accept "3.0" as 3
                 if value > MAX_REASONABLE_INT:
-                    logger.warning(f"⚠️ Clamping large value for {key}: {value}")
+                    logger.warning(f"⚠️ Clamping large int value for {key}: {value}")
                     value = MAX_REASONABLE_INT
             except Exception:
-                logger.warning(f"⚠️ Failed to convert {key} to int — forcing 0")
+                logger.warning(f"⚠️ Failed to convert {key} to int — defaulting to 0")
                 value = 0
 
         elif key in {
@@ -403,7 +402,7 @@ def update_quote_record(record_id: str, fields: dict):
             try:
                 value = float(value)
             except Exception:
-                logger.warning(f"⚠️ Failed to convert {key} to float — forcing 0.0")
+                logger.warning(f"⚠️ Failed to convert {key} to float — defaulting to 0.0")
                 value = 0.0
 
         elif key == "special_requests":
@@ -412,16 +411,16 @@ def update_quote_record(record_id: str, fields: dict):
 
         elif key == "extra_hours_requested":
             try:
-                value = float(value) if value not in [None, ""] else 0
+                value = float(value) if value not in [None, ""] else 0.0
             except Exception:
-                value = 0
+                value = 0.0
 
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
 
-    # Force specific critical defaults
+    # Force critical defaults if missing
     normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged", False))
     normalized_fields["carpet_cleaning"] = bool(fields.get("carpet_cleaning", False))
     normalized_fields["upholstery_cleaning"] = bool(fields.get("upholstery_cleaning", False))
@@ -433,56 +432,57 @@ def update_quote_record(record_id: str, fields: dict):
 
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
-        log_debug_event(record_id, "BACKEND", "No Valid Fields", "No valid fields to update in this request.")
+        log_debug_event(record_id, "BACKEND", "No Valid Fields", "Nothing passed validation for update.")
         return []
 
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Final field validation before update
+    # Last-pass validation before sending
     for key in list(normalized_fields.keys()):
         if key not in VALID_AIRTABLE_FIELDS:
-            logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
+            logger.error(f"❌ INVALID FIELD: {key} — Removing before update.")
             normalized_fields.pop(key, None)
 
-    # === Bulk Update ===
+    # === Try Bulk Update First ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
         if res.ok:
-            logger.info("✅ Airtable bulk update success.")
+            logger.info("✅ Airtable bulk update successful.")
             log_debug_event(record_id, "BACKEND", "Record Updated (Bulk)", f"Fields updated: {list(normalized_fields.keys())}")
+            flush_debug_log(record_id)  # ✅ Write cached debug log after update
             return list(normalized_fields.keys())
 
-        logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
+        logger.error(f"❌ Airtable bulk update failed with status {res.status_code}")
         try:
-            logger.error(f"🧾 Error response: {res.json()}")
+            logger.error(f"🧾 Airtable error response: {res.json()}")
         except Exception:
-            logger.error("🧾 Error response: (Non-JSON)")
+            logger.error("🧾 Airtable error response: (not JSON)")
     except Exception as e:
-        logger.error(f"❌ Exception during Airtable bulk update: {e}")
-        log_debug_event(record_id, "BACKEND", "Airtable Update Error", str(e))
+        logger.error(f"❌ Airtable bulk update exception: {e}")
+        log_debug_event(record_id, "BACKEND", "Airtable Bulk Error", str(e))
 
-    # === Fallback: One-by-One Update ===
+    # === Fallback One-by-One ===
     successful = []
     for key, value in normalized_fields.items():
         try:
-            single_res = requests.patch(url, headers=headers, json={"fields": {key: value}})
-            if single_res.ok:
+            single = requests.patch(url, headers=headers, json={"fields": {key: value}})
+            if single.ok:
                 logger.info(f"✅ Field '{key}' updated successfully.")
                 successful.append(key)
             else:
                 logger.error(f"❌ Field '{key}' failed to update.")
         except Exception as e:
-            logger.error(f"❌ Exception updating field '{key}': {e}")
-            log_debug_event(record_id, "BACKEND", "Single Field Update Failed", f"Field: {key}, Error: {e}")
+            logger.error(f"❌ Exception on field '{key}': {e}")
+            log_debug_event(record_id, "BACKEND", "Single Field Update Failed", f"{key}: {e}")
 
     if successful:
-        log_debug_event(record_id, "BACKEND", "Record Updated (Fallback)", f"Fields updated one-by-one: {successful}")
+        log_debug_event(record_id, "BACKEND", "Record Updated (Fallback)", f"Fields updated: {successful}")
     else:
-        log_debug_event(record_id, "BACKEND", "Update Failed", "No fields could be updated (bulk and fallback both failed).")
+        log_debug_event(record_id, "BACKEND", "Update Failed", "No fields updated in fallback.")
 
+    flush_debug_log(record_id)  # ✅ Write any cached logs even after fallback
     return successful
-
 
 # === Inline Quote Summary Helper ===
 
@@ -617,7 +617,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Message: {message}")
         return [], reply
 
-    # === Preprocess message log ===
+    # === Format message log for GPT ===
     prepared_log = re.sub(r'[^ -~\n]', '', log[-LOG_TRUNCATE_LENGTH:])
     messages = []
 
@@ -629,10 +629,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
-    messages.append({"role": "user", "content": message.strip()})
     messages.insert(0, {"role": "system", "content": GPT_PROMPT})
+    messages.append({"role": "user", "content": message.strip()})
 
-    # === Call GPT with retry and validation ===
+    # === Call GPT with retries ===
     def call_gpt(messages_block):
         try:
             response = client.chat.completions.create(
@@ -642,9 +642,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 temperature=0.4
             )
             if not response.choices:
-                raise ValueError("No choices returned from GPT-4.")
-            raw = response.choices[0].message.content.strip()
-            return raw.replace("```json", "").replace("```", "").strip()
+                raise ValueError("No choices returned.")
+            return response.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
         except Exception as e:
             logger.error(f"❌ GPT-4 request failed: {e}")
             if record_id:
@@ -676,7 +675,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props = parsed.get("properties", [])
     reply = parsed.get("response", "")
 
-    # === Add fallback fields if missing ===
+    # === Add fallback fields ===
     existing_keys = {p["property"] for p in props if "property" in p}
     def ensure_property(key: str, default):
         if key not in existing_keys:
@@ -686,7 +685,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     ensure_property("upholstery_cleaning", False)
     ensure_property("carpet_cleaning", False)
 
-    # === Auto-enable carpet_cleaning if any carpet fields > 0 ===
+    # === Auto-check carpet_cleaning if any carpet count > 0 ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_living_count", "carpet_study_count",
         "carpet_hallway_count", "carpet_stairs_count"
@@ -696,15 +695,17 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if p["property"] in carpet_fields and isinstance(p.get("value"), (int, float)) and p["value"] > 0
     )
     if carpet_count > 0:
+        found = False
         for p in props:
             if p["property"] == "carpet_cleaning":
                 p["value"] = True
-                break
-        else:
+                found = True
+        if not found:
             props.append({"property": "carpet_cleaning", "value": True})
 
-    # === Abuse Detection ===
+    # === Abuse detection and escalation ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
+    existing = {}
     if record_id:
         try:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -713,11 +714,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             res.raise_for_status()
             existing = res.json().get("fields", {})
         except Exception as e:
-            logger.error(f"❌ Failed to fetch existing record from Airtable: {e}")
+            logger.error(f"❌ Failed to fetch Airtable record: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
-            existing = {}
-    else:
-        existing = {}
 
     current_stage = existing.get("quote_stage", "")
     if abuse_detected:
@@ -737,11 +735,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First offensive message detected.")
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
+    # === Final fallback ===
     if not props:
-        reply = "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
-        return [], reply
+        return [], "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
 
-    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}")
+    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}...")
     return props, reply.strip()
 
 
@@ -812,53 +810,51 @@ def append_message_log(record_id: str, message: str, sender: str):
     """
     Appends a new message to the 'message_log' field in Airtable.
     Truncates from the start if the log exceeds MAX_LOG_LENGTH.
+    Logs all actions and failures for traceability.
     """
     if not record_id:
         logger.error("❌ Cannot append message log — missing record ID")
         try:
-            log_debug_event(None, "BACKEND", "Log Failed", "Missing record ID for appending message log")
+            log_debug_event(None, "BACKEND", "Log Failed", "Missing record ID for message log append")
         except Exception as e:
-            logger.error(f"❌ Error logging message append failure due to missing record ID: {e}")
+            logger.error(f"❌ Error while logging missing record ID failure: {e}")
         return
 
     message = str(message or "").strip()
     if not message:
-        logger.info("⏩ Empty message after stripping — skipping log update")
+        logger.info("⏩ Empty message — skipping append")
         return
 
     sender_clean = str(sender or "user").strip().upper()
 
-    # === Handle __init__ as system trigger ===
+    # Special handling for __init__
     if sender_clean == "USER" and message.lower() == "__init__":
         new_entry = "SYSTEM_TRIGGER: Brendan started a new quote"
     else:
         new_entry = f"{sender_clean}: {message}"
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-    headers = {
-        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
-    }
+    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
 
-    # === Fetch Existing Message Log ===
-    current = {}
+    # === Fetch existing message_log (retry up to 3x) ===
+    old_log = ""
     for attempt in range(3):
         try:
             res = requests.get(url, headers=headers)
             res.raise_for_status()
-            current = res.json()
+            old_log = str(res.json().get("fields", {}).get("message_log", "")).strip()
             break
         except Exception as e:
-            logger.warning(f"⚠️ Airtable log fetch failed (attempt {attempt + 1}/3): {e}")
+            logger.warning(f"⚠️ Attempt {attempt+1}/3 — Failed to fetch message_log: {e}")
             if attempt == 2:
-                logger.error(f"❌ Failed to fetch message_log for record {record_id} after 3 attempts.")
+                logger.error(f"❌ Giving up after 3 attempts to fetch log for {record_id}")
                 try:
-                    log_debug_event(record_id, "BACKEND", "Log Fetch Failed", f"Failed after 3 attempts to fetch message_log. Error: {str(e)}")
+                    log_debug_event(record_id, "BACKEND", "Log Fetch Failed", f"Error: {str(e)}")
                 except Exception as log_e:
-                    logger.error(f"❌ Error logging failed log fetch: {log_e}")
+                    logger.error(f"❌ Failed to log debug fetch error: {log_e}")
                 return
             sleep(1)
 
-    old_log = str(current.get("fields", {}).get("message_log", "")).strip()
     combined_log = f"{old_log}\n{new_entry}" if old_log else new_entry
 
     was_truncated = False
@@ -866,37 +862,64 @@ def append_message_log(record_id: str, message: str, sender: str):
         combined_log = combined_log[-MAX_LOG_LENGTH:]
         was_truncated = True
 
-    logger.info(f"📚 Appending to message log for record {record_id}")
-    logger.debug(f"📝 New message_log length: {len(combined_log)} characters")
+    logger.info(f"📚 Updating message_log for {record_id} (len={len(combined_log)})")
 
     try:
         update_quote_record(record_id, {"message_log": combined_log})
     except Exception as e:
-        logger.error(f"❌ Error updating message log in Airtable for record {record_id}: {e}")
+        logger.error(f"❌ Failed to update message_log in Airtable: {e}")
         try:
-            log_debug_event(record_id, "BACKEND", "Log Update Failed", f"Error updating message_log in Airtable: {e}")
+            log_debug_event(record_id, "BACKEND", "Message Log Update Failed", str(e))
         except Exception as log_e:
-            logger.error(f"❌ Error logging log update failure: {log_e}")
+            logger.error(f"❌ Also failed to log that error: {log_e}")
         return
 
+    # === Debug event ===
     try:
-        detail_msg = f"{sender_clean} message logged ({len(message)} chars)"
+        detail = f"{sender_clean} message logged ({len(message)} chars)"
         if sender_clean == "USER" and message.lower() == "__init__":
-            detail_msg = "SYSTEM_TRIGGER: Brendan started a new quote"
+            detail = "SYSTEM_TRIGGER: Brendan started a new quote"
         if was_truncated:
-            detail_msg += " | ⚠️ Truncated message_log due to size"
-        log_debug_event(record_id, "BACKEND", "Message Appended", detail_msg)
+            detail += " | ⚠️ Log truncated"
+        log_debug_event(record_id, "BACKEND", "Message Appended", detail)
     except Exception as e:
-        logger.warning(f"⚠️ Failed to log debug event from append_message_log: {e}")
+        logger.warning(f"⚠️ Logging failure inside debug_event call: {e}")
         try:
-            log_debug_event(record_id, "BACKEND", "Debug Log Event Failed", f"Error logging debug event: {e}")
+            log_debug_event(record_id, "BACKEND", "Debug Log Event Failed", str(e))
         except Exception as log_e:
-            logger.error(f"❌ Error logging debug event failure: {log_e}")
+            logger.error(f"❌ Double failure while logging event failure: {log_e}")
 
 
 # === Brendan Filter Response Route ===
 
 
+
+router = APIRouter()
+
+# === /log-debug Route ===
+# === Brendan API Router ===
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
+import logging
+import re
+from time import sleep
+from app.config import settings
+from app.services.email_sender import send_quote_email
+from app.services.pdf_generator import generate_quote_pdf
+from app.services.quote_logic import (
+    get_quote_by_session,
+    create_new_quote,
+    update_quote_record,
+    append_message_log,
+    extract_properties_from_gpt4,
+    get_inline_quote_summary,
+    calculate_quote,
+    generate_next_actions,
+    log_debug_event,
+)
+from app.models.quote_models import QuoteRequest
+from urllib.parse import quote
 
 router = APIRouter()
 
@@ -917,6 +940,7 @@ async def log_debug(request: Request):
     except Exception as e:
         logging.error(f"❌ Error logging frontend debug message: {e}")
         return JSONResponse(content={"status": "error"}, status_code=500)
+
 
 # === /filter-response Route ===
 @router.post("/filter-response")
@@ -956,7 +980,7 @@ async def filter_response_entry(request: Request):
 
             greeting_log = "SYSTEM: You're Brendan, Orca Cleaning’s AI assistant. Greet the customer with a warm, friendly Aussie-style intro and ask what needs cleaning. Mention our seasonal discount."
             try:
-                _, reply = extract_properties_from_gpt4("__init__", greeting_log, record_id, quote_id)
+                _, reply = await extract_properties_from_gpt4("__init__", greeting_log, record_id, quote_id)
             except Exception as e:
                 logging.warning(f"⚠️ GPT greeting failed: {e}")
                 reply = "G'day! What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
@@ -1042,7 +1066,7 @@ async def filter_response_entry(request: Request):
         append_message_log(record_id, message, "user")
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log to extract properties.")
 
-        properties, reply = extract_properties_from_gpt4(message, log, record_id, quote_id)
+        properties, reply = await extract_properties_from_gpt4(message, log, record_id, quote_id)
         parsed_dict = {prop["property"]: prop["value"] for prop in properties if "property" in prop and "value" in prop}
 
         merged_fields = fields.copy()
