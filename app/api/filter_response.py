@@ -1054,19 +1054,12 @@ async def filter_response_entry(request: Request):
         raise HTTPException(status_code=500, detail="Internal server error.")
 
 
+@router.get("/force-flush-log")
+async def force_flush_log():
+    record_id = "recj7c1Ob419rBWiq"  # Your Airtable record ID
+    from app.utils.logging_utils import flush_debug_log, log_debug_event, update_quote_record
 
-from fastapi import APIRouter
-from fastapi.responses import PlainTextResponse
-from app.utils.logging_utils import flush_debug_log, log_debug_event
-
-router = APIRouter()
-
-@router.get("/force-log-test")
-async def force_log_test():
-    record_id = "recj7c1Ob419rBWiq"  # Replace this
-    log_debug_event(record_id, "MANUAL", "Test Log", "Manual test from /force-log-test")
-    flush = flush_debug_log(record_id)
-    if flush:
-        update_quote_record(record_id, {"debug_log": flush})
-        return PlainTextResponse("✅ Log flushed and written.")
-    return PlainTextResponse("⚠️ Nothing flushed.")
+    log_debug_event(record_id, "MANUAL", "Test Flush Triggered", "Running manual log flush route.")
+    flushed = flush_debug_log(record_id)
+    update_quote_record(record_id, {"debug_log": flushed})
+    return {"status": "flushed", "chars": len(flushed), "preview": flushed[:300]}
