@@ -964,7 +964,7 @@ async def filter_response_entry(request: Request):
 
             # Run GPT to ask for suburb, beds, baths, furnished
             log = "USER: __init__"
-            gpt_intro = "Just confirming suburb, bedrooms, bathrooms, and whether it's furnished — no greetings needed, frontend already said hi."
+            gpt_intro = "Start the conversation by asking what you will call the customer and what brings them here today (type of cleaning they want, suburb, bedrooms bathrooms etc) — no greetings needed, frontend already said hi."
             properties, reply = await extract_properties_from_gpt4(gpt_intro, log, record_id)
 
             append_message_log(record_id, reply, "brendan")
