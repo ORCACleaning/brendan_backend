@@ -921,7 +921,7 @@ async def log_debug(request: Request):
 
         return JSONResponse(content={"status": "success"})
     except Exception as e:
-        logging.error(f"❌ Error logging frontend debug message: {e}")
+        log_debug_event(None, "BACKEND", "Log Debug Error", str(e))
         return JSONResponse(content={"status": "error"}, status_code=500)
 
 
@@ -936,7 +936,6 @@ async def filter_response_entry(request: Request):
         log_debug_event(None, "BACKEND", "Incoming Message", f"Session: {session_id}, Message: {message}")
 
         if not session_id:
-            log_debug_event(None, "BACKEND", "Missing Session ID", "Session ID is required but not provided.")
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
         if message.lower() == "__init__":
@@ -946,55 +945,48 @@ async def filter_response_entry(request: Request):
             if existing:
                 try:
                     quote_id, record_id, stage, fields = existing
-                    log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Session: {session_id}")
                     timestamp = fields.get("timestamp")
                     if stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not timestamp:
-                        raise ValueError("Triggering new quote due to expired or complete quote")
-                except Exception as e:
-                    log_debug_event(None, "BACKEND", "Forced New Quote", f"Reason: {str(e)}")
+                        raise ValueError("Stale or complete quote")
+                except Exception:
                     existing = None
 
             if not existing:
                 quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
                 session_id = fields.get("session_id", session_id)
-                log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote created with session_id: {session_id}")
-
-            greeting_log = "SYSTEM: You're Brendan, Orca Cleaning’s AI assistant. Greet the customer with a warm, friendly Aussie-style intro and ask what needs cleaning. Mention our seasonal discount."
-            try:
-                _, reply = await extract_properties_from_gpt4("__init__", greeting_log, record_id, quote_id)
-            except Exception as e:
-                logging.warning(f"⚠️ GPT greeting failed: {e}")
-                reply = "G'day! What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
+                log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}")
 
             append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-            log_debug_event(record_id, "BACKEND", "Greeting Sent", reply)
-
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            log_debug_event(record_id, "BACKEND", "Init Complete", "Chat flow started with new session.")
+            return JSONResponse(content={
+                "properties": [],
+                "response": "",
+                "next_actions": [],
+                "session_id": session_id
+            })
 
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
-            log_debug_event(None, "BACKEND", "Quote Not Found", f"No quote found for session: {session_id}")
             raise HTTPException(status_code=404, detail="Quote not found.")
 
         quote_id, record_id, stage, fields = quote_data
         message_lower = message.lower()
-        pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "email quote", "pdf quote"]
+        pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email quote", "pdf quote"]
 
         if stage == "Chat Banned":
-            reply = "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote."
-            log_debug_event(record_id, "BACKEND", "Blocked Message", "User is banned.")
+            reply = "This chat is closed. Call 1300 918 388 if you still need a quote."
+            log_debug_event(record_id, "BACKEND", "Blocked", "User is banned.")
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
-            if message_lower in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
+            if message_lower in ["yes", "yep", "ok", "sure", "go ahead"]:
                 update_quote_record(record_id, {"privacy_acknowledged": True})
                 fields = get_quote_by_session(session_id)[3]
-                reply = "Great! Could you please provide your name, email, phone number, and (optional) property address so I can send the PDF quote?"
-                log_debug_event(record_id, "BACKEND", "Privacy Acknowledged", "User accepted privacy policy.")
+                reply = "Thanks! What’s your name, email, phone number, and (optional) property address?"
+                log_debug_event(record_id, "BACKEND", "Privacy Acknowledged", "User accepted.")
             else:
-                reply = "No problem — we only need your name, email, phone number (and optional property address) to send the quote. Let me know if you'd like to continue or if you have any questions about our privacy policy."
-                log_debug_event(record_id, "BACKEND", "Privacy Denied", "User has not yet accepted privacy policy.")
+                reply = "No worries — we just need your name, email and phone to send the quote. Let me know when you're ready."
+                log_debug_event(record_id, "BACKEND", "Privacy Awaiting", "Still waiting on consent.")
 
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
@@ -1002,64 +994,61 @@ async def filter_response_entry(request: Request):
 
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
-                customer_email = str(fields.get("customer_email", "")).strip()
-                if not re.match(r"[^@]+@[^@]+\.[^@]+", customer_email):
-                    reply = "That email doesn’t look right — could you double check and send it again?"
+                email = fields.get("customer_email", "")
+                if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+                    reply = "Hmm, that email looks off — could you double check it?"
                     append_message_log(record_id, message, "user")
                     append_message_log(record_id, reply, "brendan")
-                    log_debug_event(record_id, "BACKEND", "Email Validation Failed", f"Input: {customer_email}")
                     return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
                 update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
                 fields = get_quote_by_session(session_id)[3]
+
                 try:
                     pdf_path = generate_quote_pdf(fields)
                     send_quote_email(
-                        to_email=customer_email,
+                        to_email=email,
                         customer_name=fields.get("customer_name"),
                         pdf_path=pdf_path,
                         quote_id=quote_id
                     )
                     update_quote_record(record_id, {"pdf_link": pdf_path})
-                    reply = "Thanks so much — I’ve sent your quote through to your email! Let me know if there’s anything else I can help with."
-                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"Quote emailed to {customer_email}")
+                    reply = "All done! I’ve just emailed your quote. Let me know if you need anything else."
+                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"To: {email}")
                 except Exception as e:
-                    logging.exception(f"❌ PDF Generation/Email Sending Failed: {e}")
-                    reply = "Sorry — I ran into an issue while generating your PDF quote. Please call our office on 1300 918 388 and we’ll sort it out for you."
+                    reply = "Something went wrong while sending your quote. Please call 1300 918 388 and we’ll help out."
                     log_debug_event(record_id, "BACKEND", "PDF Error", str(e))
 
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
                 return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        log = fields.get("message_log", "")
+        log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
         if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords):
-            log = PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]
-        else:
-            log = log[-LOG_TRUNCATE_LENGTH:]
+            log = PDF_SYSTEM_MESSAGE + "\n\n" + log
 
         append_message_log(record_id, message, "user")
-        log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log to extract properties.")
+        log_debug_event(record_id, "BACKEND", "Calling GPT", "Sending log to GPT for field extraction.")
 
         properties, reply = await extract_properties_from_gpt4(message, log, record_id, quote_id)
-        parsed_dict = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
-        merged_fields = fields.copy()
-        merged_fields.update(parsed_dict)
+        parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
 
-        if parsed_dict.get("quote_stage") == "Quote Calculated" and message_lower not in pdf_keywords:
+        merged = fields.copy()
+        merged.update(parsed)
+
+        if parsed.get("quote_stage") == "Quote Calculated" and message_lower not in pdf_keywords:
             try:
-                quote_obj = calculate_quote(QuoteRequest(**merged_fields))
-                parsed_dict.update(quote_obj.model_dump())
-                summary = get_inline_quote_summary(quote_obj.model_dump())
-                reply = summary + "\n\nWould you like me to send this quote to your email as a PDF?"
-                log_debug_event(record_id, "BACKEND", "Quote Calculated", f"Total: ${parsed_dict.get('total_price')}, Time: {parsed_dict.get('estimated_time_mins')} mins")
+                result = calculate_quote(QuoteRequest(**merged))
+                parsed.update(result.model_dump())
+                summary = get_inline_quote_summary(result.model_dump())
+                reply = summary + "\n\nWould you like me to email you this quote as a PDF?"
+                log_debug_event(record_id, "BACKEND", "Quote Ready", f"${parsed.get('total_price')} for {parsed.get('estimated_time_mins')} mins")
             except Exception as e:
-                logging.warning(f"⚠️ Quote calculation failed: {e}")
-                log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
+                log_debug_event(record_id, "BACKEND", "Quote Calc Fail", str(e))
 
-        update_quote_record(record_id, parsed_dict)
+        update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
-        next_actions = generate_next_actions() if parsed_dict.get("quote_stage") == "Quote Calculated" else []
+        next_actions = generate_next_actions() if parsed.get("quote_stage") == "Quote Calculated" else []
 
         return JSONResponse(content={
             "properties": properties,
@@ -1069,6 +1058,5 @@ async def filter_response_entry(request: Request):
         })
 
     except Exception as e:
-        logging.exception("❌ Error in /filter-response route")
-        log_debug_event(None, "BACKEND", "Route Error", str(e))
+        log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
