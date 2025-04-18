@@ -1,7 +1,8 @@
 import json
 import requests
 import logging
-from app.utils.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS, TRUE_VALUES
+
+from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS, TRUE_VALUES
 from app.config import settings
 
 logger = logging.getLogger(__name__)
