@@ -626,7 +626,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Message: {message}")
         return [], reply
 
-    # === Retrieve existing Airtable record ===
     existing = {}
     current_stage = ""
     if not skip_log_lookup and record_id:
@@ -641,7 +640,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
-    # === Format log into OpenAI messages ===
     prepared_log = re.sub(r'[^ -~\n]', '', log[-LOG_TRUNCATE_LENGTH:])
     messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
@@ -662,7 +660,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "Be efficient, natural, and never say welcome or hello again."
             )
         })
-
     elif current_stage == "Quote Calculated":
         messages.append({
             "role": "system",
@@ -671,7 +668,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     messages.append({"role": "user", "content": message.strip()})
 
-    # === GPT Call Helper ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -689,7 +685,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 log_debug_event(record_id, "GPT", "Call Failed", str(e))
             raise
 
-    # === Parse GPT JSON ===
     parsed = {}
     for attempt in range(2):
         try:
@@ -719,7 +714,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if name not in existing_keys:
             props.append({"property": name, "value": default})
 
-    # === Carpet logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
@@ -736,7 +730,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if "carpet_cleaning" not in existing_keys:
             props.append({"property": "carpet_cleaning", "value": True})
 
-    # === Ask for missing carpet fields ===
     missing_carpet = [f for f in carpet_fields if f not in existing_keys]
     if missing_carpet:
         msg = (
@@ -747,7 +740,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Missing Carpet Fields", f"Missing: {missing_carpet}")
         return props, msg
 
-    # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -764,7 +756,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
-    # === Fallback reply ===
     if not props:
         return [], "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
 
