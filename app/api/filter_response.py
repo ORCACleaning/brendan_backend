@@ -1069,10 +1069,14 @@ async def filter_response_entry(request: Request):
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
 
-        # Final debug flush
-        flush = flush_debug_log(record_id)
-        if flush:
-            update_quote_record(record_id, {"debug_log": flush})
+        # === Final debug flush with safety wrapper ===
+        try:
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
+        except Exception as e:
+            logger.warning(f"⚠️ Final debug flush failed: {e}")
+            log_debug_event(record_id, "BACKEND", "Final Flush Failed", str(e))
 
         next_actions = generate_next_actions() if parsed.get("quote_stage") == "Quote Calculated" else []
 
