@@ -27,6 +27,7 @@ from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS
 from app.utils.logging_utils import log_debug_event
 from app.services.quote_id_utils import get_next_quote_id
 from urllib.parse import quote  # ✅ Ensure this import is at the top of your file
+from app.config import LOG_TRUNCATE_LENGTH, MAX_LOG_LENGTH, PDF_SYSTEM_MESSAGE, TABLE_NAME
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
@@ -357,6 +358,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
+    # Furnished normalization
     if "furnished" in fields:
         val = str(fields["furnished"]).strip().lower()
         if "unfurnished" in val:
@@ -374,17 +376,18 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
             continue
 
+        # === Normalize by type ===
         if key in BOOLEAN_FIELDS:
             if isinstance(value, bool):
                 pass
-            elif value in [None, ""]:
-                value = False
+            elif str(value).strip().lower() in TRUE_VALUES:
+                value = True
             else:
-                value = str(value).strip().lower() in TRUE_VALUES
+                value = False
 
         elif key in INTEGER_FIELDS:
             try:
-                value = int(value)
+                value = int(float(value))  # supports float as int
                 if value > MAX_REASONABLE_INT:
                     logger.warning(f"⚠️ Clamping large value for {key}: {value}")
                     value = MAX_REASONABLE_INT
@@ -418,10 +421,12 @@ def update_quote_record(record_id: str, fields: dict):
 
         normalized_fields[key] = value
 
-    if "privacy_acknowledged" in fields:
-        normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
+    # Force specific critical defaults
+    normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged", False))
+    normalized_fields["carpet_cleaning"] = bool(fields.get("carpet_cleaning", False))
+    normalized_fields["upholstery_cleaning"] = bool(fields.get("upholstery_cleaning", False))
 
-    # Always force-include logs, even if empty
+    # Always include logs
     for log_field in ["message_log", "debug_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
@@ -434,13 +439,13 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
-    # Final validation before update
+    # Final field validation before update
     for key in list(normalized_fields.keys()):
         if key not in VALID_AIRTABLE_FIELDS:
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
             normalized_fields.pop(key, None)
 
-    # === Bulk Update Attempt ===
+    # === Bulk Update ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
         if res.ok:
@@ -596,30 +601,26 @@ def generate_next_actions():
 
 # === GPT Extraction (Production-Grade) ===
 
-def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
-    import json
-    import random
-    import re
-    from time import sleep
-
+async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
     logger.info("🧑‍🔬 Calling GPT-4 Turbo to extract properties...")
+
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log for extraction.")
 
-    # === Filter out useless messages like "hi" ===
     weak_inputs = ["hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"]
     if message.lower().strip() in weak_inputs:
-        reply = ("Hey there! I’m here to help — just let me know which suburb you're in, how many bedrooms and "
-                 "bathrooms you’ve got, and whether the place is furnished or unfurnished.")
+        reply = (
+            "Hey there! I’m here to help — just let me know which suburb you're in, how many bedrooms and "
+            "bathrooms you’ve got, and whether the place is furnished or unfurnished."
+        )
         if record_id:
             log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Message: {message}")
-        return {}, reply
+        return [], reply
 
-    # === Prepare message log into GPT-4 Turbo format ===
-    prepared_log = log[-LOG_TRUNCATE_LENGTH:]
-    prepared_log = re.sub(r'[^ -~\n]', '', prepared_log)  # Strip unicode
-
+    # === Preprocess message log ===
+    prepared_log = re.sub(r'[^ -~\n]', '', log[-LOG_TRUNCATE_LENGTH:])
     messages = []
+
     for line in prepared_log.split("\n"):
         if line.startswith("USER:"):
             messages.append({"role": "user", "content": line[5:].strip()})
@@ -628,23 +629,22 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
-    # Add the latest user message again for clarity
     messages.append({"role": "user", "content": message.strip()})
+    messages.insert(0, {"role": "system", "content": GPT_PROMPT})
 
-    # === Call GPT Function ===
+    # === Call GPT with retry and validation ===
     def call_gpt(messages_block):
         try:
             response = client.chat.completions.create(
                 model="gpt-4-turbo",
-                messages=[{"role": "system", "content": GPT_PROMPT}] + messages_block,
+                messages=messages_block,
                 max_tokens=3000,
                 temperature=0.4
             )
             if not response.choices:
                 raise ValueError("No choices returned from GPT-4.")
             raw = response.choices[0].message.content.strip()
-            raw = raw.replace("```json", "").replace("```", "").strip()
-            return raw
+            return raw.replace("```json", "").replace("```", "").strip()
         except Exception as e:
             logger.error(f"❌ GPT-4 request failed: {e}")
             if record_id:
@@ -670,19 +670,41 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
             if record_id:
                 log_debug_event(record_id, "GPT", f"Parsing Failed Attempt {attempt + 1}", str(e))
             if attempt == 1:
-                return {}, "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
+                return [], "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
             sleep(1)
 
     props = parsed.get("properties", [])
     reply = parsed.get("response", "")
 
-    if record_id:
-        log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}")
-    logger.debug(f"✅ Parsed props: {props}")
-    logger.debug(f"✅ Parsed reply: {reply}")
+    # === Add fallback fields if missing ===
+    existing_keys = {p["property"] for p in props if "property" in p}
+    def ensure_property(key: str, default):
+        if key not in existing_keys:
+            props.append({"property": key, "value": default})
 
-    # === Fetch existing record (for abuse logic) ===
-    existing = {}
+    ensure_property("carpet_study_count", 0)
+    ensure_property("upholstery_cleaning", False)
+    ensure_property("carpet_cleaning", False)
+
+    # === Auto-enable carpet_cleaning if any carpet fields > 0 ===
+    carpet_fields = [
+        "carpet_bedroom_count", "carpet_living_count", "carpet_study_count",
+        "carpet_hallway_count", "carpet_stairs_count"
+    ]
+    carpet_count = sum(
+        int(p["value"]) for p in props
+        if p["property"] in carpet_fields and isinstance(p.get("value"), (int, float)) and p["value"] > 0
+    )
+    if carpet_count > 0:
+        for p in props:
+            if p["property"] == "carpet_cleaning":
+                p["value"] = True
+                break
+        else:
+            props.append({"property": "carpet_cleaning", "value": True})
+
+    # === Abuse Detection ===
+    abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if record_id:
         try:
             url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
@@ -693,39 +715,35 @@ def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, 
         except Exception as e:
             logger.error(f"❌ Failed to fetch existing record from Airtable: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
+            existing = {}
+    else:
+        existing = {}
 
-    logger.warning(f"🔍 Existing Airtable Fields: {existing}")
     current_stage = existing.get("quote_stage", "")
-    field_updates = {}
-
-    # === Abuse Detection ===
-    abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         if not quote_id and existing:
             quote_id = existing.get("quote_id", "N/A")
         if current_stage == "Abuse Warning":
-            field_updates["quote_stage"] = "Chat Banned"
             reply = random.choice([
                 f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id}. This chat is now closed.",
                 f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
                 f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
             ])
             log_debug_event(record_id, "BACKEND", "Chat Banned", f"User repeated abusive language. Quote ID: {quote_id}")
-            return field_updates, reply
+            return [{"property": "quote_stage", "value": "Chat Banned"}], reply
         else:
-            field_updates["quote_stage"] = "Abuse Warning"
             reply = ("Just a heads-up — we can’t continue the quote if abusive language is used. "
                      "Let’s keep things respectful 👍\n\n" + reply)
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First offensive message detected.")
-            return field_updates, reply.strip()
+            return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
-    # === Final Fallback for Empty Props ===
     if not props:
         reply = "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
-        return {}, reply
+        return [], reply
 
-    field_updates["quote_stage"] = "Gathering Info"
+    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}")
     return props, reply.strip()
+
 
 # === GPT Error Email Alert ===
 
@@ -795,7 +813,6 @@ def append_message_log(record_id: str, message: str, sender: str):
     Appends a new message to the 'message_log' field in Airtable.
     Truncates from the start if the log exceeds MAX_LOG_LENGTH.
     """
-
     if not record_id:
         logger.error("❌ Cannot append message log — missing record ID")
         try:
@@ -811,7 +828,7 @@ def append_message_log(record_id: str, message: str, sender: str):
 
     sender_clean = str(sender or "user").strip().upper()
 
-    # === Fix 5: Handle special __init__ case ===
+    # === Handle __init__ as system trigger ===
     if sender_clean == "USER" and message.lower() == "__init__":
         new_entry = "SYSTEM_TRIGGER: Brendan started a new quote"
     else:
@@ -822,7 +839,8 @@ def append_message_log(record_id: str, message: str, sender: str):
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
     }
 
-    # === Fetch Existing Log ===
+    # === Fetch Existing Message Log ===
+    current = {}
     for attempt in range(3):
         try:
             res = requests.get(url, headers=headers)
@@ -843,7 +861,6 @@ def append_message_log(record_id: str, message: str, sender: str):
     old_log = str(current.get("fields", {}).get("message_log", "")).strip()
     combined_log = f"{old_log}\n{new_entry}" if old_log else new_entry
 
-    # === Enforce Length Limit ===
     was_truncated = False
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
@@ -862,7 +879,6 @@ def append_message_log(record_id: str, message: str, sender: str):
             logger.error(f"❌ Error logging log update failure: {log_e}")
         return
 
-    # === Debug Log Event ===
     try:
         detail_msg = f"{sender_clean} message logged ({len(message)} chars)"
         if sender_clean == "USER" and message.lower() == "__init__":
@@ -877,9 +893,11 @@ def append_message_log(record_id: str, message: str, sender: str):
         except Exception as log_e:
             logger.error(f"❌ Error logging debug event failure: {log_e}")
 
+
 # === Brendan Filter Response Route ===
 
-# === Brendan API Router ===
+
+
 router = APIRouter()
 
 # === /log-debug Route ===
@@ -899,7 +917,6 @@ async def log_debug(request: Request):
     except Exception as e:
         logging.error(f"❌ Error logging frontend debug message: {e}")
         return JSONResponse(content={"status": "error"}, status_code=500)
-
 
 # === /filter-response Route ===
 @router.post("/filter-response")
@@ -937,7 +954,13 @@ async def filter_response_entry(request: Request):
                 session_id = fields.get("session_id", session_id)
                 log_debug_event(record_id, "BACKEND", "Quote Created", f"New quote created with session_id: {session_id}")
 
-            reply = "What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
+            greeting_log = "SYSTEM: You're Brendan, Orca Cleaning’s AI assistant. Greet the customer with a warm, friendly Aussie-style intro and ask what needs cleaning. Mention our seasonal discount."
+            try:
+                _, reply = extract_properties_from_gpt4("__init__", greeting_log, record_id, quote_id)
+            except Exception as e:
+                logging.warning(f"⚠️ GPT greeting failed: {e}")
+                reply = "G'day! What needs cleaning today — bedrooms, bathrooms, oven, carpets, anything else?"
+
             append_message_log(record_id, message, "user")
             append_message_log(record_id, reply, "brendan")
             log_debug_event(record_id, "BACKEND", "Greeting Sent", reply)
