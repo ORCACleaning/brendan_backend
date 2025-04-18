@@ -13,8 +13,7 @@ def generate_quote_pdf(data: dict) -> (str, str):
     Generate a PDF quote using WeasyPrint & Jinja2.
     Returns: (Absolute PDF Path, Public PDF URL)
     """
-
-    # === Generate Safe Quote ID ===
+    # === Generate Safe Quote ID and Output Path ===
     quote_id = data.get("quote_id") or f"VAC-{uuid.uuid4().hex[:8]}"
     filename = f"{quote_id}.pdf"
     output_path = f"app/static/quotes/{filename}"
@@ -27,7 +26,7 @@ def generate_quote_pdf(data: dict) -> (str, str):
     if record_id:
         log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
 
-    # === Load Logo Base64 ===
+    # === Load Logo as Base64 ===
     logo_path = "app/static/orca_logo.png"
     try:
         with open(logo_path, "rb") as f:
@@ -40,11 +39,17 @@ def generate_quote_pdf(data: dict) -> (str, str):
 
     data["logo_base64"] = logo_base64
 
-    # === Load Template ===
-    env = Environment(loader=FileSystemLoader("app/services/templates"))
-    template = env.get_template("quote_template.html")
+    # === Jinja2 Template Setup ===
+    try:
+        env = Environment(loader=FileSystemLoader("app/services/templates"))
+        template = env.get_template("quote_template.html")
+    except Exception as e:
+        logger.error(f"❌ Failed to load template: {e}")
+        if record_id:
+            log_debug_event(record_id, "BACKEND", "Template Load Failed", str(e))
+        raise
 
-    # === Extra Services List ===
+    # === Generate List of Extra Services ===
     extra_services = []
 
     if data.get("window_cleaning"):
@@ -59,7 +64,6 @@ def generate_quote_pdf(data: dict) -> (str, str):
         ("carpet_stairs_count", "stairs"),
         ("carpet_other_count", "other area"),
     ]
-
     for field, label in carpet_map:
         count = int(data.get(field) or 0)
         if count > 0:
@@ -76,14 +80,16 @@ def generate_quote_pdf(data: dict) -> (str, str):
         "blind_cleaning": "Blind/Curtain Cleaning",
         "upholstery_cleaning": "Upholstery Cleaning",
     }
-
     for field, label in extras_map.items():
         if data.get(field):
             extra_services.append(label)
 
     data["extra_services"] = ", ".join(extra_services) if extra_services else "None"
 
-    # === Property Manager Note ===
+    if record_id:
+        log_debug_event(record_id, "BACKEND", "PDF Extra Services", data["extra_services"])
+
+    # === Property Manager Discount Note ===
     if data.get("is_property_manager"):
         agency = data.get("real_estate_name", "Your Real Estate Agency")
         data["property_manager_note"] = f"✅ Property Manager Discount Applied (5%) — {agency}"
@@ -101,15 +107,20 @@ def generate_quote_pdf(data: dict) -> (str, str):
     data["weekend_note"] = (
         f"✅ Weekend Cleaning Surcharge (${weekend_surcharge:.2f})" if weekend_surcharge > 0 else "–"
     )
-
     data["weekend_surcharge"] = weekend_surcharge
 
-    # === Render & Export PDF ===
-    html_out = template.render(**data)
-    HTML(string=html_out, base_url=".").write_pdf(output_path)
-
-    logger.info(f"✅ PDF Generated: {output_path}")
-    if record_id:
-        log_debug_event(record_id, "BACKEND", "PDF Generated", f"PDF saved to {output_path}, URL: {pdf_url}")
+    # === Render HTML and Export to PDF ===
+    try:
+        html_out = template.render(**data)
+        HTML(string=html_out, base_url=".").write_pdf(output_path)
+        logger.info(f"✅ PDF Generated: {output_path}")
+        if record_id:
+            log_debug_event(record_id, "BACKEND", "PDF Generated", f"Saved to {output_path}")
+            log_debug_event(record_id, "BACKEND", "PDF Public URL", pdf_url)
+    except Exception as e:
+        logger.error(f"❌ PDF rendering or saving failed: {e}")
+        if record_id:
+            log_debug_event(record_id, "BACKEND", "PDF Render Error", str(e))
+        raise
 
     return output_path, pdf_url
