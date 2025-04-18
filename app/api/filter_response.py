@@ -514,7 +514,7 @@ def get_inline_quote_summary(data: dict) -> str:
     hours = time_est_mins / 60
     cleaners = max(1, (time_est_mins + 299) // 300)  # Max 5 hours per cleaner
     hours_per_cleaner = hours / cleaners
-    hours_per_cleaner_rounded = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
+    hours_display = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
 
     # === Dynamic Opening Line ===
     if price >= 800:
@@ -528,12 +528,12 @@ def get_inline_quote_summary(data: dict) -> str:
 
     summary = f"{opening}"
     summary += f"💰 Total Price (incl. GST): ${price:.2f}\n"
-    summary += f"⏰ Estimated Time: ~{hours_per_cleaner_rounded} hour(s) per cleaner with {cleaners} cleaner(s)\n"
+    summary += f"⏰ Estimated Time: ~{hours_display} hour(s) per cleaner with {cleaners} cleaner(s)\n"
 
     # === Discount Line Logic ===
     if discount > 0:
-        if is_property_manager and discount >= price / 1.1 * 0.15:
-            summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special (+5% Property Manager Bonus)\n"
+        if is_property_manager and discount >= (price / 1.1) * 0.15:
+            summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special + 5% Property Manager Bonus\n"
         else:
             summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special\n"
 
@@ -564,20 +564,19 @@ def get_inline_quote_summary(data: dict) -> str:
         selected_services.append(f"- Special Request: {special_requests}")
 
     if selected_services:
-        summary += "\n🧹 Cleaning Included:\n" + "\n".join(selected_services) + "\n"
+        summary += "\n🧹 Cleaning Included:\n" + "\n".join(selected_services)
 
     # === Notes (Optional) ===
     if note:
-        summary += f"\n📜 Note: {note}\n"
+        summary += f"\n\n📜 Note: {note}"
 
     # === Closing Line ===
     summary += (
-        "\nThis quote is valid for 7 days.\n"
+        "\n\nThis quote is valid for 7 days.\n"
         "Would you like me to send this to your email as a PDF, or would you like to make any changes?"
     )
 
     return summary.strip()
-
 
 
 # === Generate Next Actions After Quote ===
@@ -613,13 +612,13 @@ def generate_next_actions():
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None):
+   
     logger.info("🧑‍🔬 Calling GPT-4 Turbo to extract properties...")
-
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log for extraction.")
 
-    # === Weak inputs (small talk / test messages) ===
-    weak_inputs = ["hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"]
+    # === Skip weak small talk ===
+    weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
         reply = (
             "Hey there! I’m here to help — just let me know which suburb you're in, how many bedrooms and "
@@ -629,10 +628,24 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Message: {message}")
         return [], reply
 
-    # === Format message log for GPT ===
-    prepared_log = re.sub(r'[^ -~\n]', '', log[-LOG_TRUNCATE_LENGTH:])
-    messages = []
+    # === Retrieve current Airtable state (needed for quote_stage awareness and abuse escalation) ===
+    existing = {}
+    current_stage = ""
+    if record_id:
+        try:
+            url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+            headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
+            res = requests.get(url, headers=headers)
+            res.raise_for_status()
+            existing = res.json().get("fields", {})
+            current_stage = existing.get("quote_stage", "")
+        except Exception as e:
+            logger.error(f"❌ Airtable fetch failed: {e}")
+            log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
+    # === Format log and inject SYSTEM guard for calculated quotes ===
+    prepared_log = re.sub(r'[^ -~\n]', '', log[-LOG_TRUNCATE_LENGTH:])
+    messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
         if line.startswith("USER:"):
             messages.append({"role": "user", "content": line[5:].strip()})
@@ -641,27 +654,34 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
-    messages.insert(0, {"role": "system", "content": GPT_PROMPT})
+    # Inject quote-stage message to stop premature confirmation
+    if current_stage == "Quote Calculated":
+        messages.append({
+            "role": "system",
+            "content": "REMINDER: The quote has already been calculated. Do NOT confirm or imply quote readiness again unless user requests changes."
+        })
+
     messages.append({"role": "user", "content": message.strip()})
 
-    # === GPT call helper ===
-    def call_gpt(messages_block):
+    # === GPT Call Helper ===
+    def call_gpt(msgs):
         try:
-            response = client.chat.completions.create(
+            res = client.chat.completions.create(
                 model="gpt-4-turbo",
-                messages=messages_block,
+                messages=msgs,
                 max_tokens=3000,
                 temperature=0.4
             )
-            if not response.choices:
+            if not res.choices:
                 raise ValueError("No choices returned.")
-            return response.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
+            return res.choices[0].message.content.strip().replace("```json", "").replace("```", "").strip()
         except Exception as e:
             logger.error(f"❌ GPT-4 request failed: {e}")
             if record_id:
                 log_debug_event(record_id, "GPT", "Request Failed", str(e))
             raise
 
+    # === Call GPT and parse JSON ===
     parsed = {}
     for attempt in range(2):
         try:
@@ -672,65 +692,59 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
-                raise ValueError("JSON block not found in GPT response.")
-
+                raise ValueError("JSON block not found.")
             parsed = json.loads(raw[start:end + 1])
             break
         except Exception as e:
-            logger.warning(f"⚠️ GPT extraction failed (attempt {attempt + 1}): {e}")
+            logger.warning(f"⚠️ GPT parsing failed (attempt {attempt + 1}): {e}")
             if record_id:
-                log_debug_event(record_id, "GPT", f"Parsing Failed Attempt {attempt + 1}", str(e))
+                log_debug_event(record_id, "GPT", f"Parse Error Attempt {attempt + 1}", str(e))
             if attempt == 1:
-                log_debug_event(record_id, "GPT", "Fallback Reply Used", "Returning GPT reply with no properties.")
                 return [], raw.strip()
             sleep(1)
 
     props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
-
-    # === Add fallback boolean/int fields ===
     existing_keys = {p["property"] for p in props if "property" in p}
-    def ensure_property(key: str, default):
-        if key not in existing_keys:
-            props.append({"property": key, "value": default})
 
-    ensure_property("carpet_study_count", 0)
-    ensure_property("upholstery_cleaning", False)
-    ensure_property("carpet_cleaning", False)
+    def ensure_field(name: str, default):
+        if name not in existing_keys:
+            props.append({"property": name, "value": default})
 
-    # === Auto-check carpet_cleaning if any carpet room field > 0 ===
+    # === Carpet logic ===
     carpet_fields = [
-        "carpet_bedroom_count", "carpet_living_count", "carpet_study_count",
-        "carpet_hallway_count", "carpet_stairs_count"
+        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
+    ensure_field("carpet_study_count", 0)
+    ensure_field("upholstery_cleaning", False)
+    ensure_field("carpet_cleaning", False)
+
     carpet_count = sum(
-        int(p["value"]) for p in props
-        if p["property"] in carpet_fields and isinstance(p.get("value"), (int, float)) and p["value"] > 0
+        int(p.get("value", 0)) for p in props
+        if p["property"] in carpet_fields and isinstance(p.get("value"), (int, float))
     )
     if carpet_count > 0:
-        found = False
         for p in props:
             if p["property"] == "carpet_cleaning":
                 p["value"] = True
-                found = True
-        if not found:
+                break
+        else:
             props.append({"property": "carpet_cleaning", "value": True})
 
-    # === Abuse detection and escalation ===
-    abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
-    existing = {}
-    if record_id:
-        try:
-            url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-            headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
-            res = requests.get(url, headers=headers)
-            res.raise_for_status()
-            existing = res.json().get("fields", {})
-        except Exception as e:
-            logger.error(f"❌ Failed to fetch Airtable record: {e}")
-            log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
+    # === Ask for missing carpet counts if any are missing ===
+    missing_carpet = [f for f in carpet_fields if f not in existing_keys]
+    if missing_carpet:
+        msg = (
+            "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
+            "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
+        )
+        if record_id:
+            log_debug_event(record_id, "GPT", "Missing Carpet Fields", f"Missing: {missing_carpet}")
+        return props, msg
 
-    current_stage = existing.get("quote_stage", "")
+    # === Abuse detection ===
+    abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         if not quote_id and existing:
             quote_id = existing.get("quote_id", "N/A")
@@ -740,21 +754,19 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
                 f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
             ])
-            log_debug_event(record_id, "BACKEND", "Chat Banned", f"User repeated abusive language. Quote ID: {quote_id}")
+            log_debug_event(record_id, "BACKEND", "Chat Banned", f"Repeated abuse. Quote ID: {quote_id}")
             return [{"property": "quote_stage", "value": "Chat Banned"}], reply
         else:
-            reply = ("Just a heads-up — we can’t continue the quote if abusive language is used. "
-                     "Let’s keep things respectful 👍\n\n" + reply)
-            log_debug_event(record_id, "BACKEND", "Abuse Warning", "First offensive message detected.")
+            reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
+            log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
-    # === Final fallback if GPT gave no properties ===
+    # === Fallback if nothing useful returned ===
     if not props:
         return [], "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
 
-    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props found: {len(props)} | Reply: {reply[:100]}...")
+    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | Reply: {reply[:100]}...")
     return props, reply
-
 
 # === GPT Error Email Alert ===
 
@@ -891,8 +903,6 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 # === Brendan Filter Response Route ===
 
-router = APIRouter()
-
 # === Brendan API Router ===
 router = APIRouter()
 
@@ -929,16 +939,14 @@ async def filter_response_entry(request: Request):
             log_debug_event(None, "BACKEND", "Missing Session ID", "Session ID is required but not provided.")
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # === INIT FLOW ===
         if message.lower() == "__init__":
             log_debug_event(None, "BACKEND", "Init Triggered", "User opened chat and triggered __init__.")
-
             existing = get_quote_by_session(session_id)
-            if existing is not None:
+
+            if existing:
                 try:
                     quote_id, record_id, stage, fields = existing
                     log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Session: {session_id}")
-
                     timestamp = fields.get("timestamp")
                     if stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not timestamp:
                         raise ValueError("Triggering new quote due to expired or complete quote")
@@ -964,7 +972,6 @@ async def filter_response_entry(request: Request):
 
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Quote Lookup ===
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             log_debug_event(None, "BACKEND", "Quote Not Found", f"No quote found for session: {session_id}")
@@ -974,13 +981,11 @@ async def filter_response_entry(request: Request):
         message_lower = message.lower()
         pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email it to me", "email quote", "pdf quote"]
 
-        # === If user is banned ===
         if stage == "Chat Banned":
             reply = "This chat is closed due to prior messages. Please call 1300 918 388 if you still need a quote."
             log_debug_event(record_id, "BACKEND", "Blocked Message", "User is banned.")
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Privacy Consent Flow ===
         if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
             if message_lower in ["yes", "yep", "sure", "ok", "okay", "yes please", "go ahead"]:
                 update_quote_record(record_id, {"privacy_acknowledged": True})
@@ -995,7 +1000,6 @@ async def filter_response_entry(request: Request):
             append_message_log(record_id, reply, "brendan")
             return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Personal Info Received + Email Validation ===
         if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
                 customer_email = str(fields.get("customer_email", "")).strip()
@@ -1008,7 +1012,6 @@ async def filter_response_entry(request: Request):
 
                 update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
                 fields = get_quote_by_session(session_id)[3]
-
                 try:
                     pdf_path = generate_quote_pdf(fields)
                     send_quote_email(
@@ -1029,7 +1032,6 @@ async def filter_response_entry(request: Request):
                 append_message_log(record_id, reply, "brendan")
                 return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
-        # === Normal Message Flow ===
         log = fields.get("message_log", "")
         if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords):
             log = PDF_SYSTEM_MESSAGE + "\n\n" + log[-LOG_TRUNCATE_LENGTH:]
@@ -1040,8 +1042,7 @@ async def filter_response_entry(request: Request):
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", "Sending message log to extract properties.")
 
         properties, reply = await extract_properties_from_gpt4(message, log, record_id, quote_id)
-        parsed_dict = {prop["property"]: prop["value"] for prop in properties if "property" in prop and "value" in prop}
-
+        parsed_dict = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         merged_fields = fields.copy()
         merged_fields.update(parsed_dict)
 
