@@ -293,8 +293,12 @@ def create_new_quote(session_id: str, force_new: bool = False):
 def get_quote_by_session(session_id: str):
     """
     Retrieves the latest quote record from Airtable using session_id.
-    Returns: (quote_id, record_id, quote_stage, fields) or None.
+    Returns: (quote_id, record_id, quote_stage, fields) or None if not found.
     """
+    if not session_id:
+        logger.warning("⚠️ get_quote_by_session called with empty session_id")
+        return None
+
     safe_table_name = quote(TABLE_NAME)
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
     headers = {
@@ -307,41 +311,42 @@ def get_quote_by_session(session_id: str):
         "pageSize": 1
     }
 
-    logger.info(f"🔍 Searching for quote by session_id: {session_id}")
-    log_debug_event(None, "BACKEND", "Session Lookup Attempt", f"Initiating lookup for session_id: {session_id}")
+    logger.info(f"🔍 Looking up quote by session_id: {session_id}")
+    log_debug_event(None, "BACKEND", "Session Lookup Start", f"Session ID: {session_id}")
 
+    response_data = None
     for attempt in range(3):
         try:
-            log_debug_event(None, "BACKEND", "Airtable Request Sent", f"Attempt {attempt + 1}: Sending GET to Airtable with session_id filter")
+            log_debug_event(None, "BACKEND", "Session Lookup Request", f"Attempt {attempt + 1} — GET to Airtable")
             res = requests.get(url, headers=headers, params=params)
             res.raise_for_status()
-            data = res.json()
-            log_debug_event(None, "BACKEND", "Airtable Response Received", f"Attempt {attempt + 1}: Successfully received response from Airtable")
+            response_data = res.json()
+            log_debug_event(None, "BACKEND", "Session Lookup Success", f"Data received on attempt {attempt + 1}")
             break
         except Exception as e:
-            logger.warning(f"⚠️ Airtable fetch failed (attempt {attempt + 1}/3): {e}")
-            log_debug_event(None, "BACKEND", "Session Lookup Failed", f"Airtable attempt {attempt + 1} failed: {str(e)}")
+            logger.warning(f"⚠️ Airtable fetch failed (Attempt {attempt + 1}/3): {e}")
+            log_debug_event(None, "BACKEND", "Session Lookup Attempt Failed", f"Attempt {attempt + 1}: {str(e)}")
             if attempt == 2:
-                logger.error(f"❌ Final failure fetching quote for session_id {session_id} after 3 attempts.")
-                log_debug_event(None, "BACKEND", "Session Lookup Final Failure", f"Failed after 3 attempts: {str(e)}")
+                logger.error(f"❌ Final failure after 3 attempts for session_id: {session_id}")
+                log_debug_event(None, "BACKEND", "Session Lookup Final Failure", str(e))
                 return None
             sleep(1)
 
-    records = data.get("records", [])
+    records = response_data.get("records", []) if response_data else []
     if not records:
-        logger.info(f"⏳ No existing quote found for session_id: {session_id}")
-        log_debug_event(None, "BACKEND", "No Quote Found", f"No record found in Airtable for session_id: {session_id}")
+        logger.info(f"⏳ No record found for session_id: {session_id}")
+        log_debug_event(None, "BACKEND", "Session Lookup Empty", f"No record found for session_id: {session_id}")
         return None
 
     record = records[0]
+    record_id = record.get("id", "")
     fields = record.get("fields", {})
     quote_id = fields.get("quote_id", "N/A")
-    record_id = record.get("id", "")
     quote_stage = fields.get("quote_stage", "Gathering Info")
-    session_id_return = fields.get("session_id", session_id)
+    returned_session = fields.get("session_id", session_id)
 
-    logger.info(f"✅ Found quote | session_id: {session_id_return} | quote_id: {quote_id} | stage: {quote_stage}")
-    log_debug_event(record_id, "BACKEND", "Session Lookup Success", f"Retrieved quote_id: {quote_id}, stage: {quote_stage}, session_id: {session_id_return}")
+    logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
+    log_debug_event(record_id, "BACKEND", "Session Lookup Complete", f"Found quote_id: {quote_id}, stage: {quote_stage}")
 
     return quote_id, record_id, quote_stage, fields
 
