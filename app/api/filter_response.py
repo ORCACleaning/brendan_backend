@@ -1,4 +1,4 @@
-# === Imports ===
+# === Built-in Python Modules ===
 import json
 import uuid
 import logging
@@ -11,23 +11,30 @@ import base64
 from time import sleep
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
+from urllib.parse import quote
 
+# === Third-Party Modules ===
 import pytz
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-# === Config, Constants, and SDKs ===
+# === Brendan Config and Constants ===
 from app.config import logger, settings
+from app.config import LOG_TRUNCATE_LENGTH, MAX_LOG_LENGTH, PDF_SYSTEM_MESSAGE, TABLE_NAME
+
+# === Models ===
 from app.models.quote_models import QuoteRequest
+
+# === Services ===
 from app.services.email_sender import send_quote_email
 from app.services.pdf_generator import generate_quote_pdf
+from app.services.quote_logic import calculate_quote, get_quote_by_session
 from app.services.quote_id_utils import get_next_quote_id
-from app.services.quote_logic import calculate_quote
+
+# === Field Rules and Logging ===
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
 from app.utils.logging_utils import log_debug_event
-from app.services.quote_id_utils import get_next_quote_id
-from urllib.parse import quote  # ✅ Ensure this import is at the top of your file
-from app.config import LOG_TRUNCATE_LENGTH, MAX_LOG_LENGTH, PDF_SYSTEM_MESSAGE, TABLE_NAME
+
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
