@@ -346,8 +346,8 @@ def get_quote_by_session(session_id: str):
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
+    Fixes casing of keys by fetching actual Airtable field names.
     Always includes message_log and debug_log even if unchanged.
-    Handles type conversion, validation, and fallback logic.
     """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
@@ -359,6 +359,20 @@ def update_quote_record(record_id: str, fields: dict):
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
+
+    # === Fetch actual Airtable schema field keys to match casing ===
+    schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
+    actual_keys = set()
+    try:
+        schema_res = requests.get(schema_url, headers={"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"})
+        schema_res.raise_for_status()
+        tables = schema_res.json().get("tables", [])
+        for table in tables:
+            if table.get("name") == TABLE_NAME:
+                actual_keys.update({f["name"]: f["name"] for f in table.get("fields", [])})
+                break
+    except Exception as e:
+        logger.warning(f"⚠️ Could not fetch Airtable field schema: {e}")
 
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
@@ -374,30 +388,30 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
             fields["furnished"] = ""
 
-    # === Normalize all fields ===
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
-        if key not in VALID_AIRTABLE_FIELDS:
-            logger.warning(f"⚠️ Skipping unknown Airtable field: {key}")
+
+        # Fix field casing
+        corrected_key = next((k for k in actual_keys if k.lower() == key.lower()), key)
+
+        if corrected_key not in actual_keys:
+            logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
             continue
 
-        if key in BOOLEAN_FIELDS:
-            value = (
-                value if isinstance(value, bool)
-                else str(value).strip().lower() in TRUE_VALUES
-            )
+        if corrected_key in BOOLEAN_FIELDS:
+            value = value if isinstance(value, bool) else str(value).strip().lower() in TRUE_VALUES
 
-        elif key in INTEGER_FIELDS:
+        elif corrected_key in INTEGER_FIELDS:
             try:
                 value = int(float(value))
                 if value > MAX_REASONABLE_INT:
-                    logger.warning(f"⚠️ Clamping large int value for {key}: {value}")
+                    logger.warning(f"⚠️ Clamping large int value for {corrected_key}: {value}")
                     value = MAX_REASONABLE_INT
             except:
-                logger.warning(f"⚠️ Failed to convert {key} to int — defaulting to 0")
+                logger.warning(f"⚠️ Failed to convert {corrected_key} to int — defaulting to 0")
                 value = 0
 
-        elif key in {
+        elif corrected_key in {
             "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
             "estimated_time_mins", "discount_applied", "mandurah_surcharge",
             "after_hours_surcharge", "weekend_surcharge", "calculated_hours"
@@ -405,14 +419,14 @@ def update_quote_record(record_id: str, fields: dict):
             try:
                 value = float(value)
             except:
-                logger.warning(f"⚠️ Failed to convert {key} to float — defaulting to 0.0")
+                logger.warning(f"⚠️ Failed to convert {corrected_key} to float — defaulting to 0.0")
                 value = 0.0
 
-        elif key == "special_requests":
+        elif corrected_key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
 
-        elif key == "extra_hours_requested":
+        elif corrected_key == "extra_hours_requested":
             try:
                 value = float(value) if value not in [None, ""] else 0.0
             except:
@@ -421,19 +435,17 @@ def update_quote_record(record_id: str, fields: dict):
         else:
             value = "" if value is None else str(value).strip()
 
-        normalized_fields[key] = value
+        normalized_fields[corrected_key] = value
 
-    # === Force critical defaults ===
     normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged", False))
     normalized_fields["carpet_cleaning"] = bool(fields.get("carpet_cleaning", False))
     normalized_fields["upholstery_cleaning"] = bool(fields.get("upholstery_cleaning", False))
 
-    # === Always include logs ===
     for log_field in ["message_log", "debug_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
 
-    # === Flush debug log to payload ===
+    # === Flush debug_log ===
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
@@ -443,22 +455,22 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "No Valid Fields", "Nothing passed validation for update.")
         return []
 
-    # === Final validation check ===
-    for key in list(normalized_fields.keys()):
-        if key not in VALID_AIRTABLE_FIELDS:
-            logger.error(f"❌ INVALID FIELD: {key} — Removing before update.")
-            normalized_fields.pop(key, None)
+    # Final safe filter
+    validated_fields = {
+        key: val for key, val in normalized_fields.items()
+        if key in actual_keys
+    }
 
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
-    logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
+    logger.info(f"🛠 Payload: {json.dumps(validated_fields, indent=2)}")
 
     # === Try bulk update ===
     try:
-        res = requests.patch(url, headers=headers, json={"fields": normalized_fields})
+        res = requests.patch(url, headers=headers, json={"fields": validated_fields})
         if res.ok:
             logger.info("✅ Airtable bulk update successful.")
-            log_debug_event(record_id, "BACKEND", "Record Updated (Bulk)", f"Fields updated: {list(normalized_fields.keys())}")
-            return list(normalized_fields.keys())
+            log_debug_event(record_id, "BACKEND", "Record Updated (Bulk)", f"Fields updated: {list(validated_fields.keys())}")
+            return list(validated_fields.keys())
         logger.error(f"❌ Airtable bulk update failed with status {res.status_code}")
         try:
             logger.error(f"🧾 Airtable error response: {res.json()}")
@@ -468,9 +480,9 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Airtable bulk update exception: {e}")
         log_debug_event(record_id, "BACKEND", "Airtable Bulk Error", str(e))
 
-    # === Fallback to one-by-one update ===
+    # === Fallback update one-by-one ===
     successful = []
-    for key, value in normalized_fields.items():
+    for key, value in validated_fields.items():
         try:
             res = requests.patch(url, headers=headers, json={"fields": {key: value}})
             if res.ok:
@@ -488,7 +500,6 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Failed", "No fields updated in fallback.")
 
     return successful
-
 
 # === Inline Quote Summary Helper ===
 
