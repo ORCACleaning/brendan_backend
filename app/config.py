@@ -5,6 +5,14 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pydantic_settings import BaseSettings
 
+# === Brendan System Constants ===
+LOG_TRUNCATE_LENGTH = 10000
+MAX_LOG_LENGTH = 10000
+PDF_SYSTEM_MESSAGE = (
+    "SYSTEM: The quote has already been calculated. Do not recalculate. "
+    "Politely ask the customer for name, email, phone number, and optional address so you can send the PDF quote."
+)
+TABLE_NAME = "Vacate Quotes"
 
 # === Settings Class for Environment Variables ===
 class Settings(BaseSettings):
