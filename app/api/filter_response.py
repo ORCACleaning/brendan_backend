@@ -1056,10 +1056,19 @@ async def filter_response_entry(request: Request):
 
 @router.get("/force-flush-log")
 async def force_flush_log():
-    record_id = "recj7c1Ob419rBWiq"  # Your Airtable record ID
-    from app.utils.logging_utils import flush_debug_log, log_debug_event, update_quote_record
+    record_id = "recj7c1Ob419rBWiq"
+    from app.utils.logging_utils import log_debug_event, flush_debug_log, update_quote_record
 
     log_debug_event(record_id, "MANUAL", "Test Flush Triggered", "Running manual log flush route.")
     flushed = flush_debug_log(record_id)
-    update_quote_record(record_id, {"debug_log": flushed})
-    return {"status": "flushed", "chars": len(flushed), "preview": flushed[:300]}
+
+    if not flushed:
+        return {"status": "nothing to flush"}
+
+    updated_fields = update_quote_record(record_id, {"debug_log": flushed})
+    return {
+        "status": "flushed",
+        "chars": len(flushed),
+        "updated": updated_fields,
+        "preview": flushed[:150]
+    }
