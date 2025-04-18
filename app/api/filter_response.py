@@ -1072,3 +1072,4 @@ async def force_flush_log():
         "updated": updated_fields,
         "preview": flushed[:150]
     }
+    log_debug_event("recj7c1Ob419rBWiq", "MANUAL", "Test Debug Log", "This is a manual test message.")
