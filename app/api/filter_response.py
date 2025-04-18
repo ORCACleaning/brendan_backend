@@ -912,7 +912,7 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 router = APIRouter()
 
-# === /log-debug Route ==========
+# === /log-debug Route ===
 @router.post("/log-debug")
 async def log_debug(request: Request):
     try:
@@ -930,7 +930,6 @@ async def log_debug(request: Request):
         log_debug_event(None, "BACKEND", "Log Debug Error", str(e))
         return JSONResponse(content={"status": "error"}, status_code=500)
 
-
 # === /filter-response Route ===
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -945,7 +944,7 @@ async def filter_response_entry(request: Request):
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
         if message.lower() == "__init__":
-            log_debug_event(None, "BACKEND", "Init Triggered", "User opened chat and triggered __init__.")
+            log_debug_event(None, "BACKEND", "Init Triggered", "User opened chat.")
             existing = get_quote_by_session(session_id)
 
             if existing:
@@ -953,8 +952,8 @@ async def filter_response_entry(request: Request):
                     quote_id, record_id, stage, fields = existing
                     timestamp = fields.get("timestamp")
                     if stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not timestamp:
-                        raise ValueError("Stale or complete quote")
-                except Exception:
+                        raise ValueError("Stale or completed quote.")
+                except:
                     existing = None
 
             if not existing:
@@ -963,7 +962,6 @@ async def filter_response_entry(request: Request):
                 log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}")
 
             append_message_log(record_id, message, "user")
-
             flush = flush_debug_log(record_id)
             if flush:
                 update_quote_record(record_id, {"debug_log": flush})
@@ -973,7 +971,7 @@ async def filter_response_entry(request: Request):
             )
 
             append_message_log(record_id, reply, "brendan")
-            log_debug_event(record_id, "BACKEND", "Init Complete", "Started chat with GPT-generated message.")
+            log_debug_event(record_id, "BACKEND", "Init Complete", "Started with GPT first message.")
 
             return JSONResponse(content={
                 "properties": properties,
@@ -1045,7 +1043,7 @@ async def filter_response_entry(request: Request):
             log = PDF_SYSTEM_MESSAGE + "\n\n" + log
 
         append_message_log(record_id, message, "user")
-        log_debug_event(record_id, "BACKEND", "Calling GPT", "Sending log to GPT for field extraction.")
+        log_debug_event(record_id, "BACKEND", "Calling GPT", "Sending message log to GPT.")
 
         properties, reply = await extract_properties_from_gpt4(message, log, record_id, quote_id)
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
