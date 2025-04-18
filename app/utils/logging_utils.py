@@ -180,18 +180,4 @@ def update_quote_record(record_id: str, fields: dict):
 
     return successful
 
-from fastapi import APIRouter
-from fastapi.responses import PlainTextResponse
-from app.utils.logging_utils import flush_debug_log, log_debug_event
 
-router = APIRouter()
-
-@router.get("/force-log-test")
-async def force_log_test():
-    record_id = "recXXXXXXXXXXXXXX"  # Replace this
-    log_debug_event(record_id, "MANUAL", "Test Log", "Manual test from /force-log-test")
-    flush = flush_debug_log(record_id)
-    if flush:
-        update_quote_record(record_id, {"debug_log": flush})
-        return PlainTextResponse("✅ Log flushed and written.")
-    return PlainTextResponse("⚠️ Nothing flushed.")
