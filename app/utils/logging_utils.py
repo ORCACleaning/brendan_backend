@@ -179,3 +179,26 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Failed", "No fields could be updated (bulk and fallback both failed).")
 
     return successful
+
+
+
+@router.get("/force-flush-log")
+async def force_flush_log(session_id: str):
+    from app.utils.logging_utils import flush_debug_log, update_quote_record
+    from app.api.filter_response import get_quote_by_session
+
+    try:
+        result = get_quote_by_session(session_id)
+        if not result:
+            return {"error": "Session not found"}
+
+        _, record_id, _, _ = result
+        flush = flush_debug_log(record_id)
+        if not flush:
+            return {"status": "Nothing to flush", "record_id": record_id}
+
+        updated = update_quote_record(record_id, {"debug_log": flush})
+        return {"status": "Flushed", "record_id": record_id, "updated_fields": updated}
+
+    except Exception as e:
+        return {"error": str(e)}
