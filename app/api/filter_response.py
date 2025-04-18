@@ -963,14 +963,8 @@ async def filter_response_entry(request: Request):
                 update_quote_record(record_id, {"debug_log": flush})
 
             # === GPT Message (Start of chat) ===
-            log = "USER: __init__"
-            gpt_intro = (
-                "The frontend has already welcomed the customer, so don't greet again.\n"
-                "Start by asking for suburb, number of bedrooms and bathrooms, and if the home is furnished or unfurnished.\n"
-                "Your goal is to start collecting quote details naturally — do not jump into carpets or specials yet."
-            )
-            properties, reply = await extract_properties_from_gpt4(gpt_intro, log, record_id)
-
+            properties, reply = await extract_properties_from_gpt4("__init__", "USER: __init__", record_id)
+            
             append_message_log(record_id, reply, "brendan")
             log_debug_event(record_id, "BACKEND", "Init Complete", "Started chat with GPT-generated question.")
 
