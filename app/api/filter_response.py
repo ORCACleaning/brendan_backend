@@ -841,8 +841,7 @@ def send_gpt_error_email(error_msg: str):
 def append_message_log(record_id: str, message: str, sender: str):
     """
     Appends a new message to the 'message_log' field in Airtable.
-    Truncates from the start if the log exceeds MAX_LOG_LENGTH.
-    Logs all actions and failures for traceability.
+    Handles '__init__' differently and truncates log if it exceeds MAX_LOG_LENGTH.
     """
     if not record_id:
         logger.error("❌ Cannot append message_log — missing record ID")
@@ -855,16 +854,14 @@ def append_message_log(record_id: str, message: str, sender: str):
         return
 
     sender_clean = str(sender or "user").strip().upper()
-    new_entry = (
-        "SYSTEM_TRIGGER: Brendan started a new quote"
-        if sender_clean == "USER" and message.lower() == "__init__"
-        else f"{sender_clean}: {message}"
-    )
+    if sender_clean == "USER" and message.lower() == "__init__":
+        new_entry = "SYSTEM_TRIGGER: Brendan started a new quote"
+    else:
+        new_entry = f"{sender_clean}: {message}"
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
 
-    # === Fetch existing message_log with up to 3 retries ===
     old_log = ""
     for attempt in range(3):
         try:
@@ -873,10 +870,10 @@ def append_message_log(record_id: str, message: str, sender: str):
             old_log = str(res.json().get("fields", {}).get("message_log", "")).strip()
             break
         except Exception as e:
-            logger.warning(f"⚠️ Attempt {attempt + 1}/3 — Failed to fetch message_log: {e}")
+            logger.warning(f"⚠️ Fetch attempt {attempt + 1} failed: {e}")
             if attempt == 2:
-                logger.error(f"❌ Failed to fetch message_log after 3 attempts for {record_id}")
-                log_debug_event(record_id, "BACKEND", "Log Fetch Failed", str(e))
+                logger.error(f"❌ Could not fetch message_log after 3 attempts for {record_id}")
+                log_debug_event(record_id, "BACKEND", "Message Log Fetch Failed", str(e))
                 return
             sleep(1)
 
@@ -886,28 +883,25 @@ def append_message_log(record_id: str, message: str, sender: str):
         combined_log = combined_log[-MAX_LOG_LENGTH:]
         was_truncated = True
 
-    logger.info(f"📚 Updating message_log for {record_id} (len={len(combined_log)})")
-
     try:
         update_quote_record(record_id, {"message_log": combined_log})
+        logger.info(f"✅ message_log updated for {record_id} (len={len(combined_log)})")
     except Exception as e:
-        logger.error(f"❌ Failed to update message_log in Airtable: {e}")
+        logger.error(f"❌ Failed to update message_log: {e}")
         log_debug_event(record_id, "BACKEND", "Message Log Update Failed", str(e))
         return
 
     try:
-        detail = (
-            "SYSTEM_TRIGGER: Brendan started a new quote"
-            if sender_clean == "USER" and message.lower() == "__init__"
-            else f"{sender_clean} message logged ({len(message)} chars)"
-        )
+        if sender_clean == "USER" and message.lower() == "__init__":
+            detail = "SYSTEM_TRIGGER: Brendan started a new quote"
+        else:
+            detail = f"{sender_clean} message logged ({len(message)} chars)"
         if was_truncated:
             detail += " | ⚠️ Log truncated"
         log_debug_event(record_id, "BACKEND", "Message Appended", detail)
     except Exception as e:
-        logger.warning(f"⚠️ Failed to log debug message: {e}")
-        log_debug_event(record_id, "BACKEND", "Debug Log Event Failed", str(e))
-
+        logger.warning(f"⚠️ Debug log event failed: {e}")
+        log_debug_event(record_id, "BACKEND", "Debug Log Failure", str(e))
 # === Brendan Filter Response Route ====
 
 router = APIRouter()
