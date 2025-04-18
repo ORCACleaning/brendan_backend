@@ -957,7 +957,12 @@ async def filter_response_entry(request: Request):
                 log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}")
 
             append_message_log(record_id, message, "user")
+            flush = flush_debug_log(record_id)
+            if flush:
+                update_quote_record(record_id, {"debug_log": flush})
+
             log_debug_event(record_id, "BACKEND", "Init Complete", "Chat flow started with new session.")
+
             return JSONResponse(content={
                 "properties": [],
                 "response": "",
