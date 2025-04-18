@@ -264,6 +264,12 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
         log_debug_event(record_id, "BACKEND", "New Quote Created", f"Quote ID: {quote_id}")
         logger.info(f"✅ New quote created | session_id: {session_id} | quote_id: {quote_id}")
+
+        # === Flush debug log immediately after creation ===
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed})
+
         return quote_id, record_id, "Gathering Info", fields
 
     except requests.exceptions.HTTPError as e:
@@ -276,7 +282,6 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.error(f"❌ Exception during quote creation: {e}")
         log_debug_event(None, "BACKEND", "Quote Creation Exception", str(e))
         raise HTTPException(status_code=500, detail="Failed to create new quote.")
-
 
 # === Get Quote by Session ID ===
 
@@ -338,8 +343,12 @@ def get_quote_by_session(session_id: str):
     logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
     log_debug_event(record_id, "BACKEND", "Session Lookup Complete", f"Found quote_id: {quote_id}, stage: {quote_stage}")
 
-    return quote_id, record_id, quote_stage, fields
+    # === Flush debug log after successful lookup ===
+    flushed = flush_debug_log(record_id)
+    if flushed:
+        update_quote_record(record_id, {"debug_log": flushed})
 
+    return quote_id, record_id, quote_stage, fields
 
 # === Update Quote Record ===
 
@@ -390,8 +399,6 @@ def update_quote_record(record_id: str, fields: dict):
 
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
-
-        # Fix field casing
         corrected_key = next((k for k in actual_keys if k.lower() == key.lower()), key)
 
         if corrected_key not in actual_keys:
@@ -400,7 +407,6 @@ def update_quote_record(record_id: str, fields: dict):
 
         if corrected_key in BOOLEAN_FIELDS:
             value = value if isinstance(value, bool) else str(value).strip().lower() in TRUE_VALUES
-
         elif corrected_key in INTEGER_FIELDS:
             try:
                 value = int(float(value))
@@ -410,7 +416,6 @@ def update_quote_record(record_id: str, fields: dict):
             except:
                 logger.warning(f"⚠️ Failed to convert {corrected_key} to int — defaulting to 0")
                 value = 0
-
         elif corrected_key in {
             "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
             "estimated_time_mins", "discount_applied", "mandurah_surcharge",
@@ -421,17 +426,14 @@ def update_quote_record(record_id: str, fields: dict):
             except:
                 logger.warning(f"⚠️ Failed to convert {corrected_key} to float — defaulting to 0.0")
                 value = 0.0
-
         elif corrected_key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
-
         elif corrected_key == "extra_hours_requested":
             try:
                 value = float(value) if value not in [None, ""] else 0.0
             except:
                 value = 0.0
-
         else:
             value = "" if value is None else str(value).strip()
 
@@ -445,7 +447,7 @@ def update_quote_record(record_id: str, fields: dict):
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
 
-    # === Flush debug_log ===
+    # === Flush debug_log and inject ===
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
@@ -461,10 +463,13 @@ def update_quote_record(record_id: str, fields: dict):
         if key in actual_keys
     }
 
+    # === Defensive: Was debug_log flushed but not included? ===
+    if debug_log and "debug_log" not in validated_fields:
+        log_debug_event(record_id, "BACKEND", "Debug Log Dropped", "debug_log flushed but not matched in schema")
+
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(validated_fields, indent=2)}")
 
-    # === Try bulk update ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": validated_fields})
         if res.ok:
@@ -480,7 +485,6 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Airtable bulk update exception: {e}")
         log_debug_event(record_id, "BACKEND", "Airtable Bulk Error", str(e))
 
-    # === Fallback update one-by-one ===
     successful = []
     for key, value in validated_fields.items():
         try:
@@ -622,7 +626,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
 
-    # === Skip weak inputs ===
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
         reply = (
@@ -633,7 +636,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
         return [], reply
 
-    # === Load Airtable state if required ===
     existing, current_stage = {}, ""
     if record_id and not skip_log_lookup:
         try:
@@ -647,7 +649,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
-    # === Prepare GPT messages ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
     messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
@@ -680,7 +681,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     messages.append({"role": "user", "content": message.strip()})
 
-    # === GPT Call and Retry Logic ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -721,7 +721,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if name not in existing_keys:
             props.append({"property": name, "value": default})
 
-    # === Carpet logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
@@ -747,7 +746,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing_carpet))
         return props, msg
 
-    # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -758,17 +756,29 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
             ])
             log_debug_event(record_id, "BACKEND", "Chat Banned", f"Repeated abuse. Quote ID: {quote_id}")
+            flush = flush_debug_log(record_id)
+            if flush:
+                update_quote_record(record_id, {"debug_log": flush})
             return [{"property": "quote_stage", "value": "Chat Banned"}], reply
         else:
             reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
+            flush = flush_debug_log(record_id)
+            if flush:
+                update_quote_record(record_id, {"debug_log": flush})
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
-    # === Fallback if nothing useful ===
     if not props:
         return [], "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
 
     log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Line: {reply[:100]}")
+
+    # === FINAL FLUSH ===
+    if record_id:
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed})
+
     return props, reply
 
 # === GPT Error Email Alert ===
@@ -776,6 +786,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 def send_gpt_error_email(error_msg: str):
     """
     Sends an email to admin if GPT extraction fails and logs the error event.
+    Also flushes debug log if a record_id is found in the error body.
     """
 
     sender_email = "info@orcacleaning.com.au"
@@ -812,7 +823,7 @@ def send_gpt_error_email(error_msg: str):
                 log_debug_event(None, "BACKEND", "GPT Error Email Sent", f"Error email sent to {recipient_email} (attempt {attempt + 1})")
             except Exception as e:
                 logger.error(f"❌ Error logging email send success: {e}")
-            return  # Exit after success
+            break  # Exit after success
         except smtplib.SMTPException as e:
             logger.warning(f"⚠️ SMTP error (attempt {attempt + 1}/2): {e}")
             if attempt == 1:
@@ -822,7 +833,7 @@ def send_gpt_error_email(error_msg: str):
                 except Exception as log_e:
                     logger.error(f"❌ Error logging email send failure: {log_e}")
             else:
-                sleep(5)  # Wait before retrying
+                sleep(5)
         except Exception as e:
             logger.error(f"❌ Unexpected error sending GPT error email: {e}")
             try:
@@ -831,6 +842,17 @@ def send_gpt_error_email(error_msg: str):
                 logger.error(f"❌ Error logging unexpected email failure: {log_e}")
             return
 
+    # Attempt flush even without known record_id
+    try:
+        record_id_match = re.search(r"record[_ ]?id[:=]?[^\w]?(\w{5,})", error_msg, re.IGNORECASE)
+        if record_id_match:
+            record_id = record_id_match.group(1).strip()
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to flush debug log in send_gpt_error_email: {e}")
+        log_debug_event(None, "BACKEND", "Debug Log Flush Error", str(e))
 
 # === Append Message Log ===
 
@@ -838,6 +860,7 @@ def append_message_log(record_id: str, message: str, sender: str):
     """
     Appends a new message to the 'message_log' field in Airtable.
     Handles '__init__' differently and truncates log if it exceeds MAX_LOG_LENGTH.
+    Also flushes debug log after update.
     """
     if not record_id:
         logger.error("❌ Cannot append message_log — missing record ID")
@@ -898,29 +921,18 @@ def append_message_log(record_id: str, message: str, sender: str):
     except Exception as e:
         logger.warning(f"⚠️ Debug log event failed: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Failure", str(e))
-# === Brendan Filter Response Route ====
 
-router = APIRouter()
-
-# === /log-debug Route ===
-@router.post("/log-debug")
-async def log_debug(request: Request):
+    # === Flush debug log after message append ===
     try:
-        body = await request.json()
-        session_id = str(body.get("session_id", "")).strip()
-        message = str(body.get("message", "")).strip()
-        source = str(body.get("source", "frontend")).strip()
-
-        if session_id and message:
-            formatted = f"(Session ID: {session_id}) {message}"
-            log_debug_event(None, source.upper(), "Frontend Log", formatted)
-
-        return JSONResponse(content={"status": "success"})
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed})
     except Exception as e:
-        log_debug_event(None, "BACKEND", "Log Debug Error", str(e))
-        return JSONResponse(content={"status": "error"}, status_code=500)
+        logger.warning(f"⚠️ Failed to flush debug log in append_message_log: {e}")
+        log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
 
-
+# === /filter-response Route ===
+@router.post("/filter-response")
 # === /filter-response Route ===
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -1026,6 +1038,10 @@ async def filter_response_entry(request: Request):
 
                 append_message_log(record_id, message, "user")
                 append_message_log(record_id, reply, "brendan")
+                flush = flush_debug_log(record_id)
+                if flush:
+                    update_quote_record(record_id, {"debug_log": flush})
+
                 return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
 
         log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
@@ -1052,6 +1068,12 @@ async def filter_response_entry(request: Request):
 
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
+
+        # Final debug flush
+        flush = flush_debug_log(record_id)
+        if flush:
+            update_quote_record(record_id, {"debug_log": flush})
+
         next_actions = generate_next_actions() if parsed.get("quote_stage") == "Quote Calculated" else []
 
         return JSONResponse(content={
@@ -1064,30 +1086,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
-
-
-# === /flush-debug Route ===
-@router.post("/flush-debug")
-async def flush_debug(request: Request):
-    try:
-        body = await request.json()
-        record_id = str(body.get("record_id", "")).strip()
-
-        if not record_id:
-            return JSONResponse(content={"status": "error", "error": "Missing record_id"}, status_code=400)
-
-        flushed = flush_debug_log(record_id)
-        if not flushed:
-            return JSONResponse(content={"status": "nothing_to_flush"})
-
-        updated_fields = update_quote_record(record_id, {"debug_log": flushed})
-
-        return JSONResponse(content={
-            "status": "flushed",
-            "chars": len(flushed),
-            "updated": updated_fields,
-            "preview": flushed[:150]
-        })
-
-    except Exception as e:
-        return JSONResponse(content={"status": "error", "error": str(e)}, status_code=500)
