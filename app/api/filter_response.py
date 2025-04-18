@@ -626,6 +626,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Message: {message}")
         return [], reply
 
+    # === Retrieve Airtable fields ===
     existing = {}
     current_stage = ""
     if not skip_log_lookup and record_id:
@@ -640,6 +641,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
+    # === Build GPT messages ===
     prepared_log = re.sub(r'[^ -~\n]', '', log[-LOG_TRUNCATE_LENGTH:])
     messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
@@ -654,10 +656,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         messages.append({
             "role": "system",
             "content": (
-                "The user has just opened the chat. You are Brendan, the quoting assistant. "
-                "DO NOT greet the user. That has already been done by the frontend. "
-                "Start by asking a friendly, Aussie-style question to gather suburb, bedrooms, bathrooms, or furnishing. "
-                "Be efficient, natural, and never say welcome or hello again."
+                "The user has just opened the chat — this is the very first message after frontend greeting.\n"
+                "You are Brendan, the quoting assistant. DO NOT greet or welcome — that’s already handled.\n\n"
+                "Start by asking a friendly, Aussie-style question like:\n"
+                "> 'What suburb are we quoting for today, and how many bedrooms and bathrooms are we looking at?'\n\n"
+                "Be natural, but your goal is to collect suburb, bedrooms, bathrooms and whether it's furnished or not.\n"
+                "DO NOT ask about carpet, extras, or anything else at this stage.\n"
+                "This is the beginning of the quote."
             )
         })
     elif current_stage == "Quote Calculated":
@@ -668,6 +673,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     messages.append({"role": "user", "content": message.strip()})
 
+    # === GPT Call ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -714,6 +720,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if name not in existing_keys:
             props.append({"property": name, "value": default})
 
+    # === Carpet logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
@@ -740,6 +747,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Missing Carpet Fields", f"Missing: {missing_carpet}")
         return props, msg
 
+    # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
