@@ -65,5 +65,6 @@ BOOLEAN_FIELDS = {
     "weekend_cleaning",
     "mandurah_property",
     "carpet_cleaning",
-    "is_property_manager"
+    "is_property_manager",
+    "privacy_acknowledged"
 }
