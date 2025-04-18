@@ -1054,10 +1054,17 @@ async def filter_response_entry(request: Request):
         raise HTTPException(status_code=500, detail="Internal server error.")
 
 
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+from app.utils.logging_utils import log_debug_event, flush_debug_log
+from app.config import settings, TABLE_NAME
+import requests
+
+router = APIRouter()
+
 @router.get("/force-flush-log")
 async def force_flush_log():
-    record_id = "recj7c1Ob419rBWiq"
-    from app.utils.logging_utils import log_debug_event, flush_debug_log, update_quote_record
+    record_id = "recj7c1Ob419rBWiq"  # Replace with the record ID you want to test
 
     log_debug_event(record_id, "MANUAL", "Test Flush Triggered", "Running manual log flush route.")
     flushed = flush_debug_log(record_id)
@@ -1065,11 +1072,17 @@ async def force_flush_log():
     if not flushed:
         return {"status": "nothing to flush"}
 
-    updated_fields = update_quote_record(record_id, {"debug_log": flushed})
+    # Direct PATCH without update_quote_record
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+    headers = {
+        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    res = requests.patch(url, headers=headers, json={"fields": {"debug_log": flushed}})
+
     return {
         "status": "flushed",
         "chars": len(flushed),
-        "updated": updated_fields,
+        "updated": ["debug_log"],
         "preview": flushed[:150]
     }
-    log_debug_event("recj7c1Ob419rBWiq", "MANUAL", "Test Debug Log", "This is a manual test message.")
