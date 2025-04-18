@@ -962,15 +962,16 @@ async def filter_response_entry(request: Request):
             if flush:
                 update_quote_record(record_id, {"debug_log": flush})
 
-            reply = (
-                "Cheers — let’s get started! Just need to know the suburb, how many bedrooms and bathrooms, "
-                "and whether it’s furnished or unfurnished."
-            )
+            # Run GPT to ask for suburb, beds, baths, furnished
+            log = "USER: __init__"
+            gpt_intro = "Just confirming suburb, bedrooms, bathrooms, and whether it's furnished — no greetings needed, frontend already said hi."
+            properties, reply = await extract_properties_from_gpt4(gpt_intro, log, record_id)
+
             append_message_log(record_id, reply, "brendan")
-            log_debug_event(record_id, "BACKEND", "Init Complete", "Chat flow started with new session.")
+            log_debug_event(record_id, "BACKEND", "Init Complete", "Chat flow started with GPT message.")
 
             return JSONResponse(content={
-                "properties": [],
+                "properties": properties,
                 "response": reply,
                 "next_actions": [],
                 "session_id": session_id
