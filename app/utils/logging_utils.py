@@ -1,8 +1,15 @@
 import json
 import requests
 import logging
+from datetime import datetime
 
-from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS, TRUE_VALUES
+from app.api.field_rules import (
+    FIELD_MAP,
+    VALID_AIRTABLE_FIELDS,
+    BOOLEAN_FIELDS,
+    INTEGER_FIELDS,
+    TRUE_VALUES
+)
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -10,9 +17,9 @@ logger = logging.getLogger(__name__)
 TABLE_NAME = "Vacate Quotes"
 _log_cache = {}  # Global in-memory debug cache
 
+
 # === Debug Logger ===
 def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str = "", message: str = ""):
-    from datetime import datetime
     timestamp = datetime.utcnow().isoformat()
     entry = f"[{timestamp}] [{source}] {label}: {message}"
 
@@ -24,19 +31,19 @@ def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str =
         _log_cache[record_id] = []
 
     _log_cache[record_id].append(entry)
-
     if len(_log_cache[record_id]) > 50:
         _log_cache[record_id] = _log_cache[record_id][-50:]
+
 
 # === Flush Debug Log ===
 def flush_debug_log(record_id: str):
     logs = _log_cache.get(record_id, [])
     if not logs:
         return ""
-
     combined = "\n".join(logs).strip()
-    _log_cache[record_id] = []  # Clear cache after flush
+    _log_cache[record_id] = []  # Clear after flush
     return combined
+
 
 # === Update Airtable Record ===
 def update_quote_record(record_id: str, fields: dict):
@@ -112,7 +119,7 @@ def update_quote_record(record_id: str, fields: dict):
             except Exception:
                 value = 0
 
-        # All else as string
+        # Everything else as string
         else:
             value = "" if value is None else str(value).strip()
 
@@ -135,6 +142,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(normalized_fields, indent=2)}")
 
+    # Final validation before sending
     for key in list(normalized_fields.keys()):
         if key not in VALID_AIRTABLE_FIELDS:
             logger.error(f"❌ INVALID FIELD DETECTED: {key} — Removing from payload.")
@@ -147,13 +155,11 @@ def update_quote_record(record_id: str, fields: dict):
             logger.info("✅ Airtable bulk update success.")
             log_debug_event(record_id, "BACKEND", "Record Updated (Bulk)", f"Fields updated: {list(normalized_fields.keys())}")
             return list(normalized_fields.keys())
-
         logger.error(f"❌ Airtable bulk update failed: {res.status_code}")
         try:
             logger.error(f"🧾 Error response: {res.json()}")
         except Exception:
             logger.error("🧾 Error response: (Non-JSON)")
-
     except Exception as e:
         logger.error(f"❌ Exception during Airtable bulk update: {e}")
 
