@@ -1,13 +1,10 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import requests
 import os
-import smtplib
-from io import BytesIO
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.application import MIMEApplication
+import requests
+
 from app.services.pdf_generator import generate_quote_pdf
+from app.services.email_sender import send_quote_email
 
 router = APIRouter()
 
@@ -15,11 +12,6 @@ router = APIRouter()
 AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY")
 AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID")
 AIRTABLE_TABLE_NAME = "Vacate Quotes"
-SMTP_SERVER = "smtp.office365.com"
-SMTP_PORT = 587
-SMTP_USER = "info@orcacleaning.com.au"
-SMTP_PASS = os.getenv("SMTP_PASS")
-SENDER_EMAIL = SMTP_USER
 
 # --- Data Model ---
 class CustomerData(BaseModel):
@@ -76,7 +68,7 @@ def bool_to_checkbox(value: bool) -> str:
 @router.post("/store-customer")
 async def store_customer(data: CustomerData):
     try:
-        # Airtable payload with exact field names
+        # === Prepare Airtable Payload ===
         airtable_data = {
             "quote_id": data.quote_id,
             "customer_name": data.name,
@@ -138,35 +130,16 @@ async def store_customer(data: CustomerData):
         if response.status_code >= 300:
             raise Exception(f"Airtable error: {response.text}")
 
-        # Generate PDF
-        pdf_path = generate_quote_pdf(data.dict())
+        # === Generate PDF Quote ===
+        pdf_path, _ = generate_quote_pdf(data.dict())
 
-        # Send Email
-        msg = MIMEMultipart()
-        msg["From"] = SENDER_EMAIL
-        msg["To"] = data.email
-        msg["Subject"] = f"Your Orca Vacate Cleaning Quote ({data.quote_id})"
-
-        body = f"""Hi {data.name},
-
-Thanks for chatting with Brendan! Attached is your PDF quote.
-
-You can book your clean here: {data.booking_url}
-
-Cheers,  
-Orca Cleaning
-"""
-        msg.attach(MIMEText(body, "plain"))
-
-        with open(pdf_path, "rb") as f:
-            part = MIMEApplication(f.read(), Name=os.path.basename(pdf_path))
-            part["Content-Disposition"] = f'attachment; filename="{os.path.basename(pdf_path)}"'
-            msg.attach(part)
-
-        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-            server.starttls()
-            server.login(SMTP_USER, SMTP_PASS)
-            server.sendmail(SENDER_EMAIL, data.email, msg.as_string())
+        # === Send Quote via Outlook ===
+        send_quote_email(
+            to_email=data.email,
+            customer_name=data.name,
+            pdf_path=pdf_path,
+            quote_id=data.quote_id
+        )
 
         return {"status": "success", "quote_id": data.quote_id}
 
