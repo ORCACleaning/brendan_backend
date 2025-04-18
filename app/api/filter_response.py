@@ -899,35 +899,9 @@ def append_message_log(record_id: str, message: str, sender: str):
 
 # === Brendan Filter Response Route ===
 
-
-
 router = APIRouter()
 
-# === /log-debug Route ===
 # === Brendan API Router ===
-
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
-import logging
-import re
-from time import sleep
-from app.config import settings
-from app.services.email_sender import send_quote_email
-from app.services.pdf_generator import generate_quote_pdf
-from app.services.quote_logic import (
-    get_quote_by_session,
-    create_new_quote,
-    update_quote_record,
-    append_message_log,
-    extract_properties_from_gpt4,
-    get_inline_quote_summary,
-    calculate_quote,
-    generate_next_actions,
-    log_debug_event,
-)
-from app.models.quote_models import QuoteRequest
-from urllib.parse import quote
-
 router = APIRouter()
 
 # === /log-debug Route ===
