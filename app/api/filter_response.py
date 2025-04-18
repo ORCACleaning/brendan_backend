@@ -902,9 +902,24 @@ def append_message_log(record_id: str, message: str, sender: str):
         log_debug_event(record_id, "BACKEND", "Debug Log Event Failed", str(e))
 
 # === Brendan Filter Response Route ===
-
 # === Brendan API Router ===
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import JSONResponse
+import re
+
+from app.utils.logging_utils import log_debug_event, flush_debug_log
+from app.services.quote_id_utils import get_next_quote_id
+from app.services.pdf_generator import generate_quote_pdf
+from app.services.email_sender import send_quote_email
+from app.services.quote_logic import calculate_quote
+from app.models.quote_models import QuoteRequest
+from app.api.field_rules import LOG_TRUNCATE_LENGTH, PDF_SYSTEM_MESSAGE
+from app.core.airtable import get_quote_by_session, create_new_quote, update_quote_record, append_message_log
+from app.core.gpt import extract_properties_from_gpt4
+from app.core.actions import generate_next_actions
+
 router = APIRouter()
+
 
 # === /log-debug Route ===
 @router.post("/log-debug")
@@ -962,13 +977,17 @@ async def filter_response_entry(request: Request):
             if flush:
                 update_quote_record(record_id, {"debug_log": flush})
 
-            # Run GPT to ask for suburb, beds, baths, furnished
+            # === GPT Message (Start of chat) ===
             log = "USER: __init__"
-            gpt_intro = "Start the conversation by asking what you will call the customer and what brings them here today (type of cleaning they want, suburb, bedrooms bathrooms etc) — no greetings needed, frontend already said hi."
+            gpt_intro = (
+                "The frontend has already welcomed the customer, so don't greet again.\n"
+                "Start by asking for suburb, number of bedrooms and bathrooms, and if the home is furnished or unfurnished.\n"
+                "Your goal is to start collecting quote details naturally — do not jump into carpets or specials yet."
+            )
             properties, reply = await extract_properties_from_gpt4(gpt_intro, log, record_id)
 
             append_message_log(record_id, reply, "brendan")
-            log_debug_event(record_id, "BACKEND", "Init Complete", "Chat flow started with GPT message.")
+            log_debug_event(record_id, "BACKEND", "Init Complete", "Started chat with GPT-generated question.")
 
             return JSONResponse(content={
                 "properties": properties,
@@ -977,6 +996,7 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
+        # === Normal message flow ===
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Quote not found.")
@@ -1044,7 +1064,6 @@ async def filter_response_entry(request: Request):
 
         properties, reply = await extract_properties_from_gpt4(message, log, record_id, quote_id)
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
-
         merged = fields.copy()
         merged.update(parsed)
 
