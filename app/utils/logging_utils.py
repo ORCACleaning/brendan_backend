@@ -180,26 +180,18 @@ def update_quote_record(record_id: str, fields: dict):
 
     return successful
 
-
 from fastapi import APIRouter
+from fastapi.responses import PlainTextResponse
+from app.utils.logging_utils import flush_debug_log, log_debug_event
+
 router = APIRouter()
-@router.get("/force-flush-log")
-async def force_flush_log(session_id: str):
-    from app.utils.logging_utils import flush_debug_log
-    from app.api.filter_response import get_quote_by_session, update_quote_record
 
-    try:
-        result = get_quote_by_session(session_id)
-        if not result:
-            return {"error": "Session not found"}
-
-        _, record_id, _, _ = result
-        flushed = flush_debug_log(record_id)
-        if not flushed:
-            return {"status": "Nothing to flush", "record_id": record_id}
-
-        updated = update_quote_record(record_id, {"debug_log": flushed})
-        return {"status": "Flushed", "record_id": record_id, "updated_fields": updated}
-
-    except Exception as e:
-        return {"error": str(e)}
+@router.get("/force-log-test")
+async def force_log_test():
+    record_id = "recXXXXXXXXXXXXXX"  # Replace this
+    log_debug_event(record_id, "MANUAL", "Test Log", "Manual test from /force-log-test")
+    flush = flush_debug_log(record_id)
+    if flush:
+        update_quote_record(record_id, {"debug_log": flush})
+        return PlainTextResponse("✅ Log flushed and written.")
+    return PlainTextResponse("⚠️ Nothing flushed.")
