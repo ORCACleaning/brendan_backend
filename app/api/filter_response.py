@@ -931,8 +931,11 @@ def append_message_log(record_id: str, message: str, sender: str):
         logger.warning(f"⚠️ Failed to flush debug log in append_message_log: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
 
-# === /filter-response Route ===
-@router.post("/filter-response")
+
+# === Brendan API Router ===
+
+router = APIRouter()
+
 # === /filter-response Route ===
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -941,141 +944,69 @@ async def filter_response_entry(request: Request):
         message = str(body.get("message", "")).strip()
         session_id = str(body.get("session_id", "")).strip()
 
-        log_debug_event(None, "BACKEND", "Incoming Message", f"Session: {session_id}, Message: {message}")
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
+        # === Handle Chat Init ===
         if message.lower() == "__init__":
-            log_debug_event(None, "BACKEND", "Init Triggered", "User opened chat.")
-            existing = get_quote_by_session(session_id)
+            return await handle_chat_init(session_id)
 
-            if existing:
-                try:
-                    quote_id, record_id, stage, fields = existing
-                    timestamp = fields.get("timestamp")
-                    if stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not timestamp:
-                        raise ValueError("Stale or completed quote.")
-                except:
-                    existing = None
-
-            if not existing:
-                quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
-                session_id = fields.get("session_id", session_id)
-                log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}")
-
-            append_message_log(record_id, message, "user")
-            flush = flush_debug_log(record_id)
-            if flush:
-                update_quote_record(record_id, {"debug_log": flush})
-
-            properties, reply = await extract_properties_from_gpt4(
-                "__init__", "USER: __init__", record_id, quote_id=None, skip_log_lookup=True
-            )
-
-            append_message_log(record_id, reply, "brendan")
-            log_debug_event(record_id, "BACKEND", "Init Complete", "Started with GPT first message.")
-
-            return JSONResponse(content={
-                "properties": properties,
-                "response": reply,
-                "next_actions": [],
-                "session_id": session_id
-            })
-
+        # === Fetch Existing Quote ===
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Quote not found.")
 
         quote_id, record_id, stage, fields = quote_data
         message_lower = message.lower()
-        pdf_keywords = ["pdf please", "send pdf", "get pdf", "send quote", "email quote", "pdf quote"]
 
+        # === Handle Banned Chats ===
         if stage == "Chat Banned":
-            reply = "This chat is closed. Call 1300 918 388 if you still need a quote."
-            log_debug_event(record_id, "BACKEND", "Blocked", "User is banned.")
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+            return JSONResponse(content={
+                "properties": [],
+                "response": "This chat is closed. Call 1300 918 388 if you still need a quote.",
+                "next_actions": [],
+                "session_id": session_id
+            })
 
-        if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
-            if message_lower in ["yes", "yep", "ok", "sure", "go ahead"]:
-                update_quote_record(record_id, {"privacy_acknowledged": True})
-                fields = get_quote_by_session(session_id)[3]
-                reply = "Thanks! What’s your name, email, phone number, and (optional) property address?"
-                log_debug_event(record_id, "BACKEND", "Privacy Acknowledged", "User accepted.")
-            else:
-                reply = "No worries — we just need your name, email and phone to send the quote. Let me know when you're ready."
-                log_debug_event(record_id, "BACKEND", "Privacy Awaiting", "Still waiting on consent.")
+        # === Handle Privacy Consent ===
+        if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
+            return await handle_privacy_consent(message, message_lower, record_id, session_id)
 
-            append_message_log(record_id, message, "user")
-            append_message_log(record_id, reply, "brendan")
-            return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
-
-        if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged", False):
+        # === Handle Contact Details and PDF Sending ===
+        if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
-                email = fields.get("customer_email", "")
-                if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
-                    reply = "Hmm, that email looks off — could you double check it?"
-                    append_message_log(record_id, message, "user")
-                    append_message_log(record_id, reply, "brendan")
-                    return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
+                return await handle_pdf_email_send(message, fields, quote_id, record_id, session_id)
 
-                update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
-                fields = get_quote_by_session(session_id)[3]
-
-                try:
-                    pdf_path = generate_quote_pdf(fields)
-                    send_quote_email(
-                        to_email=email,
-                        customer_name=fields.get("customer_name"),
-                        pdf_path=pdf_path,
-                        quote_id=quote_id
-                    )
-                    update_quote_record(record_id, {"pdf_link": pdf_path})
-                    reply = "All done! I’ve just emailed your quote. Let me know if you need anything else."
-                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"To: {email}")
-                except Exception as e:
-                    reply = "Something went wrong while sending your quote. Please call 1300 918 388 and we’ll help out."
-                    log_debug_event(record_id, "BACKEND", "PDF Error", str(e))
-
-                append_message_log(record_id, message, "user")
-                append_message_log(record_id, reply, "brendan")
-                flush = flush_debug_log(record_id)
-                if flush:
-                    update_quote_record(record_id, {"debug_log": flush})
-
-                return JSONResponse(content={"properties": [], "response": reply, "next_actions": [], "session_id": session_id})
-
+        # === Message Log and GPT Processing ===
         log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
-        if stage == "Quote Calculated" and any(k in message_lower for k in pdf_keywords):
+        if stage == "Quote Calculated" and any(k in message_lower for k in PDF_KEYWORDS):
             log = PDF_SYSTEM_MESSAGE + "\n\n" + log
 
         append_message_log(record_id, message, "user")
-        log_debug_event(record_id, "BACKEND", "Calling GPT", "Sending message log to GPT.")
-
         properties, reply = await extract_properties_from_gpt4(message, log, record_id, quote_id)
+
+        # === Merge, Calculate and Generate Summary ===
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         merged = fields.copy()
         merged.update(parsed)
 
-        if parsed.get("quote_stage") == "Quote Calculated" and message_lower not in pdf_keywords:
+        if parsed.get("quote_stage") == "Quote Calculated" and message_lower not in PDF_KEYWORDS:
             try:
                 result = calculate_quote(QuoteRequest(**merged))
                 parsed.update(result.model_dump())
-                summary = get_inline_quote_summary(result.model_dump())
-                reply = summary + "\n\nWould you like me to email you this quote as a PDF?"
-                log_debug_event(record_id, "BACKEND", "Quote Ready", f"${parsed.get('total_price')} for {parsed.get('estimated_time_mins')} mins")
+                reply = get_inline_quote_summary(result.model_dump()) + "\n\nWould you like me to email you this quote as a PDF?"
             except Exception as e:
                 log_debug_event(record_id, "BACKEND", "Quote Calc Fail", str(e))
 
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
 
-        # === Final debug flush with safety wrapper ===
+        # === Final Flush ===
         try:
             flushed = flush_debug_log(record_id)
             if flushed:
                 update_quote_record(record_id, {"debug_log": flushed})
         except Exception as e:
-            logger.warning(f"⚠️ Final debug flush failed: {e}")
             log_debug_event(record_id, "BACKEND", "Final Flush Failed", str(e))
 
         next_actions = generate_next_actions() if parsed.get("quote_stage") == "Quote Calculated" else []
