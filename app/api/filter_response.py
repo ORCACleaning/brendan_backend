@@ -1052,3 +1052,21 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
+
+
+
+from fastapi import APIRouter
+from fastapi.responses import PlainTextResponse
+from app.utils.logging_utils import flush_debug_log, log_debug_event
+
+router = APIRouter()
+
+@router.get("/force-log-test")
+async def force_log_test():
+    record_id = "recj7c1Ob419rBWiq"  # Replace this
+    log_debug_event(record_id, "MANUAL", "Test Log", "Manual test from /force-log-test")
+    flush = flush_debug_log(record_id)
+    if flush:
+        update_quote_record(record_id, {"debug_log": flush})
+        return PlainTextResponse("✅ Log flushed and written.")
+    return PlainTextResponse("⚠️ Nothing flushed.")
