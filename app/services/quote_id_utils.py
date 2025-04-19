@@ -7,13 +7,12 @@ import requests
 
 from fastapi import HTTPException
 from app.config import logger, settings
-from app.utils.logging_utils import log_debug_event  # ✅ Central logging
+from app.utils.logging_utils import log_debug_event
 
 # Airtable Settings
 AIRTABLE_API_KEY = settings.AIRTABLE_API_KEY
 AIRTABLE_BASE_ID = settings.AIRTABLE_BASE_ID
 QUOTE_ID_COUNTER_TABLE = "Quote ID Counter"
-
 
 # === Brendan Auto Quote ID (Chatbot Generated) ===
 def get_next_quote_id(prefix: str = "VC") -> str:
@@ -72,20 +71,21 @@ def get_next_manual_quote_id() -> str:
 
     record_id = records[0]["id"]
     current_counter = records[0]["fields"].get("counter", 0)
-
     next_counter = current_counter + 1
     next_quote_id = f"VC-{str(next_counter).zfill(6)}"
 
-    patch_res = requests.patch(
-        f"{url}/{record_id}",
-        headers=headers,
-        json={"fields": {"counter": next_counter}}
-    )
-
-    if not patch_res.ok:
-        logger.error(f"❌ Failed to update Quote ID Counter: {patch_res.text}")
+    try:
+        patch_res = requests.patch(
+            f"{url}/{record_id}",
+            headers=headers,
+            json={"fields": {"counter": next_counter}}
+        )
+        if not patch_res.ok:
+            raise ValueError(patch_res.text)
+    except Exception as e:
+        logger.error(f"❌ Failed to update Quote ID Counter: {e}")
         try:
-            log_debug_event(record_id, "BACKEND", "Quote ID Counter Update Failed", patch_res.text)
+            log_debug_event(record_id, "BACKEND", "Quote ID Counter Update Failed", str(e))
         except Exception:
             pass
         raise HTTPException(status_code=500, detail="Failed to update Quote ID Counter.")
