@@ -636,7 +636,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
         return [], reply
 
-    # === Fetch existing Airtable record (if needed) ===
+    # === Fetch existing Airtable record ===
     existing, current_stage = {}, ""
     if record_id and not skip_log_lookup:
         try:
@@ -661,11 +661,12 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
+    # === Chat Init Message ===
     if message == "__init__":
         messages.append({
             "role": "system",
             "content": (
-                "The user has just opened the chat. This is the **exact greeting they saw** on the frontend:\n\n"
+                "The user has just opened the chat. This is the exact greeting they saw:\n\n"
                 "\"G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
                 "You are now taking over.\n"
@@ -724,7 +725,20 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
-    existing_keys = set(prop_map.keys())
+
+    # === Auto-set carpet_cleaning = true if carpet counts exist ===
+    carpet_fields = [
+        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
+    ]
+    if "carpet_cleaning" not in prop_map:
+        for f in carpet_fields:
+            val = prop_map.get(f) or existing.get(f)
+            if isinstance(val, int) and val > 0:
+                props.append({"property": "carpet_cleaning", "value": True})
+                prop_map["carpet_cleaning"] = True
+                log_debug_event(record_id, "BACKEND", "Auto-set carpet_cleaning", f"Triggered by {f} > 0")
+                break
 
     # === Restrict hallucinated booleans unless confirmed ===
     restricted_fields = {
@@ -736,13 +750,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if p["property"] not in restricted_fields or str(p["value"]).lower() in ["true", "false"]
     ]
 
-    # === Missing Carpet Breakdown (only if carpet_cleaning is True) ===
-    carpet_fields = [
-        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
-    ]
-    carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False)
-    if carpet_cleaning:
+    # === Ask for carpet breakdown if carpet_cleaning = True and missing fields ===
+    if prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False):
         missing = [f for f in carpet_fields if f not in prop_map and not existing.get(f)]
         if missing:
             msg = (
@@ -782,7 +791,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 # === GPT Error Email Alert ===
 
 def send_gpt_error_email(error_msg: str):
