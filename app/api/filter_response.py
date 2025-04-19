@@ -997,11 +997,9 @@ async def handle_chat_init(session_id: str):
 
 
 # === Brendan API Router ===
-
 router = APIRouter()
 
 # === /filter-response Route ===
-# === Brendan Chat Handler ===
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -1012,7 +1010,7 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # === Init Trigger ===
+        # === Handle Init Trigger ===
         if message.lower() == "__init__":
             try:
                 return await handle_chat_init(session_id)
@@ -1020,16 +1018,16 @@ async def filter_response_entry(request: Request):
                 log_debug_event(None, "BACKEND", "Init Error", str(e))
                 raise HTTPException(status_code=500, detail="Init failed.")
 
-        # === Retrieve Existing Quote ===
+        # === Load Existing Quote ===
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Quote not found.")
 
-        quote_id, record_id, stage, fields = quote_data
+        quote_id, record_id, quote_stage, fields = quote_data
         message_lower = message.lower()
 
-        # === Blocked Session ===
-        if stage == "Chat Banned":
+        # === Blocked Chat ===
+        if quote_stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
                 "response": "This chat is closed. Call 1300 918 388 if you still need a quote.",
@@ -1037,41 +1035,46 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Handle Privacy Consent ===
-        if stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged", False):
+        # === Privacy Consent Handler ===
+        if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
             return await handle_privacy_consent(message, message_lower, record_id, session_id)
 
-        # === Handle Contact Info and Send PDF ===
-        if stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
+        # === Contact Info Handler + PDF Trigger ===
+        if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
             if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
                 return await handle_pdf_email_send(message, fields, quote_id, record_id, session_id)
 
-        # === Message Log + GPT Prep ===
+        # === Inject PDF instruction if quote is already calculated and user is asking for PDF ===
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
-        if stage == "Quote Calculated" and any(keyword in message_lower for keyword in PDF_KEYWORDS):
+        if quote_stage == "Quote Calculated" and any(word in message_lower for word in PDF_KEYWORDS):
             message_log = PDF_SYSTEM_MESSAGE + "\n\n" + message_log
 
+        # === Append incoming message to Airtable log ===
         append_message_log(record_id, message, "user")
+
+        # === Extract Properties via GPT-4 Turbo ===
         properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
-
-        # === Merge Fields & Calculate Quote if Needed ===
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
-        merged = fields.copy()
-        merged.update(parsed)
 
-        if parsed.get("quote_stage") == "Quote Calculated" and message_lower not in PDF_KEYWORDS:
+        # === Merge Parsed Properties with Existing Fields ===
+        updated_fields = fields.copy()
+        updated_fields.update(parsed)
+
+        # === Calculate Quote if All Required Fields Present ===
+        if parsed.get("quote_stage") == "Quote Calculated" and not any(w in message_lower for w in PDF_KEYWORDS):
             try:
-                result = calculate_quote(QuoteRequest(**merged))
+                result = calculate_quote(QuoteRequest(**updated_fields))
                 parsed.update(result.model_dump())
                 reply = get_inline_quote_summary(result.model_dump()) + "\n\nWould you like me to email you this quote as a PDF?"
                 log_debug_event(record_id, "BACKEND", "Quote Ready", f"${parsed.get('total_price')} for {parsed.get('estimated_time_mins')} mins")
             except Exception as e:
-                log_debug_event(record_id, "BACKEND", "Quote Calc Fail", str(e))
+                log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
 
+        # === Update Airtable Record ===
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
 
-        # === Final Flush ===
+        # === Final Debug Log Flush ===
         try:
             flushed = flush_debug_log(record_id)
             if flushed:
@@ -1079,7 +1082,7 @@ async def filter_response_entry(request: Request):
         except Exception as e:
             log_debug_event(record_id, "BACKEND", "Final Flush Failed", str(e))
 
-        # === Actions for Frontend ===
+        # === Determine Next Actions for Frontend ===
         next_actions = generate_next_actions() if parsed.get("quote_stage") == "Quote Calculated" else []
 
         return JSONResponse(content={
