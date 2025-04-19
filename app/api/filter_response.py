@@ -748,7 +748,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     # === Ask for missing carpet fields only if some are missing ===
     if prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False):
-        missing = [f for f in carpet_fields if (f not in prop_map and not existing.get(f))]
+        missing = [f for f in carpet_fields if (f not in prop_map and existing.get(f) is None)]
         if missing:
             msg = (
                 "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
