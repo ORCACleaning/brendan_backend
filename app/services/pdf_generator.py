@@ -13,7 +13,6 @@ def generate_quote_pdf(data: dict) -> (str, str):
     Generate a PDF quote using WeasyPrint & Jinja2.
     Returns: (Absolute PDF Path, Public PDF URL)
     """
-    # === Generate Safe Quote ID and Output Path ===
     quote_id = data.get("quote_id") or f"VAC-{uuid.uuid4().hex[:8]}"
     filename = f"{quote_id}.pdf"
     output_path = f"app/static/quotes/{filename}"
@@ -56,19 +55,25 @@ def generate_quote_pdf(data: dict) -> (str, str):
         wc = int(data.get("window_count") or 0)
         extra_services.append(f"Window Cleaning ({wc} windows)" if wc else "Window Cleaning")
 
-    carpet_map = [
-        ("carpet_bedroom_count", "bedroom"),
-        ("carpet_mainroom_count", "main room"),
-        ("carpet_study_count", "study"),
-        ("carpet_halway_count", "hallway"),
-        ("carpet_stairs_count", "stairs"),
-        ("carpet_other_count", "other area"),
-    ]
-    for field, label in carpet_map:
-        count = int(data.get(field) or 0)
-        if count > 0:
-            extra_services.append(f"Carpet Steam Cleaning – {count} {label}(s)")
+    # Carpet Logic
+    carpet_cleaning = str(data.get("carpet_cleaning", "")).strip()
+    if carpet_cleaning == "Yes":
+        carpet_map = [
+            ("carpet_bedroom_count", "bedroom"),
+            ("carpet_mainroom_count", "main room"),
+            ("carpet_study_count", "study"),
+            ("carpet_halway_count", "hallway"),
+            ("carpet_stairs_count", "stairs"),
+            ("carpet_other_count", "other area"),
+        ]
+        for field, label in carpet_map:
+            count = int(data.get(field) or 0)
+            if count > 0:
+                extra_services.append(f"Carpet Steam Cleaning – {count} {label}(s)")
+        if not any(int(data.get(f[0]) or 0) > 0 for f in carpet_map):
+            extra_services.append("Carpet Steam Cleaning")
 
+    # Extras
     extras_map = {
         "oven_cleaning": "Oven Cleaning",
         "garage_cleaning": "Garage/Shed Cleaning",
@@ -85,31 +90,29 @@ def generate_quote_pdf(data: dict) -> (str, str):
             extra_services.append(label)
 
     data["extra_services"] = ", ".join(extra_services) if extra_services else "None"
-
     if record_id:
         log_debug_event(record_id, "BACKEND", "PDF Extra Services", data["extra_services"])
 
-    # === Property Manager Discount Note ===
+    # === Property Manager Note ===
     if data.get("is_property_manager"):
         agency = data.get("real_estate_name", "Your Real Estate Agency")
         data["property_manager_note"] = f"✅ Property Manager Discount Applied (5%) — {agency}"
     else:
         data["property_manager_note"] = "–"
 
-    # === After-Hours Surcharge Note ===
+    # === After-Hours Note ===
     after_hours = float(data.get("after_hours_surcharge") or 0)
     data["after_hours_note"] = (
         f"✅ After-Hours Cleaning Surcharge (${after_hours:.2f})" if after_hours > 0 else "–"
     )
 
-    # === Weekend Surcharge Note ===
+    # === Weekend Note ===
     weekend_surcharge = float(data.get("weekend_surcharge") or 0)
     data["weekend_note"] = (
         f"✅ Weekend Cleaning Surcharge (${weekend_surcharge:.2f})" if weekend_surcharge > 0 else "–"
     )
-    data["weekend_surcharge"] = weekend_surcharge
 
-    # === Render HTML and Export to PDF ===
+    # === Render HTML and Export PDF ===
     try:
         html_out = template.render(**data)
         HTML(string=html_out, base_url=".").write_pdf(output_path)
