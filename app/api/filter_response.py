@@ -665,17 +665,21 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         messages.append({
             "role": "system",
             "content": (
-                "The user has just opened the chat. Here is the **exact greeting they saw** on the frontend:\n\n"
-                "“G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
-                "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.”\n\n"
-                "This was the first visual message shown to the customer. Now you are taking over.\n"
-                "- DO NOT greet the user again.\n"
-                "- DO NOT assume any cleaning options like carpet or upholstery.\n"
-                "- DO NOT assume the user has granted privacy consent.\n"
-                "- DO NOT ask about extras or contact details yet.\n\n"
-                "Instead, continue the flow by asking just:\n"
-                "> 'What suburb are we quoting for today, and how many bedrooms and bathrooms are we looking at?'\n\n"
-                "Make your message sound natural, warm, and helpful — and keep it one line."
+                "The customer has just opened the chat. This is the **exact greeting they saw** on the frontend:\n\n"
+                "\"G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
+                "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
+                "You are now continuing the conversation from that greeting. DO NOT greet again.\n"
+                "- Do NOT assume any cleaning options (like carpet, upholstery, etc).\n"
+                "- Do NOT mention pricing, extras, or contact info.\n"
+                "- You MAY ask what name the customer prefers to go by.\n\n"
+                "Here are some natural examples of how to begin:\n\n"
+                "Example 1:\n"
+                "\"What name do you go by? And what suburb are we quoting for today — how many bedrooms and bathrooms?\"\n\n"
+                "Example 2:\n"
+                "\"Let’s get started! What suburb is the property in, how many beds and baths, and what name should I use for you?\"\n\n"
+                "Example 3:\n"
+                "\"Alrighty — first up, what suburb are we quoting in, and how many bedrooms + bathrooms? And what should I call you?\"\n\n"
+                "Choose a natural variation. You’re friendly, relaxed, and helpful."
             )
         })
     elif current_stage == "Quote Calculated":
