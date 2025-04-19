@@ -169,26 +169,27 @@ Ask no more than 2–3 of these at once. Keep it casual, short, and friendly.
 5. oven_cleaning  
 6. window_cleaning — If true, ask for window_count  
 7. blind_cleaning  
-8. carpet_bedroom_count  
-9. carpet_mainroom_count  
-10. carpet_study_count  
-11. carpet_halway_count  
-12. carpet_stairs_count  
-13. carpet_other_count  
-14. deep_cleaning  
-15. fridge_cleaning  
-16. range_hood_cleaning  
-17. wall_cleaning  
-18. balcony_cleaning  
-19. garage_cleaning  
-20. upholstery_cleaning  
-21. after_hours_cleaning  
-22. weekend_cleaning  
-23. mandurah_property  
-24. is_property_manager — If true, ask for real_estate_name and number_of_sessions  
-25. special_requests  
-26. special_request_minutes_min  
-27. special_request_minutes_max  
+8. carpet_cleaning — Must be "Yes", "No", or ""  
+9. carpet_bedroom_count  
+10. carpet_mainroom_count  
+11. carpet_study_count  
+12. carpet_halway_count  
+13. carpet_stairs_count  
+14. carpet_other_count  
+15. deep_cleaning  
+16. fridge_cleaning  
+17. range_hood_cleaning  
+18. wall_cleaning  
+19. balcony_cleaning  
+20. garage_cleaning  
+21. upholstery_cleaning  
+22. after_hours_cleaning  
+23. weekend_cleaning  
+24. mandurah_property  
+25. is_property_manager — If true, ask for real_estate_name and number_of_sessions  
+26. special_requests  
+27. special_request_minutes_min  
+28. special_request_minutes_max  
 
 ---
 
@@ -205,24 +206,33 @@ DO NOT skip blind cleaning — even in unfurnished homes.
 
 ---
 
-## RULES FOR CARPET FIELDS:
+## RULES FOR `carpet_cleaning`:
 
-NEVER ask yes/no for carpet cleaning.
+This is a Single Select field with options: "Yes", "No", or empty ("").
 
-Instead say:
-> "Roughly how many bedrooms, living areas, studies or stairs have carpet?"
+1. If carpet_cleaning is "No":
+   - Do NOT extract individual carpet fields.
+   - Respond: "Got it — we’ll skip the carpet steam cleaning."
 
-Then extract:
-- carpet_bedroom_count  
-- carpet_mainroom_count  
-- carpet_study_count  
-- carpet_halway_count  
-- carpet_stairs_count  
-- carpet_other_count  
+2. If carpet_cleaning is "Yes":
+   - Collect all the individual fields:
+     - carpet_bedroom_count
+     - carpet_mainroom_count
+     - carpet_study_count
+     - carpet_halway_count
+     - carpet_stairs_count
+     - carpet_other_count
+   - If any are missing or blank:
+     > "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
 
-If any of these is > 0, also include:
-```json
-{ "property": "carpet_cleaning", "value": true }
+3. If carpet_cleaning is empty (""):
+   - Ask: "Do you need carpet steam cleaning as part of your vacate clean?"
+
+DO NOT guess carpet intent from other fields unless the user is 100% clear.
+
+If any of the carpet fields are provided but carpet_cleaning is still empty, wait for the customer to confirm.
+
+---
 """
 
 # Trigger Words for Abuse Detection (Escalation Logic)
@@ -355,8 +365,7 @@ def get_quote_by_session(session_id: str):
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
-    Fixes casing of keys by fetching actual Airtable field names.
-    Always includes message_log and debug_log even if unchanged.
+    Normalizes field values according to Airtable schema and rules.
     """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
@@ -369,7 +378,7 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # === Fetch actual Airtable schema field keys to match casing ===
+    # === Fetch Airtable field names from schema ===
     schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
     actual_keys = set()
     try:
@@ -386,17 +395,7 @@ def update_quote_record(record_id: str, fields: dict):
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
 
-    # === Normalize 'furnished' ===
-    if "furnished" in fields:
-        val = str(fields["furnished"]).strip().lower()
-        if "unfurnished" in val:
-            fields["furnished"] = "Unfurnished"
-        elif "furnished" in val:
-            fields["furnished"] = "Furnished"
-        else:
-            logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
-            fields["furnished"] = ""
-
+    # === Field-specific transformations ===
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
         corrected_key = next((k for k in actual_keys if k.lower() == key.lower()), key)
@@ -405,8 +404,25 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
             continue
 
-        if corrected_key in BOOLEAN_FIELDS:
-            value = value if isinstance(value, bool) else str(value).strip().lower() in TRUE_VALUES
+        # === Carpet Cleaning (Single Select) ===
+        if corrected_key == "carpet_cleaning":
+            val = str(value).strip().capitalize()
+            if val not in {"Yes", "No"}:
+                value = ""
+            else:
+                value = val
+
+        # === Furnished (Single Select) ===
+        elif corrected_key == "furnished":
+            val = str(value).strip().lower()
+            if "unfurnished" in val:
+                value = "Unfurnished"
+            elif "furnished" in val:
+                value = "Furnished"
+            else:
+                value = ""
+
+        # === Integer Casting ===
         elif corrected_key in INTEGER_FIELDS:
             try:
                 value = int(float(value))
@@ -416,6 +432,12 @@ def update_quote_record(record_id: str, fields: dict):
             except:
                 logger.warning(f"⚠️ Failed to convert {corrected_key} to int — defaulting to 0")
                 value = 0
+
+        # === Boolean Casting ===
+        elif corrected_key in BOOLEAN_FIELDS:
+            value = value if isinstance(value, bool) else str(value).strip().lower() in TRUE_VALUES
+
+        # === Float-safe fields ===
         elif corrected_key in {
             "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
             "estimated_time_mins", "discount_applied", "mandurah_surcharge",
@@ -424,26 +446,30 @@ def update_quote_record(record_id: str, fields: dict):
             try:
                 value = float(value)
             except:
-                logger.warning(f"⚠️ Failed to convert {corrected_key} to float — defaulting to 0.0")
                 value = 0.0
+
+        # === Optional string cleanup ===
         elif corrected_key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
+
         elif corrected_key == "extra_hours_requested":
             try:
                 value = float(value) if value not in [None, ""] else 0.0
             except:
                 value = 0.0
+
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[corrected_key] = value
 
+    # === Always include logs if present ===
     for log_field in ["message_log", "debug_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
 
-    # === Flush debug_log and inject ===
+    # === Flush debug log and inject ===
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
@@ -453,13 +479,11 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "No Valid Fields", "Nothing passed validation for update.")
         return []
 
-    # Final safe filter
     validated_fields = {
         key: val for key, val in normalized_fields.items()
         if key in actual_keys
     }
 
-    # === Defensive: Was debug_log flushed but not included? ===
     if debug_log and "debug_log" not in validated_fields:
         log_debug_event(record_id, "BACKEND", "Debug Log Dropped", "debug_log flushed but not matched in schema")
 
@@ -506,7 +530,7 @@ def update_quote_record(record_id: str, fields: dict):
 def get_inline_quote_summary(data: dict) -> str:
     """
     Generates a natural, friendly quote summary for Brendan to show in chat.
-    Includes price, estimated time, cleaner count, discount details, and selected options.
+    Includes price, estimated time, cleaner count, discount details, and selected cleaning options.
     """
 
     price = float(data.get("total_price", 0) or 0)
@@ -515,10 +539,11 @@ def get_inline_quote_summary(data: dict) -> str:
     note = str(data.get("note", "") or "").strip()
     special_requests = str(data.get("special_requests", "") or "").strip()
     is_property_manager = str(data.get("is_property_manager", "") or "").lower() in TRUE_VALUES
+    carpet_cleaning = str(data.get("carpet_cleaning", "") or "").strip()
 
     # === Time & Cleaners Calculation ===
     hours = time_est_mins / 60
-    cleaners = max(1, (time_est_mins + 299) // 300)  # Max 5 hours per cleaner
+    cleaners = max(1, (time_est_mins + 299) // 300)  # Max 5 hrs per cleaner
     hours_per_cleaner = hours / cleaners
     hours_display = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
 
@@ -559,12 +584,14 @@ def get_inline_quote_summary(data: dict) -> str:
         "upholstery_cleaning": "Upholstery Cleaning",
         "after_hours_cleaning": "After-Hours Cleaning",
         "weekend_cleaning": "Weekend Cleaning",
-        "carpet_cleaning": "Carpet Steam Cleaning",
     }
 
     for field, label in CLEANING_OPTIONS.items():
         if str(data.get(field, "")).lower() in TRUE_VALUES:
             selected_services.append(f"- {label}")
+
+    if carpet_cleaning == "Yes":
+        selected_services.append("- Carpet Steam Cleaning")
 
     if special_requests:
         selected_services.append(f"- Special Request: {special_requests}")
@@ -572,18 +599,17 @@ def get_inline_quote_summary(data: dict) -> str:
     if selected_services:
         summary += "\n🧹 Cleaning Included:\n" + "\n".join(selected_services)
 
-    # === Notes (Optional) ===
+    # === Optional Note ===
     if note:
         summary += f"\n\n📜 Note: {note}"
 
-    # === Closing Line ===
+    # === Final Line ===
     summary += (
         "\n\nThis quote is valid for 7 days.\n"
         "Would you like me to send this to your email as a PDF, or would you like to make any changes?"
     )
 
     return summary.strip()
-
 
 # === Generate Next Actions After Quote ===
 
@@ -616,7 +642,6 @@ def generate_next_actions():
     ]
 
 # === GPT Extraction (Production-Grade) ===
-
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
@@ -658,7 +683,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
-    # === Chat Init Message ===
     if message == "__init__":
         messages.append({
             "role": "system",
@@ -668,21 +692,16 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
                 "You are now taking over.\n"
                 "- DO NOT repeat this greeting.\n"
-                "- DO NOT assume cleaning options (like carpet, upholstery, etc).\n"
-                "- DO NOT ask about pricing or contact info.\n"
-                "- You MAY ask what name the customer prefers to go by.\n"
-                "- You MAY ask for suburb, bedroom, and bathroom count.\n\n"
-                "Here are friendly examples you can copy or vary:\n"
-                "- 'What name do you go by? And what suburb are we quoting for today — how many bedrooms and bathrooms?'\n"
-                "- 'Let’s get started! What suburb is the property in, how many beds and baths, and what name should I use for you?'\n"
-                "- 'Alrighty — first up, what suburb are we quoting in, and how many bedrooms + bathrooms? And what should I call you?'"
+                "- DO NOT assume cleaning options.\n"
+                "- DO NOT ask about contact info.\n"
+                "- Start by asking what name they go by, suburb, and how many bedrooms/bathrooms.\n"
             )
         })
 
     elif current_stage == "Quote Calculated":
         messages.append({
             "role": "system",
-            "content": "The quote has already been calculated. DO NOT regenerate the quote unless the customer changes details."
+            "content": "The quote has already been calculated. DO NOT regenerate unless customer changes details."
         })
 
     messages.append({"role": "user", "content": message.strip()})
@@ -723,37 +742,16 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     reply = parsed.get("response", "").strip()
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
 
-    # === Auto-set carpet_cleaning = True if any carpet fields are filled ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
-    if not prop_map.get("carpet_cleaning") and not existing.get("carpet_cleaning"):
-        for field in carpet_fields:
-            value = prop_map.get(field) or existing.get(field)
-            if isinstance(value, int) and value > 0:
-                props.append({"property": "carpet_cleaning", "value": True})
-                prop_map["carpet_cleaning"] = True
-                log_debug_event(record_id, "BACKEND", "Auto-set carpet_cleaning", f"Triggered by {field} > 0")
-                break
+    carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", "")
 
-    # === Restrict hallucinated booleans unless confirmed ===
-    restricted_fields = {
-        "carpet_cleaning", "privacy_acknowledged", "upholstery_cleaning",
-        "after_hours_cleaning", "weekend_cleaning"
-    }
-    props = [
-        p for p in props
-        if p["property"] not in restricted_fields or str(p["value"]).lower() in ["true", "false"]
-    ]
-
-    # === Ask for missing carpet fields only if truly missing ===
-    if prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False):
+    if carpet_cleaning == "Yes":
         missing = []
         for field in carpet_fields:
-            val_in_props = prop_map.get(field)
-            val_in_existing = existing.get(field)
-            if val_in_props is None and val_in_existing is None:
+            if field not in prop_map and existing.get(field) is None:
                 missing.append(field)
 
         if missing:
@@ -764,6 +762,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             if record_id:
                 log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
             return props, msg
+
+    elif carpet_cleaning == "":
+        msg = "Would you like to include carpet steam cleaning in the vacate clean?"
+        log_debug_event(record_id, "GPT", "Carpet Cleaning Undecided", "carpet_cleaning field is blank")
+        return props, msg
 
     # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
