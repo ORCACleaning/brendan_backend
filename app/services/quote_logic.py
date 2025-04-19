@@ -60,19 +60,20 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
             base_minutes += 60
             log_debug_event(record_id, "BACKEND", "Furnished Bonus Time", "+60 mins")
 
-        carpet_breakdown = {
-            "bedroom": (data.carpet_bedroom_count or 0) * 30,
-            "mainroom": (data.carpet_mainroom_count or 0) * 45,
-            "study": (data.carpet_study_count or 0) * 25,
-            "hallway": (data.carpet_halway_count or 0) * 20,
-            "stairs": (data.carpet_stairs_count or 0) * 35,
-            "other": (data.carpet_other_count or 0) * 30
-        }
+        if str(data.carpet_cleaning).strip() == "Yes":
+            carpet_breakdown = {
+                "bedroom": (data.carpet_bedroom_count or 0) * 30,
+                "mainroom": (data.carpet_mainroom_count or 0) * 45,
+                "study": (data.carpet_study_count or 0) * 25,
+                "hallway": (data.carpet_halway_count or 0) * 20,
+                "stairs": (data.carpet_stairs_count or 0) * 35,
+                "other": (data.carpet_other_count or 0) * 30
+            }
 
-        for area, mins in carpet_breakdown.items():
-            if mins > 0:
-                log_debug_event(record_id, "BACKEND", f"Carpet {area.title()} Time", f"+{mins} mins")
-            base_minutes += mins
+            for area, mins in carpet_breakdown.items():
+                if mins > 0:
+                    log_debug_event(record_id, "BACKEND", f"Carpet {area.title()} Time", f"+{mins} mins")
+                base_minutes += mins
 
         log_debug_event(record_id, "BACKEND", "Base Time Calculated", f"{base_minutes} mins")
 
