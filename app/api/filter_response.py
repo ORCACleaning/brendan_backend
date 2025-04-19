@@ -1061,14 +1061,29 @@ async def filter_response_entry(request: Request):
         if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
             return await handle_privacy_consent(message, message_lower, record_id, session_id)
 
-        # === Contact Info Collection ===
+        # === Contact Info Collection and PDF Sending ===
         if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
-            if all([
-                fields.get("customer_name"),
-                fields.get("customer_email"),
-                fields.get("customer_phone")
-            ]):
-                return await handle_pdf_email_send(message, fields, quote_id, record_id, session_id)
+            name = fields.get("customer_name", "").strip()
+            email = fields.get("customer_email", "").strip()
+            phone = fields.get("customer_phone", "").strip()
+
+            if name and email and phone:
+                try:
+                    pdf_path = generate_quote_pdf(fields)
+                    send_quote_email(email, name, pdf_path, quote_id)
+                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"PDF sent to {email}")
+                    update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
+                    append_message_log(record_id, f"PDF quote sent to {email}", "brendan")
+
+                    return JSONResponse(content={
+                        "properties": [],
+                        "response": f"Thanks {name}! I’ve just sent your quote to {email}. Let me know if you need help with anything else — or feel free to book directly anytime: https://orcacleaning.com.au/schedule?quote_id={quote_id}",
+                        "next_actions": [],
+                        "session_id": session_id
+                    })
+                except Exception as e:
+                    log_debug_event(record_id, "BACKEND", "PDF/Email Error", str(e))
+                    raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
         # === Inject PDF System Message if user requests PDF ===
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
