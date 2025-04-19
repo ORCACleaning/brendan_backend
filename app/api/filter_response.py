@@ -767,7 +767,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     base_ready = all(base_fields.values())
 
     if current_stage in {"", "Gathering Info"} and not base_ready:
-        # Prevent asking about carpet until suburb/bed/bath/furnished are filled
         if carpet_cleaning or any(f in prop_map for f in carpet_fields):
             log_debug_event(record_id, "GPT", "Suppressed Carpet Fields", "Delayed carpet logic until base quote info is complete.")
             props = [p for p in props if p["property"] not in {"carpet_cleaning", *carpet_fields}]
@@ -1019,6 +1018,7 @@ async def handle_chat_init(session_id: str):
         raise HTTPException(status_code=500, detail="Failed to initialize Brendan.")
 
 # === Brendan API Router ===
+
 router = APIRouter()
 
 # === /filter-response Route ===
