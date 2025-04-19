@@ -661,19 +661,20 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
-    # === First Chat Message ===
     if message == "__init__":
         messages.append({
             "role": "system",
             "content": (
-                "The user has just opened the chat. This is the exact greeting they saw:\n\n"
+                "The user has just opened the chat. This is the **exact greeting they saw** on the frontend:\n\n"
                 "\"G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
-                "You are now continuing from this greeting. Do NOT repeat the greeting.\n"
-                "- Do NOT assume carpet, upholstery, or extras.\n"
-                "- Do NOT ask about contact details or pricing yet.\n"
-                "- You MAY ask what the customer wants to be called.\n\n"
-                "Example prompts:\n"
+                "You are now taking over.\n"
+                "- DO NOT repeat this greeting.\n"
+                "- DO NOT assume cleaning options (like carpet, upholstery, etc).\n"
+                "- DO NOT ask about pricing or contact info.\n"
+                "- You MAY ask what name the customer prefers to go by.\n"
+                "- You MAY ask for suburb, bedroom, and bathroom count.\n\n"
+                "Here are friendly examples you can copy or vary:\n"
                 "- 'What name do you go by? And what suburb are we quoting for today — how many bedrooms and bathrooms?'\n"
                 "- 'Let’s get started! What suburb is the property in, how many beds and baths, and what name should I use for you?'\n"
                 "- 'Alrighty — first up, what suburb are we quoting in, and how many bedrooms + bathrooms? And what should I call you?'"
@@ -683,7 +684,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     elif current_stage == "Quote Calculated":
         messages.append({
             "role": "system",
-            "content": "The quote has already been calculated. DO NOT regenerate the quote unless the customer changes the details."
+            "content": "The quote has already been calculated. DO NOT regenerate the quote unless the customer changes details."
         })
 
     messages.append({"role": "user", "content": message.strip()})
@@ -735,7 +736,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if p["property"] not in restricted_fields or str(p["value"]).lower() in ["true", "false"]
     ]
 
-    # === Missing Carpet Breakdown (only if user confirmed carpet_cleaning) ===
+    # === Missing Carpet Breakdown (only if carpet_cleaning is True) ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
@@ -774,11 +775,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             if flush:
                 update_quote_record(record_id, {"debug_log": flush})
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
-
-    if not props:
-        return [], (
-            "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
-        )
 
     log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Line: {reply[:100]}")
     flushed = flush_debug_log(record_id)
