@@ -617,6 +617,7 @@ def generate_next_actions():
 
 # === GPT Extraction (Production-Grade) ===
 
+
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
@@ -746,9 +747,15 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if p["property"] not in restricted_fields or str(p["value"]).lower() in ["true", "false"]
     ]
 
-    # === Ask for missing carpet fields only if some are missing ===
+    # === Ask for missing carpet fields only if truly missing ===
     if prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False):
-        missing = [f for f in carpet_fields if (f not in prop_map and existing.get(f) is None)]
+        missing = []
+        for field in carpet_fields:
+            val_in_props = prop_map.get(field)
+            val_in_existing = existing.get(field)
+            if val_in_props is None and val_in_existing is None:
+                missing.append(field)
+
         if missing:
             msg = (
                 "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
@@ -787,7 +794,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 
 # === GPT Error Email Alert ===
 
