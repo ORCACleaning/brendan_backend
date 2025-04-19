@@ -661,27 +661,25 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
+    # === First Chat Message ===
     if message == "__init__":
         messages.append({
             "role": "system",
             "content": (
-                "The customer has just opened the chat. This is the **exact greeting they saw** on the frontend:\n\n"
+                "The user has just opened the chat. This is the exact greeting they saw:\n\n"
                 "\"G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
-                "You are now continuing the conversation from that greeting. DO NOT greet again.\n"
-                "- Do NOT assume any cleaning options (like carpet, upholstery, etc).\n"
-                "- Do NOT mention pricing, extras, or contact info.\n"
-                "- You MAY ask what name the customer prefers to go by.\n\n"
-                "Here are some natural examples of how to begin:\n\n"
-                "Example 1:\n"
-                "\"What name do you go by? And what suburb are we quoting for today — how many bedrooms and bathrooms?\"\n\n"
-                "Example 2:\n"
-                "\"Let’s get started! What suburb is the property in, how many beds and baths, and what name should I use for you?\"\n\n"
-                "Example 3:\n"
-                "\"Alrighty — first up, what suburb are we quoting in, and how many bedrooms + bathrooms? And what should I call you?\"\n\n"
-                "Choose a natural variation. You’re friendly, relaxed, and helpful."
+                "You are now continuing from this greeting. Do NOT repeat the greeting.\n"
+                "- Do NOT assume carpet, upholstery, or extras.\n"
+                "- Do NOT ask about contact details or pricing yet.\n"
+                "- You MAY ask what the customer wants to be called.\n\n"
+                "Example prompts:\n"
+                "- 'What name do you go by? And what suburb are we quoting for today — how many bedrooms and bathrooms?'\n"
+                "- 'Let’s get started! What suburb is the property in, how many beds and baths, and what name should I use for you?'\n"
+                "- 'Alrighty — first up, what suburb are we quoting in, and how many bedrooms + bathrooms? And what should I call you?'"
             )
         })
+
     elif current_stage == "Quote Calculated":
         messages.append({
             "role": "system",
@@ -727,7 +725,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
     existing_keys = set(prop_map.keys())
 
-    # === Prevent GPT from hallucinating restricted fields ===
+    # === Restrict hallucinated booleans unless confirmed ===
     restricted_fields = {
         "carpet_cleaning", "privacy_acknowledged", "upholstery_cleaning",
         "after_hours_cleaning", "weekend_cleaning"
@@ -737,7 +735,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if p["property"] not in restricted_fields or str(p["value"]).lower() in ["true", "false"]
     ]
 
-    # === Carpet Section Trigger (only if user confirmed it) ===
+    # === Missing Carpet Breakdown (only if user confirmed carpet_cleaning) ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
@@ -754,7 +752,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
             return props, msg
 
-    # === Abuse Check ===
+    # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
