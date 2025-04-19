@@ -726,18 +726,18 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     reply = parsed.get("response", "").strip()
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
 
-    # === Auto-set carpet_cleaning = true if carpet counts exist ===
+    # === Auto-set carpet_cleaning = True if any carpet fields are filled ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
-    if "carpet_cleaning" not in prop_map:
-        for f in carpet_fields:
-            val = prop_map.get(f) or existing.get(f)
-            if isinstance(val, int) and val > 0:
+    if not prop_map.get("carpet_cleaning") and not existing.get("carpet_cleaning"):
+        for field in carpet_fields:
+            value = prop_map.get(field) or existing.get(field)
+            if isinstance(value, int) and value > 0:
                 props.append({"property": "carpet_cleaning", "value": True})
                 prop_map["carpet_cleaning"] = True
-                log_debug_event(record_id, "BACKEND", "Auto-set carpet_cleaning", f"Triggered by {f} > 0")
+                log_debug_event(record_id, "BACKEND", "Auto-set carpet_cleaning", f"Triggered by {field} > 0")
                 break
 
     # === Restrict hallucinated booleans unless confirmed ===
@@ -750,9 +750,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         if p["property"] not in restricted_fields or str(p["value"]).lower() in ["true", "false"]
     ]
 
-    # === Ask for carpet breakdown if carpet_cleaning = True and missing fields ===
+    # === Ask for missing carpet fields only if some are missing ===
     if prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False):
-        missing = [f for f in carpet_fields if f not in prop_map and not existing.get(f)]
+        missing = [f for f in carpet_fields if (f not in prop_map and not existing.get(f))]
         if missing:
             msg = (
                 "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
@@ -791,6 +791,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
+
 # === GPT Error Email Alert ===
 
 def send_gpt_error_email(error_msg: str):
