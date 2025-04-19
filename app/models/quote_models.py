@@ -17,13 +17,13 @@ class QuoteRequest(BaseModel):
     blind_cleaning: bool
 
     # === Carpet Cleaning Breakdown ===
+    carpet_cleaning: Optional[str] = ""  # "Yes", "No", or ""
     carpet_bedroom_count: Optional[int] = 0
     carpet_mainroom_count: Optional[int] = 0
     carpet_study_count: Optional[int] = 0
     carpet_halway_count: Optional[int] = 0
     carpet_stairs_count: Optional[int] = 0
     carpet_other_count: Optional[int] = 0
-    carpet_cleaning: Optional[bool] = False  # Auto-filled by backend logic
 
     # === Optional Extra Services ===
     wall_cleaning: bool
@@ -38,7 +38,7 @@ class QuoteRequest(BaseModel):
     after_hours_cleaning: bool
     weekend_cleaning: bool
     mandurah_property: bool
-    after_hours_surcharge: Optional[float] = 0.0  # Final applied fee in $
+    after_hours_surcharge: Optional[float] = 0.0
     weekend_surcharge: Optional[float] = 0.0
     mandurah_surcharge: Optional[float] = 0.0
 
