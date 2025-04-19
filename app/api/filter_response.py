@@ -636,6 +636,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
         return [], reply
 
+    # === Fetch existing Airtable record (if needed) ===
     existing, current_stage = {}, ""
     if record_id and not skip_log_lookup:
         try:
@@ -649,6 +650,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
+    # === Prepare GPT messages ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
     messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
@@ -666,11 +668,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "The user has just opened the chat — this is the very first message after frontend greeting.\n"
                 "You are Brendan, the quoting assistant for vacate cleans in Perth and Mandurah.\n\n"
                 "- DO NOT greet the user (frontend already did that).\n"
-                "- DO NOT assume the customer has said anything yet.\n"
-                "- DO NOT ask about carpet or services.\n\n"
-                "Start by asking:\n"
-                "> 'What suburb are we quoting for today, and how many bedrooms and bathrooms are we looking at?'\n"
-                "Make it natural, casual, and only one line. Do NOT mention extras or prices yet."
+                "- DO NOT assume carpet cleaning or any extras.\n"
+                "- DO NOT mention privacy or contact fields.\n\n"
+                "Start with just:\n"
+                "> 'What suburb are we quoting for today, and how many bedrooms and bathrooms are we looking at?'"
             )
         })
     elif current_stage == "Quote Calculated":
@@ -717,35 +718,40 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     reply = parsed.get("response", "").strip()
     existing_keys = {p["property"] for p in props if "property" in p}
 
-    def ensure_field(name: str, default):
-        if name not in existing_keys:
-            props.append({"property": name, "value": default})
+    # === Enforce field restrictions ===
+    restricted_fields = {
+        "carpet_cleaning",
+        "privacy_acknowledged",
+        "upholstery_cleaning",
+        "after_hours_cleaning",
+        "weekend_cleaning"
+    }
+
+    props = [
+        p for p in props
+        if p["property"] not in restricted_fields or str(p["value"]).lower() in ["true", "false"]
+    ]
+
+    # === Carpet Logic (only if user confirmed carpet_cleaning = true) ===
+    prop_map = {p["property"]: p["value"] for p in props}
+    carpet_confirmed = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False)
 
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
-    ensure_field("carpet_study_count", 0)
-    ensure_field("carpet_cleaning", False)
-    ensure_field("upholstery_cleaning", False)
+    if carpet_confirmed:
+        missing_carpet = [f for f in carpet_fields if f not in existing_keys and not existing.get(f)]
+        if missing_carpet:
+            msg = (
+                "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
+                "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
+            )
+            if record_id:
+                log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing_carpet))
+            return props, msg
 
-    carpet_total = sum(
-        int(p.get("value", 0)) for p in props
-        if p["property"] in carpet_fields and isinstance(p.get("value"), (int, float))
-    )
-    if carpet_total > 0 and "carpet_cleaning" not in existing_keys:
-        props.append({"property": "carpet_cleaning", "value": True})
-
-    missing_carpet = [f for f in carpet_fields if f not in existing_keys]
-    if missing_carpet:
-        msg = (
-            "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
-            "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
-        )
-        if record_id:
-            log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing_carpet))
-        return props, msg
-
+    # === Abuse handling ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -773,7 +779,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Line: {reply[:100]}")
 
-    # === FINAL FLUSH ===
     if record_id:
         flushed = flush_debug_log(record_id)
         if flushed:
