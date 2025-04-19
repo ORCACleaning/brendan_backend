@@ -15,7 +15,7 @@ VALID_AIRTABLE_FIELDS = {
     "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager",
 
     # Carpet Cleaning Breakdown
-    "carpet_cleaning",
+    "carpet_cleaning",  # Now a Single Select: "Yes", "No", or empty
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
     "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
 
@@ -64,7 +64,11 @@ BOOLEAN_FIELDS = {
     "after_hours_cleaning",
     "weekend_cleaning",
     "mandurah_property",
-    "carpet_cleaning",
     "is_property_manager",
     "privacy_acknowledged"
+}
+
+# Fields that are Single Select (Expected specific string values)
+SINGLE_SELECT_FIELDS = {
+    "carpet_cleaning"  # Expected values: "Yes", "No", or ""
 }
