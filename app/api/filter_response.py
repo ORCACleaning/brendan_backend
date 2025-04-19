@@ -158,9 +158,11 @@ Start with a natural-sounding Aussie-style question to collect:
 
 Ask no more than 2–3 of these at once. Keep it casual, short, and friendly.
 
+DO NOT ask about carpet cleaning, carpet breakdown, or any other extras yet.
+
 ---
 
-## REQUIRED FIELDS (Collect all 27):
+## REQUIRED FIELDS (Collect all 28):
 
 1. suburb  
 2. bedrooms_v2  
@@ -211,26 +213,30 @@ DO NOT skip blind cleaning — even in unfurnished homes.
 This is a Single Select field with options: "Yes", "No", or empty ("").
 
 1. If carpet_cleaning is "No":
-   - Do NOT extract individual carpet fields.
+   - Do NOT extract or ask about any individual carpet fields.
    - Respond: "Got it — we’ll skip the carpet steam cleaning."
 
 2. If carpet_cleaning is "Yes":
-   - Collect all the individual fields:
+   - Extract all the individual fields:
      - carpet_bedroom_count
      - carpet_mainroom_count
      - carpet_study_count
      - carpet_halway_count
      - carpet_stairs_count
      - carpet_other_count
-   - If any are missing or blank:
+   - If any are missing:
      > "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
 
-3. If carpet_cleaning is empty (""):
+3. If carpet_cleaning is empty (""), and enough of the basic quote is done:
    - Ask: "Do you need carpet steam cleaning as part of your vacate clean?"
+
+Do NOT bring up carpet steam cleaning at the very beginning of the conversation.
+
+Only ask once the customer has already provided the suburb, bedrooms, bathrooms, and furnished status.
 
 DO NOT guess carpet intent from other fields unless the user is 100% clear.
 
-If any of the carpet fields are provided but carpet_cleaning is still empty, wait for the customer to confirm.
+If any of the carpet count fields are provided but carpet_cleaning is still blank, you must wait for the customer to confirm whether it should be included.
 
 ---
 """
@@ -683,6 +689,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
+    # === Init Logic ===
     if message == "__init__":
         messages.append({
             "role": "system",
@@ -692,9 +699,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
                 "You are now taking over.\n"
                 "- DO NOT repeat this greeting.\n"
-                "- DO NOT assume cleaning options.\n"
-                "- DO NOT ask about contact info.\n"
-                "- Start by asking what name they go by, suburb, and how many bedrooms/bathrooms.\n"
+                "- DO NOT ask about carpet steam cleaning yet.\n"
+                "- Start by asking what name the customer goes by, and get suburb, bedrooms, bathrooms, and furnished status.\n"
             )
         })
 
@@ -742,29 +748,30 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     reply = parsed.get("response", "").strip()
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
 
-    # === Carpet Cleaning Logic ===
+    # === Carpet Cleaning 3-State Logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
-    carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", "")
+    carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", "").strip()
 
-    if not carpet_cleaning:
-        log_debug_event(record_id, "GPT", "Carpet Cleaning Prompt", "Asking if carpet cleaning is needed.")
-        return props, "Would you like to include carpet steam cleaning in the vacate clean?"
+    if current_stage not in {"", "Gathering Info"}:
+        if not carpet_cleaning:
+            log_debug_event(record_id, "GPT", "Carpet Cleaning Prompt", "Asking if carpet cleaning is needed.")
+            return props, "Would you like to include carpet steam cleaning in the vacate clean?"
 
-    if carpet_cleaning == "Yes":
-        missing_carpet_fields = [
-            field for field in carpet_fields
-            if field not in prop_map and existing.get(field) is None
-        ]
-        if missing_carpet_fields:
-            msg = (
-                "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
-                "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
-            )
-            log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing_carpet_fields))
-            return props, msg
+        if carpet_cleaning == "Yes":
+            missing = [
+                field for field in carpet_fields
+                if prop_map.get(field) is None and existing.get(field) is None
+            ]
+            if missing:
+                msg = (
+                    "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
+                    "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
+                )
+                log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
+                return props, msg
 
     # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
