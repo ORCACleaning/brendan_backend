@@ -742,31 +742,29 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     reply = parsed.get("response", "").strip()
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
 
+    # === Carpet Cleaning Logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
     carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", "")
 
-    if carpet_cleaning == "Yes":
-        missing = []
-        for field in carpet_fields:
-            if field not in prop_map and existing.get(field) is None:
-                missing.append(field)
+    if not carpet_cleaning:
+        log_debug_event(record_id, "GPT", "Carpet Cleaning Prompt", "Asking if carpet cleaning is needed.")
+        return props, "Would you like to include carpet steam cleaning in the vacate clean?"
 
-        if missing:
+    if carpet_cleaning == "Yes":
+        missing_carpet_fields = [
+            field for field in carpet_fields
+            if field not in prop_map and existing.get(field) is None
+        ]
+        if missing_carpet_fields:
             msg = (
                 "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
                 "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
             )
-            if record_id:
-                log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
+            log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing_carpet_fields))
             return props, msg
-
-    elif carpet_cleaning == "":
-        msg = "Would you like to include carpet steam cleaning in the vacate clean?"
-        log_debug_event(record_id, "GPT", "Carpet Cleaning Undecided", "carpet_cleaning field is blank")
-        return props, msg
 
     # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
@@ -1010,7 +1008,7 @@ async def filter_response_entry(request: Request):
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
-        # === Handle Init Trigger ===
+        # === Init Trigger (Bypass GPT and use static greeting) ===
         if message.lower() == "__init__":
             try:
                 return await handle_chat_init(session_id)
@@ -1026,7 +1024,7 @@ async def filter_response_entry(request: Request):
         quote_id, record_id, quote_stage, fields = quote_data
         message_lower = message.lower()
 
-        # === Blocked Chat ===
+        # === Chat Banned ===
         if quote_stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
@@ -1035,32 +1033,36 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Privacy Consent Handler ===
+        # === Handle Privacy Consent ===
         if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
             return await handle_privacy_consent(message, message_lower, record_id, session_id)
 
-        # === Contact Info Handler + PDF Trigger ===
+        # === Contact Info Collection ===
         if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
-            if all([fields.get("customer_name"), fields.get("customer_email"), fields.get("customer_phone")]):
+            if all([
+                fields.get("customer_name"),
+                fields.get("customer_email"),
+                fields.get("customer_phone")
+            ]):
                 return await handle_pdf_email_send(message, fields, quote_id, record_id, session_id)
 
-        # === Inject PDF instruction if quote is already calculated and user is asking for PDF ===
+        # === Inject PDF System Message if user requests PDF ===
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
         if quote_stage == "Quote Calculated" and any(word in message_lower for word in PDF_KEYWORDS):
             message_log = PDF_SYSTEM_MESSAGE + "\n\n" + message_log
 
-        # === Append incoming message to Airtable log ===
+        # === Append User Message ===
         append_message_log(record_id, message, "user")
 
-        # === Extract Properties via GPT-4 Turbo ===
+        # === GPT-4 Property Extraction ===
         properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
 
-        # === Merge Parsed Properties with Existing Fields ===
+        # === Merge with Existing Fields ===
         updated_fields = fields.copy()
         updated_fields.update(parsed)
 
-        # === Calculate Quote if All Required Fields Present ===
+        # === Trigger Quote Calculation ===
         if parsed.get("quote_stage") == "Quote Calculated" and not any(w in message_lower for w in PDF_KEYWORDS):
             try:
                 result = calculate_quote(QuoteRequest(**updated_fields))
@@ -1070,11 +1072,11 @@ async def filter_response_entry(request: Request):
             except Exception as e:
                 log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
 
-        # === Update Airtable Record ===
+        # === Airtable Update ===
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
 
-        # === Final Debug Log Flush ===
+        # === Flush Debug Log ===
         try:
             flushed = flush_debug_log(record_id)
             if flushed:
@@ -1082,7 +1084,7 @@ async def filter_response_entry(request: Request):
         except Exception as e:
             log_debug_event(record_id, "BACKEND", "Final Flush Failed", str(e))
 
-        # === Determine Next Actions for Frontend ===
+        # === Next Actions ===
         next_actions = generate_next_actions() if parsed.get("quote_stage") == "Quote Calculated" else []
 
         return JSONResponse(content={
