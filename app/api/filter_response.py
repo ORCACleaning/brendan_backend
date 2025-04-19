@@ -158,7 +158,7 @@ Start with a natural-sounding Aussie-style question to collect:
 
 Ask no more than 2–3 of these at once. Keep it casual, short, and friendly.
 
-DO NOT ask about carpet cleaning, carpet breakdown, or any other extras yet.
+DO NOT mention or ask about carpet cleaning, carpet breakdown, or any other extras yet.
 
 ---
 
@@ -227,16 +227,14 @@ This is a Single Select field with options: "Yes", "No", or empty ("").
    - If any are missing:
      > "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
 
-3. If carpet_cleaning is empty (""), and enough of the basic quote is done:
+3. If carpet_cleaning is empty ("") and suburb, bedrooms, bathrooms, and furnished are already filled:
    - Ask: "Do you need carpet steam cleaning as part of your vacate clean?"
 
-Do NOT bring up carpet steam cleaning at the very beginning of the conversation.
+DO NOT bring up carpet steam cleaning too early — never ask until the basic property details (suburb, bedrooms, bathrooms, furnished) are known.
 
-Only ask once the customer has already provided the suburb, bedrooms, bathrooms, and furnished status.
+DO NOT guess carpet cleaning intent from other fields — only extract it if clearly mentioned.
 
-DO NOT guess carpet intent from other fields unless the user is 100% clear.
-
-If any of the carpet count fields are provided but carpet_cleaning is still blank, you must wait for the customer to confirm whether it should be included.
+If any carpet count fields are provided but carpet_cleaning is still blank, wait for customer confirmation.
 
 ---
 """
@@ -689,7 +687,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
-    # === Init Logic ===
+    # === Init Chat Trigger ===
     if message == "__init__":
         messages.append({
             "role": "system",
@@ -699,19 +697,20 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
                 "You are now taking over.\n"
                 "- DO NOT repeat this greeting.\n"
-                "- DO NOT ask about carpet steam cleaning yet.\n"
-                "- Start by asking what name the customer goes by, and get suburb, bedrooms, bathrooms, and furnished status.\n"
+                "- DO NOT ask about carpet cleaning or carpet breakdown yet.\n"
+                "- Begin by asking what name they go by, then suburb, bedrooms, bathrooms, and furnished.\n"
             )
         })
 
     elif current_stage == "Quote Calculated":
         messages.append({
             "role": "system",
-            "content": "The quote has already been calculated. DO NOT regenerate unless customer changes details."
+            "content": "The quote has already been calculated. DO NOT regenerate unless the customer changes details."
         })
 
     messages.append({"role": "user", "content": message.strip()})
 
+    # === Call GPT ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -748,37 +747,50 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     reply = parsed.get("response", "").strip()
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
 
-    # === Carpet Cleaning 3-State Logic ===
+    # === Carpet Steam Cleaning Logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
     carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", "").strip()
 
-    if current_stage not in {"", "Gathering Info"}:
-        if not carpet_cleaning:
-            log_debug_event(record_id, "GPT", "Carpet Cleaning Prompt", "Asking if carpet cleaning is needed.")
-            return props, "Would you like to include carpet steam cleaning in the vacate clean?"
+    base_fields = {
+        "suburb": existing.get("suburb"),
+        "bedrooms_v2": existing.get("bedrooms_v2"),
+        "bathrooms_v2": existing.get("bathrooms_v2"),
+        "furnished": existing.get("furnished"),
+    }
+    base_ready = all(base_fields.values())
 
-        if carpet_cleaning == "Yes":
-            missing = [
-                field for field in carpet_fields
-                if prop_map.get(field) is None and existing.get(field) is None
-            ]
-            if missing:
-                msg = (
-                    "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
-                    "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
-                )
-                log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
-                return props, msg
+    if current_stage in {"", "Gathering Info"} and not base_ready:
+        # Prevent asking about carpet until suburb/bed/bath/furnished are filled
+        if carpet_cleaning or any(f in prop_map for f in carpet_fields):
+            log_debug_event(record_id, "GPT", "Suppressed Carpet Fields", "Delayed carpet logic until base quote info is complete.")
+            props = [p for p in props if p["property"] not in {"carpet_cleaning", *carpet_fields}]
+
+    if base_ready and not carpet_cleaning:
+        log_debug_event(record_id, "GPT", "Carpet Prompt", "Prompting for carpet steam cleaning decision.")
+        return props, "Do you need carpet steam cleaning as part of your vacate clean?"
+
+    if carpet_cleaning == "Yes":
+        missing = [
+            f for f in carpet_fields
+            if prop_map.get(f) is None and existing.get(f) is None
+        ]
+        if missing:
+            msg = (
+                "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
+                "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
+            )
+            log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
+            return props, msg
 
     # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
         if current_stage == "Abuse Warning":
-            reply = random.choice([
+            final_msg = random.choice([
                 f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id}. This chat is now closed.",
                 f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
                 f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
@@ -787,10 +799,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             flush = flush_debug_log(record_id)
             if flush:
                 update_quote_record(record_id, {"debug_log": flush})
-            return [{"property": "quote_stage", "value": "Chat Banned"}], reply
+            return [{"property": "quote_stage", "value": "Chat Banned"}], final_msg
         else:
-            reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
+            reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
             flush = flush_debug_log(record_id)
             if flush:
                 update_quote_record(record_id, {"debug_log": flush})
@@ -953,6 +965,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         logger.warning(f"⚠️ Failed to flush debug log in append_message_log: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
 # === Handle Chat Init === 
+
 async def handle_chat_init(session_id: str):
     try:
         log_debug_event(None, "BACKEND", "Init Triggered", f"User opened chat — Session: {session_id}")
@@ -974,14 +987,15 @@ async def handle_chat_init(session_id: str):
             session_id = fields.get("session_id", session_id)
             log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}")
 
-        # Append init to message log and flush debug
+        # Append init to message log
         append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
+        # Flush debug log immediately after init
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
 
-        # Generate Brendan’s first response using GPT
+        # Let GPT take over — init message is passed into conversation as 'user: __init__'
         properties, reply = await extract_properties_from_gpt4(
             "__init__", "USER: __init__", record_id=record_id, quote_id=None, skip_log_lookup=True
         )
@@ -999,7 +1013,6 @@ async def handle_chat_init(session_id: str):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Init Error", str(e))
         raise HTTPException(status_code=500, detail="Failed to initialize Brendan.")
-
 
 # === Brendan API Router ===
 router = APIRouter()
