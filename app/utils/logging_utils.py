@@ -9,9 +9,9 @@ logger = logging.getLogger(__name__)
 
 TRUE_VALUES = {"true", "yes", "1", "y", "yeah", "yep"}
 TABLE_NAME = "Vacate Quotes"
-_log_cache = {}  # Global in-memory debug cache
+_log_cache = {}
 
-# === Debug Logger ===
+# === Debug Log Handler ===
 def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str = "", message: str = ""):
     from datetime import datetime
     timestamp = datetime.utcnow().isoformat()
@@ -25,21 +25,18 @@ def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str =
         _log_cache[record_id] = []
 
     _log_cache[record_id].append(entry)
+    _log_cache[record_id] = _log_cache[record_id][-50:]
 
-    if len(_log_cache[record_id]) > 50:
-        _log_cache[record_id] = _log_cache[record_id][-50:]
-
-# === Flush Debug Log ===
+# === Debug Log Flusher ===
 def flush_debug_log(record_id: str):
     logs = _log_cache.get(record_id, [])
     if not logs:
         return ""
-
     combined = "\n".join(logs).strip()
-    _log_cache[record_id] = []  # Clear cache after flush
+    _log_cache[record_id] = []
     return combined
 
-# === Update Airtable Record ===
+# === Airtable Record Updater ===
 def update_quote_record(record_id: str, fields: dict):
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {
@@ -49,16 +46,6 @@ def update_quote_record(record_id: str, fields: dict):
 
     MAX_REASONABLE_INT = 100
     normalized_fields = {}
-
-    if "furnished" in fields:
-        val = str(fields["furnished"]).strip().lower()
-        if "unfurnished" in val:
-            fields["furnished"] = "Unfurnished"
-        elif "furnished" in val:
-            fields["furnished"] = "Furnished"
-        else:
-            logger.warning(f"⚠️ Invalid furnished value: {fields['furnished']}")
-            fields["furnished"] = ""
 
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
@@ -106,13 +93,26 @@ def update_quote_record(record_id: str, fields: dict):
             except Exception:
                 value = 0
 
+        elif key == "furnished":
+            val = str(value).strip().lower()
+            if "unfurnished" in val:
+                value = "Unfurnished"
+            elif "furnished" in val:
+                value = "Furnished"
+            else:
+                value = ""
+
+        elif key == "carpet_cleaning":
+            valid = {"Yes", "No", ""}
+            value = str(value).strip().capitalize()
+            if value not in valid:
+                logger.warning(f"⚠️ Invalid carpet_cleaning value: {value}")
+                value = ""
+
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[key] = value
-
-    if "privacy_acknowledged" in fields:
-        normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged"))
 
     debug_log = flush_debug_log(record_id)
     if debug_log:
@@ -147,6 +147,7 @@ def update_quote_record(record_id: str, fields: dict):
     except Exception as e:
         logger.error(f"❌ Exception during Airtable bulk update: {e}")
 
+    # === Fallback: One-by-One Updates ===
     successful = []
     for key, value in normalized_fields.items():
         try:
