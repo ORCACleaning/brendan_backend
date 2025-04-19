@@ -72,11 +72,12 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
 <p>Hi {customer_name or 'there'},</p>
 
 <p>Thanks for requesting a quote with Orca Cleaning!</p>
-<p>We’ve attached your vacate cleaning quote as a PDF.</p>
+<p>We’ve attached your vacate cleaning quote as a PDF for your records.</p>
 
-<p><a href="{booking_url}">Click here to book online</a></p>
+<p>You can book your clean directly using the link below:</p>
+<p><a href="{booking_url}" style="font-weight: bold; color: #007BFF;">Click here to book online</a></p>
 
-<p>If you have any questions, feel free to reply.</p>
+<p>If you have any questions or need to make changes, just reply to this email — we’re here to help.</p>
 
 <p>Cheers,<br>Brendan<br>Orca Cleaning Team</p>
 """
