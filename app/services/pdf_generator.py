@@ -38,7 +38,7 @@ def generate_quote_pdf(data: dict) -> (str, str):
 
     data["logo_base64"] = logo_base64
 
-    # === Jinja2 Template Setup ===
+    # === Load Template ===
     try:
         env = Environment(loader=FileSystemLoader("app/services/templates"))
         template = env.get_template("quote_template.html")
@@ -48,16 +48,14 @@ def generate_quote_pdf(data: dict) -> (str, str):
             log_debug_event(record_id, "BACKEND", "Template Load Failed", str(e))
         raise
 
-    # === Generate List of Extra Services ===
+    # === Compile Extra Services ===
     extra_services = []
 
     if data.get("window_cleaning"):
         wc = int(data.get("window_count") or 0)
         extra_services.append(f"Window Cleaning ({wc} windows)" if wc else "Window Cleaning")
 
-    # Carpet Logic
-    carpet_cleaning = str(data.get("carpet_cleaning", "")).strip()
-    if carpet_cleaning == "Yes":
+    if str(data.get("carpet_cleaning", "")).strip() == "Yes":
         carpet_map = [
             ("carpet_bedroom_count", "bedroom"),
             ("carpet_mainroom_count", "main room"),
@@ -66,15 +64,16 @@ def generate_quote_pdf(data: dict) -> (str, str):
             ("carpet_stairs_count", "stairs"),
             ("carpet_other_count", "other area"),
         ]
+        counts_added = False
         for field, label in carpet_map:
             count = int(data.get(field) or 0)
             if count > 0:
                 extra_services.append(f"Carpet Steam Cleaning – {count} {label}(s)")
-        if not any(int(data.get(f[0]) or 0) > 0 for f in carpet_map):
+                counts_added = True
+        if not counts_added:
             extra_services.append("Carpet Steam Cleaning")
 
-    # Extras
-    extras_map = {
+    EXTRAS = {
         "oven_cleaning": "Oven Cleaning",
         "garage_cleaning": "Garage/Shed Cleaning",
         "wall_cleaning": "Wall Cleaning",
@@ -85,11 +84,13 @@ def generate_quote_pdf(data: dict) -> (str, str):
         "blind_cleaning": "Blind/Curtain Cleaning",
         "upholstery_cleaning": "Upholstery Cleaning",
     }
-    for field, label in extras_map.items():
+
+    for field, label in EXTRAS.items():
         if data.get(field):
             extra_services.append(label)
 
     data["extra_services"] = ", ".join(extra_services) if extra_services else "None"
+
     if record_id:
         log_debug_event(record_id, "BACKEND", "PDF Extra Services", data["extra_services"])
 
@@ -112,7 +113,7 @@ def generate_quote_pdf(data: dict) -> (str, str):
         f"✅ Weekend Cleaning Surcharge (${weekend_surcharge:.2f})" if weekend_surcharge > 0 else "–"
     )
 
-    # === Render HTML and Export PDF ===
+    # === Render HTML + Export to PDF ===
     try:
         html_out = template.render(**data)
         HTML(string=html_out, base_url=".").write_pdf(output_path)
