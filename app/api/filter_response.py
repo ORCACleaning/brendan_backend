@@ -439,10 +439,6 @@ def update_quote_record(record_id: str, fields: dict):
 
         normalized_fields[corrected_key] = value
 
-    normalized_fields["privacy_acknowledged"] = bool(fields.get("privacy_acknowledged", False))
-    normalized_fields["carpet_cleaning"] = bool(fields.get("carpet_cleaning", False))
-    normalized_fields["upholstery_cleaning"] = bool(fields.get("upholstery_cleaning", False))
-
     for log_field in ["message_log", "debug_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
