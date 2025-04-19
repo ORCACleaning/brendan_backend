@@ -665,19 +665,23 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         messages.append({
             "role": "system",
             "content": (
-                "The user has just opened the chat — this is the very first message after frontend greeting.\n"
-                "You are Brendan, the quoting assistant for vacate cleans in Perth and Mandurah.\n\n"
-                "- DO NOT greet the user (frontend already did that).\n"
-                "- DO NOT assume carpet cleaning or any extras.\n"
-                "- DO NOT mention privacy or contact fields.\n\n"
-                "Start with just:\n"
-                "> 'What suburb are we quoting for today, and how many bedrooms and bathrooms are we looking at?'"
+                "The user has just opened the chat. Here is the **exact greeting they saw** on the frontend:\n\n"
+                "“G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
+                "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.”\n\n"
+                "This was the first visual message shown to the customer. Now you are taking over.\n"
+                "- DO NOT greet the user again.\n"
+                "- DO NOT assume any cleaning options like carpet or upholstery.\n"
+                "- DO NOT assume the user has granted privacy consent.\n"
+                "- DO NOT ask about extras or contact details yet.\n\n"
+                "Instead, continue the flow by asking just:\n"
+                "> 'What suburb are we quoting for today, and how many bedrooms and bathrooms are we looking at?'\n\n"
+                "Make your message sound natural, warm, and helpful — and keep it one line."
             )
         })
     elif current_stage == "Quote Calculated":
         messages.append({
             "role": "system",
-            "content": "REMINDER: The quote has already been calculated. DO NOT regenerate the quote unless the customer changes details."
+            "content": "The quote has already been calculated. DO NOT regenerate the quote unless the customer changes the details."
         })
 
     messages.append({"role": "user", "content": message.strip()})
@@ -716,42 +720,37 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
-    existing_keys = {p["property"] for p in props if "property" in p}
+    prop_map = {p["property"]: p["value"] for p in props if "property" in p}
+    existing_keys = set(prop_map.keys())
 
-    # === Enforce field restrictions ===
+    # === Prevent GPT from hallucinating restricted fields ===
     restricted_fields = {
-        "carpet_cleaning",
-        "privacy_acknowledged",
-        "upholstery_cleaning",
-        "after_hours_cleaning",
-        "weekend_cleaning"
+        "carpet_cleaning", "privacy_acknowledged", "upholstery_cleaning",
+        "after_hours_cleaning", "weekend_cleaning"
     }
-
     props = [
         p for p in props
         if p["property"] not in restricted_fields or str(p["value"]).lower() in ["true", "false"]
     ]
 
-    # === Carpet Logic (only if user confirmed carpet_cleaning = true) ===
-    prop_map = {p["property"]: p["value"] for p in props}
-    carpet_confirmed = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False)
-
+    # === Carpet Section Trigger (only if user confirmed it) ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
-    if carpet_confirmed:
-        missing_carpet = [f for f in carpet_fields if f not in existing_keys and not existing.get(f)]
-        if missing_carpet:
+    carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", False)
+    if carpet_cleaning:
+        missing = [f for f in carpet_fields if f not in prop_map and not existing.get(f)]
+        if missing:
             msg = (
                 "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
                 "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
             )
             if record_id:
-                log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing_carpet))
+                log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
             return props, msg
 
-    # === Abuse handling ===
+    # === Abuse Check ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -775,14 +774,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
     if not props:
-        return [], "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
+        return [], (
+            "Hmm, I couldn’t quite catch the details. Mind telling me suburb, bedrooms, bathrooms and if it’s furnished?"
+        )
 
     log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Line: {reply[:100]}")
-
-    if record_id:
-        flushed = flush_debug_log(record_id)
-        if flushed:
-            update_quote_record(record_id, {"debug_log": flushed})
+    flushed = flush_debug_log(record_id)
+    if flushed:
+        update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
 
