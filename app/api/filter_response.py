@@ -725,21 +725,19 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     from app.services.quote_logic import should_calculate_quote
     from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, FIELD_MAP
 
-    logger.info("🧐 Calling GPT-4 Turbo to extract properties...")
+    logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
 
-    weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
-    if message.lower().strip() in weak_inputs:
+    if message.lower().strip() in {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}:
         reply = (
             "Just let me know what suburb we’re quoting for, how many bedrooms and bathrooms there are, "
             "and whether the property is furnished or unfurnished."
         )
-        if record_id:
-            log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
+        log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
     existing, current_stage = {}, ""
@@ -753,7 +751,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             current_stage = existing.get("quote_stage", "")
             log_debug_event(record_id, "BACKEND", "Fetched Airtable Record", f"Stage: {current_stage}")
         except Exception as e:
-            logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
@@ -767,8 +764,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "Do NOT repeat this greeting. Never say 'Hi', 'Hello', 'Hey', or 'G’day' again.\n"
             "Start by asking for the name the quote should go under, and then suburb, bedrooms, bathrooms, and furnished/unfurnished.\n"
             "Do not talk about carpet or extras until after this info is collected.\n"
-            "IMPORTANT: Always reply in JSON with two fields: 'properties' and 'response'.\n"
-            "Example:\n```json\n{\n  \"properties\": [\n    {\"property\": \"bedrooms_v2\", \"value\": 3},\n    {\"property\": \"furnished\", \"value\": true}\n  ],\n  \"response\": \"Thanks! And is the place furnished or empty?\"\n}\n```"
+            "IMPORTANT: Always reply in JSON with two fields: 'properties' and 'response'."
         )
     }]
     for line in prepared_log.split("\n"):
@@ -812,34 +808,25 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             raw = res.choices[0].message.content.strip()
             log_debug_event(record_id, "GPT", f"Raw Attempt {attempt}", raw[:300])
             start, end = raw.find("{"), raw.rfind("}")
-            if start == -1 or end == -1:
-                raise ValueError("JSON block not found.")
-            parsed = json.loads(raw[start:end + 1])
-            if not isinstance(parsed, dict):
-                raise TypeError("Parsed block is not a dict")
-            return parsed
+            parsed = json.loads(raw[start:end + 1]) if start != -1 and end != -1 else None
+            return parsed if isinstance(parsed, dict) else None
         except Exception as e:
             log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt})", str(e))
             return None
 
     parsed = call_gpt_and_parse(messages, 1)
-    if not isinstance(parsed, dict):
-        messages.insert(1, {"role": "system", "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."})
+    if not parsed:
+        messages.insert(1, {
+            "role": "system",
+            "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."
+        })
         parsed = call_gpt_and_parse(messages, 2)
 
-    if not isinstance(parsed, dict):
-        log_debug_event(record_id, "GPT", "Invalid Parse", f"Type: {type(parsed)} | Value: {str(parsed)[:100]}")
-        reply = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
-        flushed = flush_debug_log(record_id)
-        if flushed:
-            update_quote_record(record_id, {"debug_log": flushed})
-        return [], reply
-
-    raw_props = parsed.get("properties", [])
-    reply = parsed.get("response", "").strip()
+    reply = parsed.get("response", "").strip() if parsed else ""
+    raw_props = parsed.get("properties", []) if parsed else []
 
     if not isinstance(raw_props, list):
-        log_debug_event(record_id, "GPT", "Malformed Props", f"Expected list, got {type(raw_props)} — Value: {str(raw_props)[:100]}")
+        log_debug_event(record_id, "GPT", "Malformed Props", f"Expected list, got {type(raw_props)}")
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
@@ -865,8 +852,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Stored", f"First name used for chat: {first_name}")
 
-    abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
-    if abuse_detected:
+    if any(word in message.lower() for word in ABUSE_WORDS):
         quote_id = quote_id or existing.get("quote_id", "N/A")
         if current_stage == "Abuse Warning":
             final_msg = f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}."
@@ -876,8 +862,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Chat Banned"}], final_msg
         else:
-            log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
+            log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             flushed = flush_debug_log(record_id)
             if flushed:
                 update_quote_record(record_id, {"debug_log": flushed})
