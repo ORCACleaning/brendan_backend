@@ -1,45 +1,21 @@
 import json
-import requests
 import logging
+import requests
+from datetime import datetime
 
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS
 from app.config import settings
 
-from datetime import datetime
-
 logger = logging.getLogger(__name__)
 
+# === Constants ===
 TRUE_VALUES = {"true", "yes", "1", "y", "yeah", "yep"}
 TABLE_NAME = "Vacate Quotes"
-_log_cache = {}
 MAX_REASONABLE_INT = 100
+_log_cache = {}
 
-# === Debug Log Handler ===
-from datetime import datetime
-import json
-import logging
-import requests
-
-from app.config import settings
-from app.constants import (
-    _log_cache,
-    FIELD_MAP,
-    VALID_AIRTABLE_FIELDS,
-    BOOLEAN_FIELDS,
-    INTEGER_FIELDS,
-    TRUE_VALUES,
-    MAX_REASONABLE_INT,
-    TABLE_NAME
-)
-
-logger = logging.getLogger(__name__)
-
-
+# === Debug Logging ===
 def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str = "", message: str = ""):
-    """
-    Stores a debug event in the in-memory cache for the given record_id.
-    Flushes in update_quote_record(). If record_id is missing, prints to console only.
-    """
     timestamp = datetime.utcnow().isoformat()
     entry = f"[{timestamp}] [{source}] {label}: {message}"
 
@@ -51,13 +27,9 @@ def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str =
         _log_cache[record_id] = []
 
     _log_cache[record_id].append(entry)
-    # Always keep full log for now (no trimming)
 
 
 def flush_debug_log(record_id: str):
-    """
-    Flushes the in-memory debug log for the given record_id and clears it.
-    """
     if not record_id:
         return ""
 
@@ -70,11 +42,8 @@ def flush_debug_log(record_id: str):
     return combined
 
 
+# === Quote Record Update ===
 def update_quote_record(record_id: str, fields: dict):
-    """
-    Updates a quote record in Airtable with normalized field values.
-    Flushes debug_log at the end.
-    """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
         return []
