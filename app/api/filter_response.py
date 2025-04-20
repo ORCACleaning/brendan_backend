@@ -12,6 +12,8 @@ from time import sleep
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from urllib.parse import quote
+from app.main import client, logger
+
 
 # === Third-Party Modules ===
 import pytz
@@ -722,15 +724,8 @@ def generate_next_actions(quote_stage: str):
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
-    import re
-    import json
-    import requests
-    from app.services.quote_logic import should_calculate_quote
-    from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, FIELD_MAP
-    from app.services.airtable_utils import flush_debug_log, update_quote_record, log_debug_event
-    from app.core.settings import settings
-    from app.main import client, logger
-
+    
+   
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
