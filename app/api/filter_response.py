@@ -838,6 +838,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
+    if not isinstance(raw_props, list):
+        log_debug_event(record_id, "GPT", "Malformed Props", f"Expected list, got {type(raw_props)} — Value: {str(raw_props)[:100]}")
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed})
+        return [], reply or "Just checking — how many bedrooms and bathrooms are we quoting for?"
+
     safe_props = [p for p in raw_props if isinstance(p, dict) and "property" in p and "value" in p]
     if not safe_props:
         log_debug_event(record_id, "GPT", "Empty Properties", "GPT returned no properties. Using response anyway.")
@@ -851,7 +858,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
 
     prop_map = {p["property"]: p["value"] for p in props}
-
     full_name = prop_map.get("customer_name", "").strip()
     if full_name:
         first_name = full_name.split(" ")[0]
@@ -904,7 +910,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 
 
 # === GPT Error Email Alert ===
