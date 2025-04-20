@@ -722,8 +722,14 @@ def generate_next_actions(quote_stage: str):
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
+    import re
+    import json
+    import requests
     from app.services.quote_logic import should_calculate_quote
     from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, FIELD_MAP
+    from app.services.airtable_utils import flush_debug_log, update_quote_record, log_debug_event
+    from app.core.settings import settings
+    from app.main import client, logger
 
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
@@ -745,7 +751,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing, current_stage = {}, ""
     if record_id and not skip_log_lookup:
         try:
-            url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+            url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/Vacate%20Quotes/{record_id}"
             headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
             res = requests.get(url, headers=headers)
             res.raise_for_status()
@@ -756,7 +762,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
-    prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
+    prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
         "role": "system",
         "content": (
@@ -834,7 +840,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
-    # === Validate and Normalize Properties ===
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
@@ -848,12 +853,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply or "Just checking — how many bedrooms and bathrooms are we quoting for?"
 
-    # Validate items inside the list
-    safe_props = []
-    for p in raw_props:
-        if isinstance(p, dict) and "property" in p and "value" in p:
-            safe_props.append(p)
-
+    safe_props = [p for p in raw_props if isinstance(p, dict) and "property" in p and "value" in p]
     if not safe_props:
         log_debug_event(record_id, "GPT", "Empty Properties", "GPT returned no valid properties. Using response anyway.")
         flushed = flush_debug_log(record_id)
@@ -865,13 +865,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
 
-    prop_map = {}
-    try:
-        prop_map = {p["property"]: p["value"] for p in props}
-    except Exception as e:
-        log_debug_event(record_id, "GPT", "Prop Map Failed", f"Error: {e}")
-        return [], reply or "Just checking — how many bedrooms and bathrooms are we quoting for?"
-
+    prop_map = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
     full_name = prop_map.get("customer_name", "").strip()
     if full_name:
         first_name = full_name.split(" ")[0]
@@ -879,7 +873,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Stored", f"First name used for chat: {first_name}")
 
-    abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
+    abuse_detected = any(word in message.lower() for word in ["fuck", "shit", "cunt", "dickhead", "wanker"])
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
         if current_stage == "Abuse Warning":
@@ -897,7 +891,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
-    # Patch boolean fields
     all_fields = existing.copy()
     all_fields.update(prop_map)
     for field in BOOLEAN_FIELDS:
@@ -905,12 +898,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             all_fields[field] = False
             log_debug_event(record_id, "BACKEND", "Patched Missing Checkbox", f"{field} = False")
 
-    # Skip blank select fields
     props = [
         p for p in props
         if not (
             p["property"] in FIELD_MAP and
-            FIELD_MAP[p["property"]]["type"] == "single select" and
+            FIELD_MAP[p["property"]].get("type") == "single select" and
             str(p["value"]).strip() == ""
         )
     ]
@@ -925,7 +917,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 
 # === GPT Error Email Alert ===
 
