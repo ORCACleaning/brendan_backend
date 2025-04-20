@@ -723,7 +723,7 @@ def generate_next_actions(quote_stage: str):
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     from app.services.quote_logic import should_calculate_quote
-    from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS
+    from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, FIELD_MAP
 
     logger.info("🧐 Calling GPT-4 Turbo to extract properties...")
     if record_id:
@@ -839,6 +839,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
 
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
+
+    # 🧠 Store only first name temporarily
     full_name = prop_map.get("customer_name", "").strip()
     if full_name:
         first_name = full_name.split(" ")[0]
@@ -846,6 +848,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Stored", f"First name used for chat: {first_name}")
 
+    # 🛑 Handle abuse
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -867,11 +870,19 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     all_fields = existing.copy()
     all_fields.update(prop_map)
 
+    # ✅ Patch all missing checkboxes to False
     for field in BOOLEAN_FIELDS:
         if field in VALID_AIRTABLE_FIELDS and field not in all_fields:
             all_fields[field] = False
             log_debug_event(record_id, "BACKEND", "Patched Missing Checkbox", f"{field} = False")
 
+    # ✅ Skip invalid blank values for Single Select fields
+    props = [
+        p for p in props
+        if not (p["property"] in FIELD_MAP and FIELD_MAP[p["property"]]["type"] == "single select" and str(p["value"]).strip() == "")
+    ]
+
+    # ✅ Trigger quote if enough info
     if should_calculate_quote(all_fields):
         props.append({"property": "quote_stage", "value": "Quote Calculated"})
         log_debug_event(record_id, "BACKEND", "Stage Forced", "Backend promoted stage to Quote Calculated")
@@ -882,6 +893,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 # === GPT Error Email Alert ===
 
