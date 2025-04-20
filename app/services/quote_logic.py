@@ -1,6 +1,38 @@
 from app.models.quote_models import QuoteRequest, QuoteResponse
 from app.config import logger
 
+REQUIRED_QUOTE_FIELDS = [
+    "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning", "window_cleaning",
+    "blind_cleaning", "carpet_cleaning", "deep_cleaning", "fridge_cleaning", "range_hood_cleaning",
+    "wall_cleaning", "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
+    "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager",
+    "special_requests", "special_request_minutes_min", "special_request_minutes_max"
+]
+
+CARPET_BREAKDOWN_FIELDS = [
+    "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
+    "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
+]
+
+PROPERTY_MANAGER_FIELDS = ["real_estate_name", "number_of_sessions"]
+
+def should_calculate_quote(fields: dict) -> bool:
+    for key in REQUIRED_QUOTE_FIELDS:
+        if key not in fields or fields[key] in [None, "", False]:
+            return False
+
+    if fields.get("carpet_cleaning") == "Yes":
+        for key in CARPET_BREAKDOWN_FIELDS:
+            if key not in fields or fields[key] in [None, ""]:
+                return False
+
+    if str(fields.get("is_property_manager")).lower() in {"true", "yes", "1"}:
+        for key in PROPERTY_MANAGER_FIELDS:
+            if key not in fields or not fields[key]:
+                return False
+
+    return True
+
 def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     from app.utils.logging_utils import log_debug_event
 
@@ -78,11 +110,10 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         log_debug_event(record_id, "BACKEND", "Base Time Calculated", f"{base_minutes} mins")
 
     except Exception as e:
-        logger.warning(f"⚠️ Error in base time calculation: {e}")
+        logger.warning(f"\u26a0\ufe0f Error in base time calculation: {e}")
         base_minutes = 0
         log_debug_event(record_id, "BACKEND", "Calculation Error", f"Base time error: {e}")
 
-    # === Special Requests ===
     min_total_mins = base_minutes
     max_total_mins = base_minutes
     is_range = False
@@ -98,7 +129,6 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
     calculated_hours = round(max_total_mins / 60, 2)
     base_price = round(calculated_hours * BASE_HOURLY_RATE, 2)
 
-    # === Surcharges ===
     weekend_fee = round(base_price * WEEKEND_SURCHARGE_PERCENT / 100, 2) if data.weekend_cleaning else 0.0
     after_hours_fee = round(base_price * AFTER_HOURS_SURCHARGE_PERCENT / 100, 2) if data.after_hours_cleaning else 0.0
     mandurah_fee = round(base_price * MANDURAH_SURCHARGE_PERCENT / 100, 2) if data.mandurah_property else 0.0
@@ -107,7 +137,6 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
 
     total_before_discount = base_price + weekend_fee + after_hours_fee + mandurah_fee
 
-    # === Discounts ===
     total_discount_percent = SEASONAL_DISCOUNT_PERCENT
     if str(data.is_property_manager).strip().lower() in {"true", "yes", "1"}:
         total_discount_percent += PROPERTY_MANAGER_DISCOUNT
