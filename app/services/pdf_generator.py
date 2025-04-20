@@ -1,130 +1,106 @@
 import os
-import uuid
-import base64
-from jinja2 import Environment, FileSystemLoader
+from pathlib import Path
 from weasyprint import HTML
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from app.api.field_rules import FIELD_MAP
 
-from app.config import logger
-from app.utils.logging_utils import log_debug_event
+# === Paths for PDF Generation ===
+STATIC_PDF_DIR = "/opt/render/project/public/quotes"
+BASE_URL = "https://quote.orcacleaning.com.au/quotes"
+
+# === Load Jinja Template ===
+template_dir = os.path.join(os.path.dirname(__file__), "../../templates")
+env = Environment(
+    loader=FileSystemLoader(template_dir),
+    autoescape=select_autoescape(['html', 'xml'])
+)
+template = env.get_template("quote_template.html")
 
 
-def generate_quote_pdf(data: dict) -> (str, str):
+def generate_quote_pdf(data: dict) -> str:
     """
-    Generate a PDF quote using WeasyPrint & Jinja2.
-    Returns: (Absolute PDF Path, Public PDF URL)
+    Generate a PDF quote using customer data and save it in the public folder.
+    Returns the public Render URL of the generated PDF.
     """
-    quote_id = data.get("quote_id") or f"VAC-{uuid.uuid4().hex[:8]}"
-    filename = f"{quote_id}.pdf"
-    output_path = f"app/static/quotes/{filename}"
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    # === Ensure output directory exists ===
+    os.makedirs(STATIC_PDF_DIR, exist_ok=True)
 
-    pdf_url = f"https://orcacleaning.com.au/static/quotes/{filename}"
-    record_id = data.get("record_id")
+    # === Clean and normalize input data ===
+    cleaned = {}
+    for key, val in data.items():
+        if val in [None, ""]:
+            continue
+        readable_key = FIELD_MAP.get(key, key)
+        cleaned[readable_key] = val
 
-    logger.info(f"📄 Generating PDF Quote: {output_path}")
-    if record_id:
-        log_debug_event(record_id, "BACKEND", "PDF Generation Started", f"Generating PDF for quote_id: {quote_id}")
-
-    # === Load Logo as Base64 ===
-    logo_path = "app/static/orca_logo.png"
-    try:
-        with open(logo_path, "rb") as f:
-            logo_base64 = base64.b64encode(f.read()).decode("utf-8")
-    except Exception as e:
-        logger.error(f"❌ Failed to load logo: {e}")
-        logo_base64 = ""
-        if record_id:
-            log_debug_event(record_id, "BACKEND", "PDF Logo Error", str(e))
-
-    data["logo_base64"] = logo_base64
-
-    # === Load Template ===
-    try:
-        env = Environment(loader=FileSystemLoader("app/services/templates"))
-        template = env.get_template("quote_template.html")
-    except Exception as e:
-        logger.error(f"❌ Failed to load template: {e}")
-        if record_id:
-            log_debug_event(record_id, "BACKEND", "Template Load Failed", str(e))
-        raise
-
-    # === Compile Extra Services ===
-    extra_services = []
-
-    if data.get("window_cleaning"):
-        wc = int(data.get("window_count") or 0)
-        extra_services.append(f"Window Cleaning ({wc} windows)" if wc else "Window Cleaning")
-
-    if str(data.get("carpet_cleaning", "")).strip() == "Yes":
-        carpet_map = [
-            ("carpet_bedroom_count", "bedroom"),
-            ("carpet_mainroom_count", "main room"),
-            ("carpet_study_count", "study"),
-            ("carpet_halway_count", "hallway"),
-            ("carpet_stairs_count", "stairs"),
-            ("carpet_other_count", "other area"),
-        ]
-        counts_added = False
-        for field, label in carpet_map:
-            count = int(data.get(field) or 0)
-            if count > 0:
-                extra_services.append(f"Carpet Steam Cleaning – {count} {label}(s)")
-                counts_added = True
-        if not counts_added:
-            extra_services.append("Carpet Steam Cleaning")
-
-    EXTRAS = {
-        "oven_cleaning": "Oven Cleaning",
-        "garage_cleaning": "Garage/Shed Cleaning",
-        "wall_cleaning": "Wall Cleaning",
-        "balcony_cleaning": "Balcony Cleaning",
-        "fridge_cleaning": "Fridge Cleaning",
-        "range_hood_cleaning": "Range Hood Cleaning",
-        "deep_cleaning": "Deep/Detail Cleaning",
-        "blind_cleaning": "Blind/Curtain Cleaning",
-        "upholstery_cleaning": "Upholstery Cleaning",
+    # === Required fallback values for template placeholders ===
+    fallback_fields = {
+        "quote_id": "N/A",
+        "customer_name": "Valued Customer",
+        "property_address": data.get("suburb", "Unknown Suburb"),
+        "bedrooms_v2": "0",
+        "bathrooms_v2": "0",
+        "total_price": "TBC",
+        "price_per_session": "TBC",
+        "base_hourly_rate": "N/A",
+        "estimated_time_mins": "N/A",
+        "discount_applied": "None",
+        "gst_applied": "N/A",
+        "quote_summary": "No breakdown available.",
+        "furnished": "Not specified",
+        "quote_stage": data.get("quote_stage", ""),
+        "carpet_cleaning": data.get("carpet_cleaning", ""),
+        "garage_cleaning": data.get("garage_cleaning", False),
+        "window_cleaning": data.get("window_cleaning", False),
+        "oven_cleaning": data.get("oven_cleaning", False),
+        "upholstery_cleaning": data.get("upholstery_cleaning", False),
+        "after_hours_cleaning": data.get("after_hours_cleaning", False),
+        "weekend_cleaning": data.get("weekend_cleaning", False),
+        "special_requests": data.get("special_requests", "None")
     }
 
-    for field, label in EXTRAS.items():
-        if data.get(field):
-            extra_services.append(label)
+    for field, default in fallback_fields.items():
+        if field not in cleaned:
+            cleaned[field] = default
 
-    data["extra_services"] = ", ".join(extra_services) if extra_services else "None"
-
-    if record_id:
-        log_debug_event(record_id, "BACKEND", "PDF Extra Services", data["extra_services"])
-
-    # === Property Manager Note ===
-    if data.get("is_property_manager"):
-        agency = data.get("real_estate_name", "Your Real Estate Agency")
-        data["property_manager_note"] = f"✅ Property Manager Discount Applied (5%) — {agency}"
-    else:
-        data["property_manager_note"] = "–"
-
-    # === After-Hours Note ===
-    after_hours = float(data.get("after_hours_surcharge") or 0)
-    data["after_hours_note"] = (
-        f"✅ After-Hours Cleaning Surcharge (${after_hours:.2f})" if after_hours > 0 else "–"
-    )
-
-    # === Weekend Note ===
-    weekend_surcharge = float(data.get("weekend_surcharge") or 0)
-    data["weekend_note"] = (
-        f"✅ Weekend Cleaning Surcharge (${weekend_surcharge:.2f})" if weekend_surcharge > 0 else "–"
-    )
-
-    # === Render HTML + Export to PDF ===
+    # === Format estimated time nicely ===
     try:
-        html_out = template.render(**data)
-        HTML(string=html_out, base_url=".").write_pdf(output_path)
-        logger.info(f"✅ PDF Generated: {output_path}")
-        if record_id:
-            log_debug_event(record_id, "BACKEND", "PDF Generated", f"Saved to {output_path}")
-            log_debug_event(record_id, "BACKEND", "PDF Public URL", pdf_url)
-    except Exception as e:
-        logger.error(f"❌ PDF rendering or saving failed: {e}")
-        if record_id:
-            log_debug_event(record_id, "BACKEND", "PDF Render Error", str(e))
-        raise
+        mins = int(cleaned.get("estimated_time_mins", 0))
+        hrs = round(mins / 60, 2)
+        cleaned["estimated_duration_hr"] = f"{hrs} hours"
+    except:
+        cleaned["estimated_duration_hr"] = "N/A"
 
-    return output_path, pdf_url
+    # === Format price ===
+    try:
+        price = float(cleaned.get("total_price", 0))
+        cleaned["formatted_price"] = f"${price:,.2f} incl. GST"
+    except:
+        cleaned["formatted_price"] = "N/A"
+
+    # === Format job breakdown ===
+    job_items = []
+    if cleaned.get("carpet_cleaning") == "Yes":
+        for room_type in ["carpet_mainroom_count", "carpet_smallroom_count", "carpet_hallway_count", "carpet_stairs_count"]:
+            val = data.get(room_type)
+            if isinstance(val, int) and val > 0:
+                job_items.append(f"{val} × {FIELD_MAP.get(room_type, room_type).replace('_', ' ').capitalize()}")
+
+    for addon in ["oven_cleaning", "garage_cleaning", "window_cleaning", "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning"]:
+        if data.get(addon):
+            job_items.append(FIELD_MAP.get(addon, addon).replace('_', ' ').capitalize())
+
+    if cleaned.get("special_requests") not in ["", "None", None, False]:
+        job_items.append("Special Requests")
+
+    cleaned["job_items"] = job_items if job_items else ["Standard Vacate Clean"]
+
+    # === Generate HTML and PDF ===
+    try:
+        quote_id = data.get("quote_id", "missing-id")
+        html_out = template.render(**cleaned)
+        pdf_path = f"{STATIC_PDF_DIR}/{quote_id}.pdf"
+        HTML(string=html_out).write_pdf(pdf_path)
+        return f"{BASE_URL}/{quote_id}.pdf"
+    except Exception as e:
+        raise RuntimeError(f"PDF generation failed: {e}")
