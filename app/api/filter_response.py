@@ -695,14 +695,15 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "The user has just opened the chat. This is the exact greeting they saw:\n\n"
                 "\"G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
-                "You are now taking over from that point.\n"
-                "- DO NOT repeat this greeting.\n"
-                "- DO NOT start with phrases like 'no worries' — the user has not spoken yet.\n"
-                "- Start by asking what name they’d like you to use — just for the conversation. Let them know it's okay if they’d rather not share one.\n"
-                "- If they provide both first and last name, only use the first name conversationally.\n"
-                "- After that, gently ask for the suburb, number of bedrooms, bathrooms, and whether the property is furnished.\n"
-                "- DO NOT ask about carpet steam cleaning or breakdowns at this point.\n"
-                "- Maintain a natural, friendly tone. Don’t sound scripted or robotic — you are a trusted quoting expert, not a form."
+                "You are now taking over.\n"
+                "- DO NOT repeat the greeting above.\n"
+                "- DO NOT say 'no worries' or anything casual — the user has not spoken yet.\n"
+                "- Start with a single message asking what name you should use during the chat. Make clear it's optional.\n"
+                "- Example: \"What name should I call you during our chat? Totally fine if you'd rather not share one.\"\n"
+                "- Once they reply, use only the first name in future.\n"
+                "- After receiving a name (or if none given), then ask: suburb, bedrooms, bathrooms, and furnished.\n"
+                "- DO NOT ask about carpet cleaning or breakdowns yet.\n"
+                "- Keep it natural, warm, and professional — like a helpful sales rep, not a form."
             )
         })
 
@@ -714,6 +715,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     messages.append({"role": "user", "content": message.strip()})
 
+    # === Call GPT ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -758,7 +760,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Set", f"First name stored for chat: {first_name}")
 
-    # === Carpet Cleaning Logic ===
+    # === Carpet Logic Suppression ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
@@ -774,7 +776,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     if current_stage in {"", "Gathering Info"} and not base_ready:
         if carpet_cleaning or any(f in prop_map for f in carpet_fields):
-            log_debug_event(record_id, "GPT", "Suppressed Carpet Fields", "Delaying carpet questions until base info is complete.")
+            log_debug_event(record_id, "GPT", "Suppressed Carpet Fields", "Delaying carpet logic until base info is complete.")
             props = [p for p in props if p["property"] not in {"carpet_cleaning", *carpet_fields}]
 
     if base_ready and not carpet_cleaning:
@@ -791,7 +793,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
             return props, msg
 
-    # === Abuse Detection ===
+    # === Abuse Handling ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
