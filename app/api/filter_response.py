@@ -12,8 +12,6 @@ from time import sleep
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from urllib.parse import quote
-from app.main import client, logger
-
 
 # === Third-Party Modules ===
 import pytz
@@ -38,7 +36,6 @@ from app.services.quote_id_utils import get_next_quote_id
 # === Field Rules and Logging ===
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
 from app.utils.logging_utils import log_debug_event, flush_debug_log
-
 
 # === Airtable Table Name ===
 TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
