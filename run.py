@@ -21,39 +21,50 @@ api_key = os.getenv("OPENAI_API_KEY")
 airtable_key = os.getenv("AIRTABLE_API_KEY")
 airtable_base = os.getenv("AIRTABLE_BASE_ID")
 
-# === Debug key loading (with Fix #2 and Fix #4 applied) ===
+# === Set logging config for full stdout/stderr capture ===
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+
+logger = logging.getLogger("BrendanStartup")
+
+# === Key Load Debug Logging ===
 try:
     if api_key:
-        print(f"✅ Loaded OpenAI Key: {api_key}")
+        logger.info(f"✅ Loaded OpenAI Key: {api_key}")
         log_debug_event(None, "LOCAL", "OpenAI Key Loaded", f"Key = {api_key}")
     else:
-        print("❌ ERROR: OPENAI_API_KEY not loaded!")
+        logger.error("❌ ERROR: OPENAI_API_KEY not loaded!")
         log_debug_event(None, "LOCAL", "OpenAI Key Error", "OPENAI_API_KEY not found in .env")
 except Exception as e:
-    print(f"⚠️ Error logging OpenAI Key load: {e}")
+    logger.warning(f"⚠️ Error logging OpenAI key load: {e}")
 
 try:
     if airtable_key and airtable_base:
-        print(f"✅ Airtable Key: {airtable_key}")
-        print(f"✅ Airtable Base ID: {airtable_base}")
+        logger.info(f"✅ Airtable Key: {airtable_key}")
+        logger.info(f"✅ Airtable Base ID: {airtable_base}")
         log_debug_event(None, "LOCAL", "Airtable Credentials Loaded", f"Key = {airtable_key}, Base = {airtable_base}")
     else:
-        print("❌ ERROR: Airtable credentials not loaded! Check .env.")
+        logger.error("❌ ERROR: Airtable credentials not loaded! Check .env.")
         log_debug_event(None, "LOCAL", "Airtable Credentials Error", "Missing airtable_key or base")
 except Exception as e:
-    print(f"⚠️ Error logging Airtable credential load: {e}")
+    logger.warning(f"⚠️ Error logging Airtable credential load: {e}")
 
-# === Initialize OpenAI Client ===
+# === OpenAI Client ===
 client = OpenAI(api_key=api_key)
 
-# === FastAPI App Init ===
+# === FastAPI App ===
 app = FastAPI(
     title="Brendan API",
     description="Backend for Orca Cleaning's AI Quote Assistant - Brendan",
     version="1.0.0"
 )
 
-# === CORS Setup ===
+# === CORS ===
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -62,34 +73,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# === Register Routes ===
+# === Routers ===
 app.include_router(filter_response_router)
 app.include_router(quote_router)
 app.include_router(store_customer_router)
 app.include_router(auto_fixer.router)
 
-# === Root Welcome Endpoint ===
+# === Root Endpoint ===
 @app.get("/")
 def read_root():
     try:
         log_debug_event(None, "LOCAL", "Ping Root", "Root endpoint accessed")
     except Exception as e:
-        print(f"⚠️ Error logging root ping: {e}")
-    return JSONResponse(
-        content={"message": "Welcome to Brendan Backend! 🎉"},
-        media_type="application/json; charset=utf-8"
-    )
+        logger.warning(f"⚠️ Error logging root ping: {e}")
+    return JSONResponse(content={"message": "Welcome to Brendan Backend! 🎉"})
 
-# === Health Check Endpoint ===
+# === Health Check ===
 @app.get("/ping")
 def ping():
     try:
         log_debug_event(None, "LOCAL", "Ping /ping", "Health check requested")
     except Exception as e:
-        print(f"⚠️ Error logging ping: {e}")
+        logger.warning(f"⚠️ Error logging ping: {e}")
     return {"ping": "pong"}
 
-# === Local PDF Test Generator (Optional) ===
+# === Optional: Test PDF Gen ===
 from app.services.pdf_generator import generate_quote_pdf
 def get_test_pdf_data():
     return {
@@ -134,22 +142,27 @@ def get_test_pdf_data():
         "logo_base64": open("app/static/orca_logo.b64.txt", "r").read(),
     }
 
-# === Run Locally ===
+# === Run ===
 if __name__ == "__main__":
-    import uvicorn
-    logging.basicConfig(encoding="utf-8")
-
     try:
-        log_debug_event(None, "LOCAL", "Test Mode", "Attempting PDF generation")
+        log_debug_event(None, "LOCAL", "Test Mode", "Attempting PDF generation...")
         data = get_test_pdf_data()
-        output_path = generate_quote_pdf(data)
-        print(f"✅ PDF generated at: {output_path}")
-        log_debug_event(None, "LOCAL", "PDF Generation Successful", output_path)
+        path = generate_quote_pdf(data)
+        print(f"✅ PDF generated at: {path}")
+        log_debug_event(None, "LOCAL", "PDF Generation Successful", path)
     except Exception as e:
-        print(f"❌ Failed to generate PDF: {e}")
+        print(f"❌ PDF generation failed: {e}")
         try:
-            log_debug_event(None, "LOCAL", "PDF Generation Failed", str(e))
-        except Exception as log_e:
-            print(f"⚠️ Logging PDF failure also failed: {log_e}")
+            log_debug_event(None, "LOCAL", "PDF Generation Error", str(e))
+        except Exception as fallback:
+            print(f"⚠️ Fallback logging failed: {fallback}")
 
-    uvicorn.run("run:app", host="0.0.0.0", port=10000, reload=True, log_config=None, access_log=False)
+    import uvicorn
+    uvicorn.run(
+        "run:app",
+        host="0.0.0.0",
+        port=10000,
+        reload=True,
+        access_log=True,
+        log_level="debug"
+    )
