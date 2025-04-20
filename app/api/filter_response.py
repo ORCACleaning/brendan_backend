@@ -728,6 +728,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         )
         if record_id:
             log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
     # === Fetch existing Airtable record ===
@@ -740,6 +743,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             res.raise_for_status()
             existing = res.json().get("fields", {})
             current_stage = existing.get("quote_stage", "")
+            log_debug_event(record_id, "BACKEND", "Fetched Airtable Record", f"Stage: {current_stage}")
         except Exception as e:
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
@@ -773,16 +777,18 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "- Keep it natural, warm, and professional — like a helpful sales rep, not a form."
             )
         })
+        log_debug_event(record_id, "GPT", "Init Trigger Detected", "Suppressing repeat greeting message.")
 
     elif current_stage == "Quote Calculated":
         messages.append({
             "role": "system",
             "content": "The quote has already been calculated. DO NOT regenerate unless the customer changes details."
         })
+        log_debug_event(record_id, "GPT", "Quote Already Calculated", "GPT instructed not to regenerate.")
 
     messages.append({"role": "user", "content": message.strip()})
+    log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
-    # === Call GPT ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -801,25 +807,26 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     for attempt in range(2):
         try:
             raw = call_gpt(messages)
-            if record_id:
-                log_debug_event(record_id, "GPT", f"Raw Attempt {attempt + 1}", raw)
+            log_debug_event(record_id, "GPT", f"Raw Attempt {attempt + 1}", raw[:300])
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
             parsed = json.loads(raw[start:end + 1])
             break
         except Exception as e:
-            if record_id:
-                log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt + 1})", str(e))
+            log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt + 1})", str(e))
             if attempt == 1:
+                flushed = flush_debug_log(record_id)
+                if flushed:
+                    update_quote_record(record_id, {"debug_log": flushed})
                 return [], raw.strip()
             sleep(1)
 
     props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
-    prop_map = {p["property"]: p["value"] for p in props if "property" in p}
+    props.append({"property": "source", "value": "Brendan"})
 
-    # === Name Handling ===
+    prop_map = {p["property"]: p["value"] for p in props if "property" in p}
     name = prop_map.get("customer_name", "").strip()
     if name:
         first_name = name.split(" ")[0]
@@ -827,7 +834,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Set", f"First name stored for chat: {first_name}")
 
-    # === Carpet Logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
@@ -846,19 +852,25 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             props = [p for p in props if p["property"] not in {"carpet_cleaning", *carpet_fields}]
             log_debug_event(record_id, "GPT", "Suppressed Carpet Section", "Waiting until suburb, bedrooms, bathrooms, and furnished are known.")
         else:
+            log_debug_event(record_id, "GPT", "Prompting Carpet Decision", "Asking about carpet steam cleaning.")
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
             return props, "Would you like to include carpet steam cleaning in the vacate clean?"
 
     if carpet_cleaning == "Yes":
         missing = [f for f in carpet_fields if prop_map.get(f) is None and existing.get(f) is None]
         if missing:
+            log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
             msg = (
                 "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
                 "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
             )
-            log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
             return props, msg
 
-    # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -869,16 +881,16 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
             ])
             log_debug_event(record_id, "BACKEND", "Chat Banned", f"Repeated abuse. Quote ID: {quote_id}")
-            flush = flush_debug_log(record_id)
-            if flush:
-                update_quote_record(record_id, {"debug_log": flush})
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Chat Banned"}], final_msg
         else:
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
-            flush = flush_debug_log(record_id)
-            if flush:
-                update_quote_record(record_id, {"debug_log": flush})
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
     log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Line: {reply[:100]}")
