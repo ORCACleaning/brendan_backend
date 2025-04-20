@@ -302,7 +302,8 @@ def create_new_quote(session_id: str, force_new: bool = False):
 def get_quote_by_session(session_id: str):
     """
     Retrieves the latest quote record from Airtable using session_id.
-    Returns: (quote_id, record_id, quote_stage, fields) or None if not found.
+    If no record is found, creates a new one.
+    Returns: (quote_id, record_id, quote_stage, fields)
     """
     if not session_id:
         logger.warning("⚠️ get_quote_by_session called with empty session_id")
@@ -342,17 +343,39 @@ def get_quote_by_session(session_id: str):
             sleep(1)
 
     records = response_data.get("records", []) if response_data else []
-    if not records:
-        logger.info(f"⏳ No record found for session_id: {session_id}")
-        log_debug_event(None, "BACKEND", "Session Lookup Empty", f"No record found for session_id: {session_id}")
-        return None
 
+    # === Create new quote if no record exists ===
+    if not records:
+        from app.services.quote_id_utils import get_next_quote_id
+
+        new_quote_id = get_next_quote_id()
+        new_data = {
+            "session_id": session_id,
+            "quote_id": new_quote_id,
+            "quote_stage": "Gathering Info",
+            "privacy_acknowledged": False
+        }
+
+        try:
+            create_res = requests.post(url, headers={**headers, "Content-Type": "application/json"}, json={"fields": new_data})
+            create_res.raise_for_status()
+            record = create_res.json()
+            record_id = record.get("id", "")
+            fields = record.get("fields", {})
+            logger.info(f"✅ New quote created — ID: {new_quote_id} | Record ID: {record_id}")
+            log_debug_event(record_id, "BACKEND", "New Quote Created", f"session_id: {session_id}, quote_id: {new_quote_id}")
+            return new_quote_id, record_id, "Gathering Info", fields
+        except Exception as e:
+            logger.error(f"❌ Failed to create new quote for session {session_id}: {e}")
+            log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
+            return None
+
+    # === Return existing record ===
     record = records[0]
     record_id = record.get("id", "")
     fields = record.get("fields", {})
     quote_id = fields.get("quote_id", "N/A")
     quote_stage = fields.get("quote_stage", "Gathering Info")
-    returned_session = fields.get("session_id", session_id)
 
     logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
     log_debug_event(record_id, "BACKEND", "Session Lookup Complete", f"Found quote_id: {quote_id}, stage: {quote_stage}")
