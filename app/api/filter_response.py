@@ -16,6 +16,10 @@ from urllib.parse import quote
 # === Third-Party Modules ===
 import pytz
 
+# === FastAPI Core ===
+from fastapi import APIRouter, Request, HTTPException
+from fastapi.responses import JSONResponse
+
 # === Brendan Config and Constants ===
 from app.config import logger, settings
 from app.config import LOG_TRUNCATE_LENGTH, MAX_LOG_LENGTH, PDF_SYSTEM_MESSAGE, TABLE_NAME
@@ -26,14 +30,12 @@ from app.models.quote_models import QuoteRequest
 # === Services ===
 from app.services.email_sender import send_quote_email
 from app.services.pdf_generator import generate_quote_pdf
-from app.services.quote_logic import calculate_quote
+from app.services.quote_logic import calculate_quote, should_calculate_quote
 from app.services.quote_id_utils import get_next_quote_id
 
 # === Field Rules and Logging ===
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
 from app.utils.logging_utils import log_debug_event, flush_debug_log
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
 
 
 # === Airtable Table Name ===
@@ -398,8 +400,8 @@ def get_quote_by_session(session_id: str):
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
-    Normalizes field values according to Airtable schema and rules.
-    Includes fallback retry and debug_log flushing.
+    Ensures 'quote_stage' is persisted correctly and all updates conform to Airtable schema.
+    Handles fallback retries and flushes debug log after update.
     """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
@@ -481,10 +483,12 @@ def update_quote_record(record_id: str, fields: dict):
 
         normalized_fields[corrected_key] = value
 
+    # Add debug_log and message_log if present
     for log_field in ["debug_log", "message_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
 
+    # Always flush debug log last
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
@@ -503,6 +507,7 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(validated_fields, indent=2)}")
 
+    # === Primary Bulk Update ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": validated_fields})
         if res.ok:
@@ -518,6 +523,7 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Exception in Airtable bulk update: {e}")
         log_debug_event(record_id, "BACKEND", "Bulk Update Exception", str(e))
 
+    # === Fallback One-By-One Field Update ===
     successful = []
     for key, value in validated_fields.items():
         try:
@@ -537,12 +543,13 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Failed", "No fields updated in fallback.")
 
     return successful
+
 # === Inline Quote Summary Helper ===
 
 def get_inline_quote_summary(data: dict) -> str:
     """
-    Generates a natural, friendly quote summary for Brendan to show in chat.
-    Includes price, estimated time, cleaner count, discount details, and selected cleaning options.
+    Generates a clear, backend-driven quote summary for Brendan to show in chat.
+    Includes total price, estimated time, cleaner count, discount breakdown, selected services, and optional notes.
     """
 
     price = float(data.get("total_price", 0) or 0)
@@ -555,7 +562,7 @@ def get_inline_quote_summary(data: dict) -> str:
 
     # === Time & Cleaners Calculation ===
     hours = time_est_mins / 60
-    cleaners = max(1, (time_est_mins + 299) // 300)  # Max 5 hrs per cleaner
+    cleaners = max(1, (time_est_mins + 299) // 300)  # cap at 5 hours per cleaner
     hours_per_cleaner = hours / cleaners
     hours_display = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
 
@@ -570,20 +577,20 @@ def get_inline_quote_summary(data: dict) -> str:
         opening = "All sorted — here’s your quote:\n\n"
 
     summary = f"{opening}"
-    summary += f"💰 Total Price (incl. GST): ${price:.2f}\n"
-    summary += f"⏰ Estimated Time: ~{hours_display} hour(s) per cleaner with {cleaners} cleaner(s)\n"
+    summary += f"💰 **Total Price (incl. GST):** ${price:.2f}\n"
+    summary += f"⏰ **Estimated Time:** ~{hours_display} hour(s) per cleaner with {cleaners} cleaner(s)\n"
 
-    # === Discount Line Logic ===
+    # === Discount Line ===
     if discount > 0:
         if is_property_manager and discount >= (price / 1.1) * 0.15:
-            summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special + 5% Property Manager Bonus\n"
+            summary += f"🏷️ **Discount Applied:** ${discount:.2f} — 10% Vacate Clean Special + 5% Property Manager Bonus\n"
         else:
-            summary += f"🏷️ Discount Applied: ${discount:.2f} — 10% Vacate Clean Special\n"
+            summary += f"🏷️ **Discount Applied:** ${discount:.2f} — 10% Vacate Clean Special\n"
 
-    # === Selected Cleaning Options ===
-    selected_services = []
+    # === Selected Extras ===
+    included = []
 
-    CLEANING_OPTIONS = {
+    EXTRA_SERVICES = {
         "oven_cleaning": "Oven Cleaning",
         "window_cleaning": "Window Cleaning",
         "blind_cleaning": "Blind Cleaning",
@@ -595,30 +602,30 @@ def get_inline_quote_summary(data: dict) -> str:
         "garage_cleaning": "Garage Cleaning",
         "upholstery_cleaning": "Upholstery Cleaning",
         "after_hours_cleaning": "After-Hours Cleaning",
-        "weekend_cleaning": "Weekend Cleaning",
+        "weekend_cleaning": "Weekend Cleaning"
     }
 
-    for field, label in CLEANING_OPTIONS.items():
+    for field, label in EXTRA_SERVICES.items():
         if str(data.get(field, "")).lower() in TRUE_VALUES:
-            selected_services.append(f"- {label}")
+            included.append(f"- {label}")
 
     if carpet_cleaning == "Yes":
-        selected_services.append("- Carpet Steam Cleaning")
+        included.append("- Carpet Steam Cleaning")
 
     if special_requests:
-        selected_services.append(f"- Special Request: {special_requests}")
+        included.append(f"- Special Request: {special_requests}")
 
-    if selected_services:
-        summary += "\n🧹 Cleaning Included:\n" + "\n".join(selected_services)
+    if included:
+        summary += "\n🧹 **Cleaning Included:**\n" + "\n".join(included)
 
     # === Optional Note ===
     if note:
-        summary += f"\n\n📜 Note: {note}"
+        summary += f"\n\n📜 **Note:** {note}"
 
-    # === Final Line ===
+    # === Final Instructions ===
     summary += (
-        "\n\nThis quote is valid for 7 days.\n"
-        "Would you like me to send this to your email as a PDF, or would you like to make any changes?"
+        "\n\nThis quote is valid for **7 days**.\n"
+        "Would you like me to send it to your email as a PDF, or would you like to make any changes?"
     )
 
     return summary.strip()
@@ -1049,6 +1056,10 @@ async def handle_chat_init(session_id: str):
 
 router = APIRouter()
 
+# === Brendan API Router ===
+
+router = APIRouter()
+
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -1135,9 +1146,7 @@ async def filter_response_entry(request: Request):
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
 
-        # === Calculate Quote If Ready ===
-        from app.services.quote_logic import should_calculate_quote  # Local import to avoid circular import
-
+        # === Quote Calculation Trigger (Backend Check) ===
         if should_calculate_quote(updated_fields) and quote_stage != "Quote Calculated":
             try:
                 result = calculate_quote(QuoteRequest(**updated_fields))
