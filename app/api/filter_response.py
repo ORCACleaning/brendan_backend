@@ -756,7 +756,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
-    # Prepare GPT messages from conversation log
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
     messages = [{
         "role": "system",
@@ -802,7 +801,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
-    # === GPT Call ===
     def call_gpt_and_parse(msgs, attempt=1):
         try:
             res = client.chat.completions.create(
@@ -817,8 +815,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
             parsed = json.loads(raw[start:end + 1])
-            if not isinstance(parsed, dict) or not isinstance(parsed.get("properties", []), list):
-                raise TypeError("GPT response not valid JSON with 'properties' list.")
+            if not isinstance(parsed, dict):
+                raise TypeError("Parsed block is not a dict")
             return parsed
         except Exception as e:
             log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt})", str(e))
@@ -837,24 +835,23 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
-    props = parsed.get("properties", [])
+    raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
-    if not isinstance(props, list):
-        log_debug_event(record_id, "GPT", "Invalid Props Format", f"props was not a list: {type(props)}")
+    safe_props = [p for p in raw_props if isinstance(p, dict) and "property" in p and "value" in p]
+    if not safe_props:
+        log_debug_event(record_id, "GPT", "Malformed Props", f"Props: {raw_props}")
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
-        return [], "Sorry — something went wrong. Mind letting me know how many bedrooms and bathrooms we're working with?"
+        return [], "Sorry — something broke. Could you let me know how many bedrooms and bathrooms there are?"
 
-    # Inject 'source = Brendan'
-    props = [p for p in props if p.get("property") != "source"]
+    props = [p for p in safe_props if p["property"] != "source"]
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
 
-    prop_map = {p["property"]: p["value"] for p in props if "property" in p}
+    prop_map = {p["property"]: p["value"] for p in props}
 
-    # Store first name only
     full_name = prop_map.get("customer_name", "").strip()
     if full_name:
         first_name = full_name.split(" ")[0]
@@ -862,7 +859,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Stored", f"First name used for chat: {first_name}")
 
-    # Abuse handling
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -908,7 +904,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 
 
 # === GPT Error Email Alert ===
