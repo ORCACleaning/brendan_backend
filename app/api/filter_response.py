@@ -621,33 +621,74 @@ def get_inline_quote_summary(data: dict) -> str:
 
 # === Generate Next Actions After Quote ===
 
-def generate_next_actions():
+def generate_next_actions(quote_stage: str):
     """
-    Generates the next action options after quote is calculated.
-    Brendan will:
-    - Offer to send a PDF quote
-    - Offer to email it
-    - Offer to edit the quote
-    - Offer to call the office
+    Generates next steps based on the current quote stage.
+
+    - After 'Quote Calculated': Offer PDF, email, edit, call office
+    - After 'Gathering Personal Info': Ask for name/email/phone (skip if already gathered)
+    - After 'Personal Info Received': Offer download or booking link
     """
-    return [
-        {
-            "action": "offer_next_step",
-            "response": (
-                "What would you like to do next?\n\n"
-                "I can send you a formal PDF quote, shoot it over to your email, "
-                "or we can adjust the quote if you'd like to make any changes.\n\n"
-                "Otherwise, you're always welcome to call our office on **1300 918 388** — "
-                "just mention your quote number and they'll sort you out."
-            ),
-            "options": [
-                {"label": "📄 Send PDF Quote", "value": "pdf_quote"},
-                {"label": "📧 Email Me the Quote", "value": "email_quote"},
-                {"label": "✏️ Edit the Quote", "value": "edit_quote"},
-                {"label": "📞 Call the Office", "value": "call_office"}
-            ]
-        }
-    ]
+
+    if quote_stage == "Quote Calculated":
+        return [
+            {
+                "action": "quote_ready",
+                "response": (
+                    "What would you like to do next?\n\n"
+                    "I can send you a formal PDF quote, email it over, "
+                    "or make changes if something’s not quite right.\n\n"
+                    "Or if you prefer, you can give our office a ring on **1300 918 388** — "
+                    "just mention your quote number and they’ll help you book."
+                ),
+                "options": [
+                    {"label": "📄 Generate PDF Quote", "value": "pdf_quote"},
+                    {"label": "📧 Email Me the Quote", "value": "email_quote"},
+                    {"label": "✏️ Make Changes", "value": "edit_quote"},
+                    {"label": "📞 Call the Office", "value": "call_office"}
+                ]
+            }
+        ]
+
+    elif quote_stage == "Gathering Personal Info":
+        return [
+            {
+                "action": "collect_info",
+                "response": (
+                    "No worries — just need a couple quick details so I can send your quote.\n\n"
+                    "**What’s your full name, email address, and best contact number?**"
+                ),
+                "options": []
+            }
+        ]
+
+    elif quote_stage == "Personal Info Received":
+        return [
+            {
+                "action": "final_steps",
+                "response": (
+                    "All done! I’ve sent your PDF quote to your inbox.\n\n"
+                    "If you'd like to book in now, you can do that here:\n"
+                    "**https://orcacleaning.com.au/schedule**\n\n"
+                    "Just enter your quote number when prompted."
+                ),
+                "options": [
+                    {"label": "📥 Download Quote PDF", "value": "download_pdf"},
+                    {"label": "📅 Book My Clean", "value": "book_clean"},
+                    {"label": "📞 Call the Office", "value": "call_office"}
+                ]
+            }
+        ]
+
+    else:
+        # Fallback
+        return [
+            {
+                "action": "awaiting_quote",
+                "response": "I’m still gathering details for your quote — let’s finish those first!",
+                "options": []
+            }
+        ]
 
 # === GPT Extraction (Production-Grade) ===
 
@@ -902,8 +943,8 @@ def send_gpt_error_email(error_msg: str):
 def append_message_log(record_id: str, message: str, sender: str):
     """
     Appends a new message to the 'message_log' field in Airtable.
-    Handles '__init__' differently and truncates log if it exceeds MAX_LOG_LENGTH.
-    Also flushes debug log after update.
+    Handles '__init__' differently and truncates if over MAX_LOG_LENGTH.
+    Ensures ordering and full GPT message preservation.
     """
     if not record_id:
         logger.error("❌ Cannot append message_log — missing record ID")
@@ -924,27 +965,24 @@ def append_message_log(record_id: str, message: str, sender: str):
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
 
-    old_log = ""
-    for attempt in range(3):
-        try:
-            res = requests.get(url, headers=headers)
-            res.raise_for_status()
-            old_log = str(res.json().get("fields", {}).get("message_log", "")).strip()
-            break
-        except Exception as e:
-            logger.warning(f"⚠️ Fetch attempt {attempt + 1} failed: {e}")
-            if attempt == 2:
-                logger.error(f"❌ Could not fetch message_log after 3 attempts for {record_id}")
-                log_debug_event(record_id, "BACKEND", "Message Log Fetch Failed", str(e))
-                return
-            sleep(1)
+    # === Load Existing Log ===
+    try:
+        res = requests.get(url, headers=headers)
+        res.raise_for_status()
+        old_log = str(res.json().get("fields", {}).get("message_log", "")).strip()
+    except Exception as e:
+        logger.warning(f"⚠️ Could not fetch current message_log: {e}")
+        log_debug_event(record_id, "BACKEND", "Message Log Fetch Failed", str(e))
+        return
 
+    # === Combine and Trim If Needed ===
     combined_log = f"{old_log}\n{new_entry}" if old_log else new_entry
     was_truncated = False
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
         was_truncated = True
 
+    # === Save Combined Log ===
     try:
         update_quote_record(record_id, {"message_log": combined_log})
         logger.info(f"✅ message_log updated for {record_id} (len={len(combined_log)})")
@@ -953,11 +991,13 @@ def append_message_log(record_id: str, message: str, sender: str):
         log_debug_event(record_id, "BACKEND", "Message Log Update Failed", str(e))
         return
 
+    # === Log Debug Metadata ===
     try:
-        if sender_clean == "USER" and message.lower() == "__init__":
-            detail = "SYSTEM_TRIGGER: Brendan started a new quote"
-        else:
-            detail = f"{sender_clean} message logged ({len(message)} chars)"
+        detail = (
+            "SYSTEM_TRIGGER: Brendan started a new quote"
+            if sender_clean == "USER" and message.lower() == "__init__"
+            else f"{sender_clean} message logged ({len(message)} chars)"
+        )
         if was_truncated:
             detail += " | ⚠️ Log truncated"
         log_debug_event(record_id, "BACKEND", "Message Appended", detail)
@@ -965,14 +1005,15 @@ def append_message_log(record_id: str, message: str, sender: str):
         logger.warning(f"⚠️ Debug log event failed: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Failure", str(e))
 
-    # === Flush debug log after message append ===
+    # === Flush Debug Log ===
     try:
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
     except Exception as e:
-        logger.warning(f"⚠️ Failed to flush debug log in append_message_log: {e}")
+        logger.warning(f"⚠️ Failed to flush debug log: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
+
 # === Handle Chat Init === 
 
 async def handle_chat_init(session_id: str):
@@ -1025,9 +1066,6 @@ async def handle_chat_init(session_id: str):
 
 # === Brendan API Router ===
 
-router = APIRouter()
-
-# === /filter-response Route ===
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -1054,7 +1092,7 @@ async def filter_response_entry(request: Request):
         quote_id, record_id, quote_stage, fields = quote_data
         message_lower = message.lower()
 
-        # === Chat Banned ===
+        # === Stop If Chat Is Banned ===
         if quote_stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
@@ -1063,11 +1101,11 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Handle Privacy Consent ===
+        # === Handle Privacy Consent If Required ===
         if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
             return await handle_privacy_consent(message, message_lower, record_id, session_id)
 
-        # === Contact Info Collection and PDF Sending ===
+        # === PDF/Email Logic After Personal Info Collected ===
         if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
             name = fields.get("customer_name", "").strip()
             email = fields.get("customer_email", "").strip()
@@ -1084,40 +1122,40 @@ async def filter_response_entry(request: Request):
                     return JSONResponse(content={
                         "properties": [],
                         "response": f"Thanks {name}! I’ve just sent your quote to {email}. Let me know if you need help with anything else — or feel free to book directly anytime: https://orcacleaning.com.au/schedule?quote_id={quote_id}",
-                        "next_actions": [],
+                        "next_actions": generate_next_actions("Personal Info Received"),
                         "session_id": session_id
                     })
                 except Exception as e:
                     log_debug_event(record_id, "BACKEND", "PDF/Email Error", str(e))
                     raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
-        # === Inject PDF System Message if user requests PDF ===
+        # === Inject System Prompt if PDF Trigger Detected ===
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
-        if quote_stage == "Quote Calculated" and any(word in message_lower for word in PDF_KEYWORDS):
+        if quote_stage == "Quote Calculated" and any(w in message_lower for w in PDF_KEYWORDS):
             message_log = PDF_SYSTEM_MESSAGE + "\n\n" + message_log
 
-        # === Append User Message ===
+        # === Append User Message to Log ===
         append_message_log(record_id, message, "user")
 
-        # === GPT-4 Property Extraction ===
+        # === Extract Properties from GPT ===
         properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
-        parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
 
-        # === Merge with Existing Fields ===
+        # === Parse and Merge Properties ===
+        parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         updated_fields = fields.copy()
         updated_fields.update(parsed)
 
-        # === Trigger Quote Calculation ===
+        # === Calculate Quote If Stage Reached ===
         if parsed.get("quote_stage") == "Quote Calculated" and not any(w in message_lower for w in PDF_KEYWORDS):
             try:
                 result = calculate_quote(QuoteRequest(**updated_fields))
                 parsed.update(result.model_dump())
-                reply = get_inline_quote_summary(result.model_dump()) + "\n\nWould you like me to email you this quote as a PDF?"
+                reply = get_inline_quote_summary(result.model_dump())
                 log_debug_event(record_id, "BACKEND", "Quote Ready", f"${parsed.get('total_price')} for {parsed.get('estimated_time_mins')} mins")
             except Exception as e:
                 log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
 
-        # === Airtable Update ===
+        # === Update Airtable Fields ===
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
 
@@ -1129,8 +1167,8 @@ async def filter_response_entry(request: Request):
         except Exception as e:
             log_debug_event(record_id, "BACKEND", "Final Flush Failed", str(e))
 
-        # === Next Actions ===
-        next_actions = generate_next_actions() if parsed.get("quote_stage") == "Quote Calculated" else []
+        # === Final Response ===
+        next_actions = generate_next_actions(parsed.get("quote_stage", quote_stage))
 
         return JSONResponse(content={
             "properties": properties,
