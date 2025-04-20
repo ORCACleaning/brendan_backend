@@ -757,7 +757,18 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
-    messages = [{"role": "system", "content": GPT_PROMPT}]
+    messages = [{
+        "role": "system",
+        "content": (
+            "You are Brendan, the quoting assistant for Orca Cleaning.\n"
+            "The customer has already seen this greeting from the frontend:\n\n"
+            "“G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
+            "This quote is fully anonymous and no booking is required — I’m just here to help. View our Privacy Policy.”\n\n"
+            "Do NOT repeat this greeting. Never say 'Hi', 'Hello', 'Hey', or 'G’day' again.\n"
+            "Start by asking for the name the quote should go under, and then suburb, bedrooms, bathrooms, and furnished/unfurnished.\n"
+            "Do not talk about carpet or extras until after this info is collected."
+        )
+    }]
     for line in prepared_log.split("\n"):
         if line.startswith("USER:"):
             messages.append({"role": "user", "content": line[5:].strip()})
@@ -770,13 +781,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         messages.append({
             "role": "system",
             "content": (
-                "The user has just opened the chat. This is the exact greeting they saw:\n\n"
-                "\"G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
-                "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
-                "You are now taking over.\n"
-                "- DO NOT repeat the greeting above.\n"
-                "- Start with a friendly message asking what name to use.\n"
-                "- Then ask: suburb, bedrooms, bathrooms, and furnished.\n"
+                "The user has just opened the chat. The greeting was already shown.\n"
+                "- Do not say 'Hi', 'Hey', 'Hello' or 'G’day'.\n"
+                "- Ask what name to use.\n"
+                "- Then ask suburb, bedrooms, bathrooms, and furnished/unfurnished.\n"
                 "- Suppress carpet and extras until base info is in."
             )
         })
@@ -875,7 +883,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 
 # === GPT Error Email Alert ===
 
