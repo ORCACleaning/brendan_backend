@@ -733,7 +733,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
-    # === Fetch existing Airtable record ===
     existing, current_stage = {}, ""
     if record_id and not skip_log_lookup:
         try:
@@ -748,7 +747,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
-    # === Prepare GPT messages ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
     messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
