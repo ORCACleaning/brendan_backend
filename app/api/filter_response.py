@@ -756,6 +756,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
+    # Strip emojis and unsupported characters
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
     messages = [{
         "role": "system",
@@ -772,7 +773,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         )
     }]
     for line in prepared_log.split("\n"):
-        if line.startswith("USER:"):
+        if line.startswith("USER:") and line.strip() != "USER: __init__":
             messages.append({"role": "user", "content": line[5:].strip()})
         elif line.startswith("BRENDAN:"):
             messages.append({"role": "assistant", "content": line[8:].strip()})
@@ -809,14 +810,19 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 max_tokens=3000,
                 temperature=0.4
             )
-            raw = res.choices[0].message.content.strip()
+            try:
+                raw = res.choices[0].message.content.strip()
+            except Exception as e:
+                log_debug_event(record_id, "GPT", f"Choice Access Failed (Attempt {attempt})", str(e))
+                return None
+
             log_debug_event(record_id, "GPT", f"Raw Attempt {attempt}", raw[:300])
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
             parsed = json.loads(raw[start:end + 1])
-            if not isinstance(parsed.get("properties", []), list):
-                raise TypeError("GPT 'properties' field is not a list.")
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("properties", []), list):
+                raise TypeError("Parsed content is not valid structured JSON.")
             return parsed
         except Exception as e:
             log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt})", str(e))
@@ -827,7 +833,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         messages.insert(1, {"role": "system", "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."})
         parsed = call_gpt_and_parse(messages, 2)
 
-    if not parsed:
+    if not parsed or not isinstance(parsed, dict):
+        log_debug_event(record_id, "GPT", "Invalid Parse", f"Type: {type(parsed)} | Value: {str(parsed)[:100]}")
         reply = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
         flushed = flush_debug_log(record_id)
         if flushed:
@@ -896,6 +903,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 
 # === GPT Error Email Alert ===
