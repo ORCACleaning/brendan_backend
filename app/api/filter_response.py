@@ -655,8 +655,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
         reply = (
-            "Hey there! I’m here to help — just let me know which suburb you're in, how many bedrooms and "
-            "bathrooms you’ve got, and whether the place is furnished or unfurnished."
+            "Hey there! Just let me know what suburb we’re quoting for, how many bedrooms and bathrooms there are, "
+            "and whether the property is furnished or unfurnished."
         )
         if record_id:
             log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
@@ -697,12 +697,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
                 "You are now taking over from that point.\n"
                 "- DO NOT repeat this greeting.\n"
-                "- DO NOT begin with phrases like \"no worries\" — the customer hasn’t said anything yet.\n"
-                "- Start by asking what name they’d like to go by. This is not about collecting info — it’s just to help build a friendly, relaxed tone and let the customer know they’re in good hands.\n"
-                "- You are one of the most professional and helpful quoting agents in Australia. Speak warmly and confidently — make the customer feel welcome and understood.\n"
-                "- DO NOT ask about carpet cleaning or carpet breakdown at this point.\n"
-                "- Once you know their name, gently ask for their suburb, number of bedrooms and bathrooms, and whether the property is furnished or unfurnished.\n"
-                "- Keep it natural and conversational — this is about trust, not form-filling."
+                "- DO NOT start with phrases like 'no worries'. The user has not spoken yet.\n"
+                "- Start with something casual but warm — ask what name they’d like to go by. "
+                "This isn’t for records, just to keep things friendly.\n"
+                "- If they prefer not to share a name, that’s fine — continue naturally without it.\n"
+                "- If they provide both first and last name, just use the first name in the chat.\n"
+                "- After that, ask for suburb, bedrooms, bathrooms, and whether it’s furnished.\n"
+                "- DO NOT ask about carpet cleaning or breakdown yet.\n"
+                "- Make it feel like a friendly one-on-one convo — avoid sounding scripted or like a form."
             )
         })
 
@@ -714,7 +716,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     messages.append({"role": "user", "content": message.strip()})
 
-    # === Call GPT ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -751,13 +752,20 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     reply = parsed.get("response", "").strip()
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
 
+    # === Name Handling Logic ===
+    name = prop_map.get("customer_name", "").strip()
+    if name:
+        first_name = name.split(" ")[0]
+        props = [p for p in props if p["property"] != "customer_name"]
+        props.append({"property": "customer_name", "value": first_name})
+        log_debug_event(record_id, "GPT", "Temp Name Set", f"First name stored for conversation: {first_name}")
+
     # === Carpet Steam Cleaning Logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
     carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", "").strip()
-
     base_fields = {
         "suburb": existing.get("suburb"),
         "bedrooms_v2": existing.get("bedrooms_v2"),
