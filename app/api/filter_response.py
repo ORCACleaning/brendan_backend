@@ -391,7 +391,7 @@ def update_quote_record(record_id: str, fields: dict):
         tables = schema_res.json().get("tables", [])
         for table in tables:
             if table.get("name") == TABLE_NAME:
-                actual_keys.update({f["name"]: f["name"] for f in table.get("fields", [])})
+                actual_keys.update({f["name"] for f in table.get("fields", [])})
                 break
     except Exception as e:
         logger.warning(f"⚠️ Could not fetch Airtable field schema: {e}")
@@ -408,15 +408,15 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
             continue
 
-        # === Carpet Cleaning (Single Select) ===
+        # === Carpet Cleaning (Single Select) — "Yes", "No", or "" ===
         if corrected_key == "carpet_cleaning":
             val = str(value).strip().capitalize()
-            if val not in {"Yes", "No"}:
-                value = ""
-            else:
+            if val in {"Yes", "No"}:
                 value = val
+            else:
+                value = ""
 
-        # === Furnished (Single Select) ===
+        # === Furnished (Single Select) — "Furnished" or "Unfurnished" ===
         elif corrected_key == "furnished":
             val = str(value).strip().lower()
             if "unfurnished" in val:
@@ -452,17 +452,21 @@ def update_quote_record(record_id: str, fields: dict):
             except:
                 value = 0.0
 
-        # === Optional string cleanup ===
+        # === Special Requests ===
         elif corrected_key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
+            else:
+                value = str(value).strip()
 
+        # === Extra Hours Requested ===
         elif corrected_key == "extra_hours_requested":
             try:
                 value = float(value) if value not in [None, ""] else 0.0
             except:
                 value = 0.0
 
+        # === General Fallback (String Cleanup) ===
         else:
             value = "" if value is None else str(value).strip()
 
@@ -687,7 +691,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
-    # === Init Chat Trigger ===
     if message == "__init__":
         messages.append({
             "role": "system",
@@ -760,28 +763,26 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Set", f"First name stored for chat: {first_name}")
 
-    # === Carpet Logic Suppression ===
+    # === Carpet Logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
     ]
-    carpet_cleaning = prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning", "").strip()
+    carpet_cleaning = (prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning") or "").strip()
     base_fields = {
-        "suburb": existing.get("suburb"),
-        "bedrooms_v2": existing.get("bedrooms_v2"),
-        "bathrooms_v2": existing.get("bathrooms_v2"),
-        "furnished": existing.get("furnished"),
+        "suburb": existing.get("suburb") or prop_map.get("suburb"),
+        "bedrooms_v2": existing.get("bedrooms_v2") or prop_map.get("bedrooms_v2"),
+        "bathrooms_v2": existing.get("bathrooms_v2") or prop_map.get("bathrooms_v2"),
+        "furnished": existing.get("furnished") or prop_map.get("furnished"),
     }
     base_ready = all(base_fields.values())
 
-    if current_stage in {"", "Gathering Info"} and not base_ready:
-        if carpet_cleaning or any(f in prop_map for f in carpet_fields):
-            log_debug_event(record_id, "GPT", "Suppressed Carpet Fields", "Delaying carpet logic until base info is complete.")
+    if not carpet_cleaning and not current_stage.startswith("Quote"):
+        if not base_ready:
             props = [p for p in props if p["property"] not in {"carpet_cleaning", *carpet_fields}]
-
-    if base_ready and not carpet_cleaning:
-        log_debug_event(record_id, "GPT", "Carpet Prompt", "Prompting for carpet cleaning decision.")
-        return props, "Would you like to include carpet steam cleaning in this vacate clean?"
+            log_debug_event(record_id, "GPT", "Suppressed Carpet Section", "Waiting until suburb, bedrooms, bathrooms, and furnished are known.")
+        else:
+            return props, "Would you like to include carpet steam cleaning in the vacate clean?"
 
     if carpet_cleaning == "Yes":
         missing = [f for f in carpet_fields if prop_map.get(f) is None and existing.get(f) is None]
@@ -793,7 +794,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
             return props, msg
 
-    # === Abuse Handling ===
+    # === Abuse Detection ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
