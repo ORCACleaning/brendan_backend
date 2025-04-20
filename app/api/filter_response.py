@@ -898,7 +898,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     return props, reply
 
 
-
 # === GPT Error Email Alert ===
 
 def send_gpt_error_email(error_msg: str):
