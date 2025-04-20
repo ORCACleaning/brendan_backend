@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from weasyprint import HTML
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from app.api.field_rules import FIELD_MAP
@@ -9,7 +8,7 @@ STATIC_PDF_DIR = "/opt/render/project/public/quotes"
 BASE_URL = "https://quote.orcacleaning.com.au/quotes"
 
 # === Load Jinja Template ===
-template_dir = os.path.join(os.path.dirname(__file__), "../../templates")
+template_dir = os.path.join(os.path.dirname(__file__), "templates")
 env = Environment(
     loader=FileSystemLoader(template_dir),
     autoescape=select_autoescape(['html', 'xml'])
@@ -22,7 +21,6 @@ def generate_quote_pdf(data: dict) -> str:
     Generate a PDF quote using customer data and save it in the public folder.
     Returns the public Render URL of the generated PDF.
     """
-    # === Ensure output directory exists ===
     os.makedirs(STATIC_PDF_DIR, exist_ok=True)
 
     # === Clean and normalize input data ===
