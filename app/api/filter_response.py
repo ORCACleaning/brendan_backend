@@ -721,8 +721,6 @@ def generate_next_actions(quote_stage: str):
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
-    
-   
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
@@ -845,7 +843,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply or "Just checking — how many bedrooms and bathrooms are we quoting for?"
 
-    safe_props = [p for p in raw_props if isinstance(p, dict) and "property" in p and "value" in p]
+    safe_props = []
+    for p in raw_props:
+        if isinstance(p, dict) and "property" in p and "value" in p:
+            safe_props.append(p)
+        else:
+            log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
+
     if not safe_props:
         log_debug_event(record_id, "GPT", "Empty Properties", "GPT returned no valid properties. Using response anyway.")
         flushed = flush_debug_log(record_id)
@@ -857,7 +861,12 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
 
-    prop_map = {p["property"]: p["value"] for p in props if "property" in p and "value" in p}
+    try:
+        prop_map = {p["property"]: p["value"] for p in props if isinstance(p, dict) and "property" in p and "value" in p}
+    except Exception as e:
+        log_debug_event(record_id, "GPT", "Prop Map Error", str(e))
+        return [], reply
+
     full_name = prop_map.get("customer_name", "").strip()
     if full_name:
         first_name = full_name.split(" ")[0]
