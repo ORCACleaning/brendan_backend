@@ -697,6 +697,8 @@ def generate_next_actions(quote_stage: str):
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
+    from app.services.quote_logic import should_calculate_quote
+
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
@@ -747,13 +749,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
                 "You are now taking over.\n"
                 "- DO NOT repeat the greeting above.\n"
-                "- DO NOT say 'no worries' or anything casual — the user has not spoken yet.\n"
-                "- Start with a single message asking what name you should use during the chat. Make clear it's optional.\n"
-                "- Example: \"What name should I call you during our chat? Totally fine if you'd rather not share one.\"\n"
-                "- Once they reply, use only the first name in future.\n"
-                "- After receiving a name (or if none given), then ask: suburb, bedrooms, bathrooms, and furnished.\n"
-                "- DO NOT ask about carpet cleaning or breakdowns yet.\n"
-                "- Keep it natural, warm, and professional — like a helpful sales rep, not a form."
+                "- Start with a friendly message asking what name to use.\n"
+                "- Then ask: suburb, bedrooms, bathrooms, and furnished.\n"
+                "- Suppress carpet and extras until base info is in."
             )
         })
         log_debug_event(record_id, "GPT", "Init Trigger Detected", "Suppressing repeat greeting message.")
@@ -813,52 +811,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Set", f"First name stored for chat: {first_name}")
 
-    carpet_fields = [
-        "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-        "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
-    ]
-    carpet_cleaning = (prop_map.get("carpet_cleaning") or existing.get("carpet_cleaning") or "").strip()
-    base_fields = {
-        "suburb": existing.get("suburb") or prop_map.get("suburb"),
-        "bedrooms_v2": existing.get("bedrooms_v2") or prop_map.get("bedrooms_v2"),
-        "bathrooms_v2": existing.get("bathrooms_v2") or prop_map.get("bathrooms_v2"),
-        "furnished": existing.get("furnished") or prop_map.get("furnished"),
-    }
-    base_ready = all(base_fields.values())
-
-    if not carpet_cleaning and not current_stage.startswith("Quote"):
-        if not base_ready:
-            props = [p for p in props if p["property"] not in {"carpet_cleaning", *carpet_fields}]
-            log_debug_event(record_id, "GPT", "Suppressed Carpet Section", "Waiting until suburb, bedrooms, bathrooms, and furnished are known.")
-        else:
-            log_debug_event(record_id, "GPT", "Prompting Carpet Decision", "Asking about carpet steam cleaning.")
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
-            return props, "Would you like to include carpet steam cleaning in the vacate clean?"
-
-    if carpet_cleaning == "Yes":
-        missing = [f for f in carpet_fields if prop_map.get(f) is None and existing.get(f) is None]
-        if missing:
-            log_debug_event(record_id, "GPT", "Missing Carpet Fields", str(missing))
-            msg = (
-                "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
-                "- Bedrooms\n- Living areas\n- Studies\n- Hallways\n- Stairs\n- Other areas"
-            )
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
-            return props, msg
-
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
         if current_stage == "Abuse Warning":
-            final_msg = random.choice([
-                f"We’ve ended the quote due to repeated language. Call us on 1300 918 388 with your quote number: {quote_id}. This chat is now closed.",
-                f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}.",
-                f"Let’s keep things respectful — I’ve had to stop the quote here. Feel free to call the office. Quote ID: {quote_id}. This chat is now closed."
-            ])
+            final_msg = f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}."
             log_debug_event(record_id, "BACKEND", "Chat Banned", f"Repeated abuse. Quote ID: {quote_id}")
             flushed = flush_debug_log(record_id)
             if flushed:
@@ -872,12 +829,20 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
+    all_fields = existing.copy()
+    all_fields.update(prop_map)
+
+    if should_calculate_quote(all_fields):
+        props.append({"property": "quote_stage", "value": "Quote Calculated"})
+        log_debug_event(record_id, "BACKEND", "Stage Forced", "Backend promoted stage to Quote Calculated")
+
     log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Line: {reply[:100]}")
     flushed = flush_debug_log(record_id)
     if flushed:
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 # === GPT Error Email Alert ===
 
@@ -1085,7 +1050,6 @@ async def handle_chat_init(session_id: str):
 router = APIRouter()
 
 @router.post("/filter-response")
-
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
@@ -1171,11 +1135,14 @@ async def filter_response_entry(request: Request):
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
 
-        # === Calculate Quote If Stage Reached ===
-        if parsed.get("quote_stage") == "Quote Calculated" and not any(w in message_lower for w in PDF_KEYWORDS):
+        # === Calculate Quote If Ready ===
+        from app.services.quote_logic import should_calculate_quote  # Local import to avoid circular import
+
+        if should_calculate_quote(updated_fields) and quote_stage != "Quote Calculated":
             try:
                 result = calculate_quote(QuoteRequest(**updated_fields))
                 parsed.update(result.model_dump())
+                parsed["quote_stage"] = "Quote Calculated"
                 reply = get_inline_quote_summary(result.model_dump())
                 log_debug_event(record_id, "BACKEND", "Quote Ready", f"${parsed.get('total_price')} for {parsed.get('estimated_time_mins')} mins")
             except Exception as e:
