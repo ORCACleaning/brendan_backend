@@ -725,7 +725,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     from app.services.quote_logic import should_calculate_quote
     from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, FIELD_MAP
 
-    logger.info("🧐 Calling GPT-4 Turbo to extract properties...")
+    logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
 
@@ -829,16 +829,15 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     if not isinstance(parsed, dict):
         log_debug_event(record_id, "GPT", "Invalid Parse", f"Type: {type(parsed)} | Value: {str(parsed)[:100]}")
-        reply = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
+        fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
-        return [], reply
+        return [], fallback
 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
-    # ✅ Fix for malformed dict instead of list
     if isinstance(raw_props, dict):
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
@@ -880,8 +879,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Chat Banned"}], final_msg
         else:
-            log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
+            log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
             flushed = flush_debug_log(record_id)
             if flushed:
                 update_quote_record(record_id, {"debug_log": flushed})
