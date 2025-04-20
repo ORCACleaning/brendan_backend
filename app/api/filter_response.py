@@ -840,11 +840,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     safe_props = [p for p in raw_props if isinstance(p, dict) and "property" in p and "value" in p]
     if not safe_props:
-        log_debug_event(record_id, "GPT", "Malformed Props", f"Props: {raw_props}")
+        log_debug_event(record_id, "GPT", "Empty Properties", "GPT returned no properties. Using response anyway.")
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
-        return [], "Sorry — something broke. Could you let me know how many bedrooms and bathrooms there are?"
+        return [], reply
 
     props = [p for p in safe_props if p["property"] != "source"]
     props.append({"property": "source", "value": "Brendan"})
@@ -904,6 +904,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 
 # === GPT Error Email Alert ===
