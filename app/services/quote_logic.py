@@ -17,19 +17,38 @@ CARPET_BREAKDOWN_FIELDS = [
 PROPERTY_MANAGER_FIELDS = ["real_estate_name", "number_of_sessions"]
 
 def should_calculate_quote(fields: dict) -> bool:
+    # Check core required fields
     for key in REQUIRED_QUOTE_FIELDS:
         if key not in fields or fields[key] in [None, "", False]:
             return False
 
+    # Check carpet breakdown only if carpet_cleaning is "Yes"
     if fields.get("carpet_cleaning") == "Yes":
         for key in CARPET_BREAKDOWN_FIELDS:
             if key not in fields or fields[key] in [None, ""]:
                 return False
 
-    if str(fields.get("is_property_manager")).lower() in {"true", "yes", "1"}:
+    # Check property manager fields if applicable
+    if str(fields.get("is_property_manager", "")).strip().lower() in {"true", "yes", "1"}:
         for key in PROPERTY_MANAGER_FIELDS:
-            if key not in fields or not fields[key]:
+            if key not in fields or fields[key] in [None, "", False]:
                 return False
+
+    # Ensure optional add-on checkboxes are explicitly filled (True or False)
+    optional_booleans = [
+        "garage_cleaning",
+        "upholstery_cleaning",
+        "weekend_cleaning",
+        "after_hours_cleaning",
+        "window_cleaning",
+        "balcony_cleaning",
+        "blind_cleaning",
+        "wall_washing",
+        "fridge_cleaning"
+    ]
+    for key in optional_booleans:
+        if key not in fields:
+            return False
 
     return True
 
