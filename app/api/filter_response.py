@@ -479,6 +479,8 @@ def update_quote_record(record_id: str, fields: dict):
                 value = float(value) if value not in [None, ""] else 0.0
             except:
                 value = 0.0
+        elif corrected_key == "pdf_url":
+            value = str(value).strip()
         else:
             value = "" if value is None else str(value).strip()
 
@@ -544,6 +546,7 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Failed", "No fields updated in fallback.")
 
     return successful
+
 
 # === Inline Quote Summary Helper ===
 
@@ -708,7 +711,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     from app.services.quote_logic import should_calculate_quote
     from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS
 
-    logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
+    logger.info("🧐 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
 
@@ -739,7 +742,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
-    # === Prepare GPT messages ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
     messages = [{"role": "system", "content": GPT_PROMPT}]
     for line in prepared_log.split("\n"):
@@ -775,7 +777,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
-    # === Call GPT ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -812,12 +813,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
-    # === Force Brendan as source ===
     props = [p for p in props if p.get("property") != "source"]
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
 
-    # === Handle customer name ===
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
     full_name = prop_map.get("customer_name", "").strip()
     if full_name:
@@ -826,7 +825,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Stored", f"First name used for chat: {first_name}")
 
-    # === Abuse filter ===
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -845,17 +843,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
-    # === Merge fields ===
     all_fields = existing.copy()
     all_fields.update(prop_map)
 
-    # === Patch missing booleans ===
     for field in BOOLEAN_FIELDS:
         if field in VALID_AIRTABLE_FIELDS and field not in all_fields:
             all_fields[field] = False
             log_debug_event(record_id, "BACKEND", "Patched Missing Checkbox", f"{field} = False")
 
-    # === Promote stage ===
     if should_calculate_quote(all_fields):
         props.append({"property": "quote_stage", "value": "Quote Calculated"})
         log_debug_event(record_id, "BACKEND", "Stage Forced", "Backend promoted stage to Quote Calculated")
@@ -866,6 +861,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 # === GPT Error Email Alert ===
 
@@ -1134,7 +1130,6 @@ async def filter_response_entry(request: Request):
                     log_debug_event(record_id, "BACKEND", "PDF/Email Error", str(e))
                     raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
-        # === Inject PDF System Prompt if user is asking for quote ===
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
         if quote_stage == "Quote Calculated" and any(k in message_lower for k in PDF_KEYWORDS):
             message_log = PDF_SYSTEM_MESSAGE + "\n\n" + message_log
