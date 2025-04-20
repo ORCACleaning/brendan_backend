@@ -412,7 +412,6 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # === Fetch Airtable schema field names ===
     schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
     actual_keys = set()
     try:
@@ -437,11 +436,9 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
             continue
 
-        # === Field Normalization ===
         if corrected_key == "carpet_cleaning":
             val = str(value).strip().capitalize()
             value = val if val in {"Yes", "No"} else ""
-
         elif corrected_key == "furnished":
             val = str(value).strip().lower()
             if "unfurnished" in val:
@@ -450,7 +447,6 @@ def update_quote_record(record_id: str, fields: dict):
                 value = "Furnished"
             else:
                 value = ""
-
         elif corrected_key in INTEGER_FIELDS:
             try:
                 value = int(float(value))
@@ -458,12 +454,9 @@ def update_quote_record(record_id: str, fields: dict):
                     logger.warning(f"⚠️ Clamping large int for {corrected_key}: {value}")
                     value = MAX_REASONABLE_INT
             except:
-                logger.warning(f"⚠️ Invalid int value for {corrected_key}, defaulting to 0")
                 value = 0
-
         elif corrected_key in BOOLEAN_FIELDS:
-            value = value if isinstance(value, bool) else str(value).strip().lower() in TRUE_VALUES
-
+            value = value if isinstance(value, bool) else str(value).strip().lower() in {"yes", "true", "1", "on", "checked", "t"}
         elif corrected_key in {
             "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
             "estimated_time_mins", "discount_applied", "mandurah_surcharge",
@@ -473,30 +466,25 @@ def update_quote_record(record_id: str, fields: dict):
                 value = float(value)
             except:
                 value = 0.0
-
         elif corrected_key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
             else:
                 value = str(value).strip()
-
         elif corrected_key == "extra_hours_requested":
             try:
                 value = float(value) if value not in [None, ""] else 0.0
             except:
                 value = 0.0
-
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[corrected_key] = value
 
-    # === Add debug_log and message_log if passed ===
     for log_field in ["debug_log", "message_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
 
-    # === Flush and attach debug log ===
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
@@ -507,7 +495,6 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Skipped", "No valid fields to apply.")
         return []
 
-    # === Filter to actual Airtable schema fields ===
     validated_fields = {k: v for k, v in normalized_fields.items() if k in actual_keys}
     if not validated_fields:
         log_debug_event(record_id, "BACKEND", "Validation Failed", "No matching fields for schema.")
@@ -516,7 +503,6 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(validated_fields, indent=2)}")
 
-    # === Primary bulk update ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": validated_fields})
         if res.ok:
@@ -532,7 +518,6 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Exception in Airtable bulk update: {e}")
         log_debug_event(record_id, "BACKEND", "Bulk Update Exception", str(e))
 
-    # === Fallback per-field update ===
     successful = []
     for key, value in validated_fields.items():
         try:
@@ -552,7 +537,6 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Failed", "No fields updated in fallback.")
 
     return successful
-
 # === Inline Quote Summary Helper ===
 
 def get_inline_quote_summary(data: dict) -> str:
