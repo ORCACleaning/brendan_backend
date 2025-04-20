@@ -756,6 +756,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             logger.warning(f"⚠️ Airtable fetch failed: {e}")
             log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
 
+    # Prepare GPT messages from conversation log
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-LOG_TRUNCATE_LENGTH:])
     messages = [{
         "role": "system",
@@ -801,6 +802,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
+    # === GPT Call ===
     def call_gpt_and_parse(msgs, attempt=1):
         try:
             res = client.chat.completions.create(
@@ -815,19 +817,19 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
             parsed = json.loads(raw[start:end + 1])
-            if not isinstance(parsed, dict):
-                raise TypeError("Parsed content is not a valid JSON dict.")
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("properties", []), list):
+                raise TypeError("GPT response not valid JSON with 'properties' list.")
             return parsed
         except Exception as e:
             log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt})", str(e))
             return None
 
     parsed = call_gpt_and_parse(messages, 1)
-    if not parsed:
+    if not isinstance(parsed, dict):
         messages.insert(1, {"role": "system", "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."})
         parsed = call_gpt_and_parse(messages, 2)
 
-    if not parsed or not isinstance(parsed, dict):
+    if not isinstance(parsed, dict):
         log_debug_event(record_id, "GPT", "Invalid Parse", f"Type: {type(parsed)} | Value: {str(parsed)[:100]}")
         reply = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
         flushed = flush_debug_log(record_id)
@@ -845,12 +847,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], "Sorry — something went wrong. Mind letting me know how many bedrooms and bathrooms we're working with?"
 
+    # Inject 'source = Brendan'
     props = [p for p in props if p.get("property") != "source"]
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
 
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
 
+    # Store first name only
     full_name = prop_map.get("customer_name", "").strip()
     if full_name:
         first_name = full_name.split(" ")[0]
@@ -858,6 +862,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Stored", f"First name used for chat: {first_name}")
 
+    # Abuse handling
     abuse_detected = any(word in message.lower() for word in ABUSE_WORDS)
     if abuse_detected:
         quote_id = quote_id or existing.get("quote_id", "N/A")
@@ -886,7 +891,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     props = [
         p for p in props
-        if not (p["property"] in FIELD_MAP and FIELD_MAP[p["property"]]["type"] == "single select" and str(p["value"]).strip() == "")
+        if not (
+            p["property"] in FIELD_MAP and
+            FIELD_MAP[p["property"]]["type"] == "single select" and
+            str(p["value"]).strip() == ""
+        )
     ]
 
     if should_calculate_quote(all_fields):
@@ -899,7 +908,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 
 
 
