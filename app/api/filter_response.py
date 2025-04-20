@@ -1074,8 +1074,6 @@ router = APIRouter()
 
 # === Brendan API Router ===
 
-router = APIRouter()
-
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
@@ -1088,7 +1086,6 @@ async def filter_response_entry(request: Request):
 
         log_debug_event(None, "BACKEND", "Incoming Message", f"Session: {session_id}, Message: {message}")
 
-        # === Init Trigger (Bypass GPT and use static greeting) ===
         if message.lower() == "__init__":
             try:
                 return await handle_chat_init(session_id)
@@ -1096,7 +1093,6 @@ async def filter_response_entry(request: Request):
                 log_debug_event(None, "BACKEND", "Init Error", str(e))
                 raise HTTPException(status_code=500, detail="Init failed.")
 
-        # === Load Existing Quote ===
         quote_data = get_quote_by_session(session_id)
         if not quote_data:
             raise HTTPException(status_code=404, detail="Quote not found.")
@@ -1104,7 +1100,6 @@ async def filter_response_entry(request: Request):
         quote_id, record_id, quote_stage, fields = quote_data
         message_lower = message.lower()
 
-        # === Stop If Chat Is Banned ===
         if quote_stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
@@ -1113,11 +1108,9 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Handle Privacy Consent If Required ===
         if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
             return await handle_privacy_consent(message, message_lower, record_id, session_id)
 
-        # === PDF/Email Logic After Personal Info Collected ===
         if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
             name = fields.get("customer_name", "").strip()
             email = fields.get("customer_email", "").strip()
@@ -1141,28 +1134,24 @@ async def filter_response_entry(request: Request):
                     log_debug_event(record_id, "BACKEND", "PDF/Email Error", str(e))
                     raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
-        # === Inject System Prompt if PDF Trigger Detected ===
+        # === Inject PDF System Prompt if user is asking for quote ===
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
-        if quote_stage == "Quote Calculated" and any(w in message_lower for w in PDF_KEYWORDS):
+        if quote_stage == "Quote Calculated" and any(k in message_lower for k in PDF_KEYWORDS):
             message_log = PDF_SYSTEM_MESSAGE + "\n\n" + message_log
+            log_debug_event(record_id, "BACKEND", "PDF Trigger", f"User asked for PDF: {message_lower[:50]}")
 
-        # === Append User Message to Log ===
         append_message_log(record_id, message, "user")
 
-        # === Extract Properties from GPT ===
         properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
 
-        # === Parse and Merge Properties ===
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         updated_fields = fields.copy()
         updated_fields.update(parsed)
 
-        # === Ensure Essential Fields Stay Intact ===
         for required in ["bedrooms_v2", "bathrooms_v2", "source"]:
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
 
-        # === Quote Calculation Trigger (Backend Check) ===
         if should_calculate_quote(updated_fields) and quote_stage != "Quote Calculated":
             try:
                 result = calculate_quote(QuoteRequest(**updated_fields))
@@ -1173,11 +1162,9 @@ async def filter_response_entry(request: Request):
             except Exception as e:
                 log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
 
-        # === Update Airtable Fields ===
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
 
-        # === Final Response ===
         next_actions = generate_next_actions(parsed.get("quote_stage", quote_stage))
 
         return JSONResponse(content={
