@@ -311,9 +311,7 @@ def get_quote_by_session(session_id: str):
 
     safe_table_name = quote(TABLE_NAME)
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
-    headers = {
-        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"
-    }
+    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
     params = {
         "filterByFormula": f"{{session_id}}='{session_id}'",
         "sort[0][field]": "timestamp",
@@ -357,7 +355,11 @@ def get_quote_by_session(session_id: str):
         }
 
         try:
-            create_res = requests.post(url, headers={**headers, "Content-Type": "application/json"}, json={"fields": new_data})
+            create_res = requests.post(
+                url,
+                headers={**headers, "Content-Type": "application/json"},
+                json={"fields": new_data}
+            )
             create_res.raise_for_status()
             record = create_res.json()
             record_id = record.get("id", "")
@@ -377,6 +379,10 @@ def get_quote_by_session(session_id: str):
     quote_id = fields.get("quote_id", "N/A")
     quote_stage = fields.get("quote_stage", "Gathering Info")
 
+    # === Log shallow record warning ===
+    if len(fields.keys()) < 10:
+        log_debug_event(record_id, "BACKEND", "Record Warning", f"Returned with only {len(fields)} fields — may be incomplete")
+
     logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
     log_debug_event(record_id, "BACKEND", "Session Lookup Complete", f"Found quote_id: {quote_id}, stage: {quote_stage}")
 
@@ -393,6 +399,7 @@ def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
     Normalizes field values according to Airtable schema and rules.
+    Includes fallback retry and debug_log flushing.
     """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
@@ -405,7 +412,7 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # === Fetch Airtable field names from schema ===
+    # === Fetch Airtable schema field names ===
     schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
     actual_keys = set()
     try:
@@ -414,15 +421,14 @@ def update_quote_record(record_id: str, fields: dict):
         tables = schema_res.json().get("tables", [])
         for table in tables:
             if table.get("name") == TABLE_NAME:
-                actual_keys.update({f["name"] for f in table.get("fields", [])})
+                actual_keys = {f["name"] for f in table.get("fields", [])}
                 break
     except Exception as e:
         logger.warning(f"⚠️ Could not fetch Airtable field schema: {e}")
 
-    MAX_REASONABLE_INT = 100
     normalized_fields = {}
+    MAX_REASONABLE_INT = 100
 
-    # === Field-specific transformations ===
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
         corrected_key = next((k for k in actual_keys if k.lower() == key.lower()), key)
@@ -431,15 +437,11 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
             continue
 
-        # === Carpet Cleaning (Single Select) — "Yes", "No", or "" ===
+        # === Field Normalization ===
         if corrected_key == "carpet_cleaning":
             val = str(value).strip().capitalize()
-            if val in {"Yes", "No"}:
-                value = val
-            else:
-                value = ""
+            value = val if val in {"Yes", "No"} else ""
 
-        # === Furnished (Single Select) — "Furnished" or "Unfurnished" ===
         elif corrected_key == "furnished":
             val = str(value).strip().lower()
             if "unfurnished" in val:
@@ -449,22 +451,19 @@ def update_quote_record(record_id: str, fields: dict):
             else:
                 value = ""
 
-        # === Integer Casting ===
         elif corrected_key in INTEGER_FIELDS:
             try:
                 value = int(float(value))
                 if value > MAX_REASONABLE_INT:
-                    logger.warning(f"⚠️ Clamping large int value for {corrected_key}: {value}")
+                    logger.warning(f"⚠️ Clamping large int for {corrected_key}: {value}")
                     value = MAX_REASONABLE_INT
             except:
-                logger.warning(f"⚠️ Failed to convert {corrected_key} to int — defaulting to 0")
+                logger.warning(f"⚠️ Invalid int value for {corrected_key}, defaulting to 0")
                 value = 0
 
-        # === Boolean Casting ===
         elif corrected_key in BOOLEAN_FIELDS:
             value = value if isinstance(value, bool) else str(value).strip().lower() in TRUE_VALUES
 
-        # === Float-safe fields ===
         elif corrected_key in {
             "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
             "estimated_time_mins", "discount_applied", "mandurah_surcharge",
@@ -475,79 +474,77 @@ def update_quote_record(record_id: str, fields: dict):
             except:
                 value = 0.0
 
-        # === Special Requests ===
         elif corrected_key == "special_requests":
             if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                 value = ""
             else:
                 value = str(value).strip()
 
-        # === Extra Hours Requested ===
         elif corrected_key == "extra_hours_requested":
             try:
                 value = float(value) if value not in [None, ""] else 0.0
             except:
                 value = 0.0
 
-        # === General Fallback (String Cleanup) ===
         else:
             value = "" if value is None else str(value).strip()
 
         normalized_fields[corrected_key] = value
 
-    # === Always include logs if present ===
-    for log_field in ["message_log", "debug_log"]:
+    # === Add debug_log and message_log if passed ===
+    for log_field in ["debug_log", "message_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
 
-    # === Flush debug log and inject ===
+    # === Flush and attach debug log ===
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
+        log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(debug_log)} chars flushed to Airtable")
 
     if not normalized_fields:
         logger.info(f"⏩ No valid fields to update for record {record_id}")
-        log_debug_event(record_id, "BACKEND", "No Valid Fields", "Nothing passed validation for update.")
+        log_debug_event(record_id, "BACKEND", "Update Skipped", "No valid fields to apply.")
         return []
 
-    validated_fields = {
-        key: val for key, val in normalized_fields.items()
-        if key in actual_keys
-    }
-
-    if debug_log and "debug_log" not in validated_fields:
-        log_debug_event(record_id, "BACKEND", "Debug Log Dropped", "debug_log flushed but not matched in schema")
+    # === Filter to actual Airtable schema fields ===
+    validated_fields = {k: v for k, v in normalized_fields.items() if k in actual_keys}
+    if not validated_fields:
+        log_debug_event(record_id, "BACKEND", "Validation Failed", "No matching fields for schema.")
+        return []
 
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(validated_fields, indent=2)}")
 
+    # === Primary bulk update ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": validated_fields})
         if res.ok:
             logger.info("✅ Airtable bulk update successful.")
-            log_debug_event(record_id, "BACKEND", "Record Updated (Bulk)", f"Fields updated: {list(validated_fields.keys())}")
+            log_debug_event(record_id, "BACKEND", "Record Updated (Bulk)", f"Fields: {list(validated_fields.keys())}")
             return list(validated_fields.keys())
-        logger.error(f"❌ Airtable bulk update failed with status {res.status_code}")
+        logger.error(f"❌ Airtable bulk update failed ({res.status_code})")
         try:
-            logger.error(f"🧾 Airtable error response: {res.json()}")
+            logger.error(f"🧾 Airtable Error: {res.json()}")
         except:
-            logger.error("🧾 Airtable error response: (not JSON)")
+            logger.error("🧾 Airtable Error: (non-JSON)")
     except Exception as e:
-        logger.error(f"❌ Airtable bulk update exception: {e}")
-        log_debug_event(record_id, "BACKEND", "Airtable Bulk Error", str(e))
+        logger.error(f"❌ Exception in Airtable bulk update: {e}")
+        log_debug_event(record_id, "BACKEND", "Bulk Update Exception", str(e))
 
+    # === Fallback per-field update ===
     successful = []
     for key, value in validated_fields.items():
         try:
             res = requests.patch(url, headers=headers, json={"fields": {key: value}})
             if res.ok:
-                logger.info(f"✅ Field '{key}' updated successfully.")
+                logger.info(f"✅ Field '{key}' updated individually.")
                 successful.append(key)
             else:
-                logger.error(f"❌ Field '{key}' failed to update.")
+                logger.error(f"❌ Field '{key}' update failed.")
         except Exception as e:
-            logger.error(f"❌ Exception on field '{key}': {e}")
-            log_debug_event(record_id, "BACKEND", "Single Field Update Failed", f"{key}: {e}")
+            logger.error(f"❌ Exception on '{key}': {e}")
+            log_debug_event(record_id, "BACKEND", "Fallback Field Update Error", f"{key}: {e}")
 
     if successful:
         log_debug_event(record_id, "BACKEND", "Record Updated (Fallback)", f"Fields updated: {successful}")
@@ -976,8 +973,8 @@ def send_gpt_error_email(error_msg: str):
 def append_message_log(record_id: str, message: str, sender: str):
     """
     Appends a new message to the 'message_log' field in Airtable.
-    Handles '__init__' differently and truncates if over MAX_LOG_LENGTH.
-    Ensures ordering and full GPT message preservation.
+    Includes timestamp, role, and preserves full order.
+    Flushes debug_log after append to avoid loss.
     """
     if not record_id:
         logger.error("❌ Cannot append message_log — missing record ID")
@@ -990,10 +987,12 @@ def append_message_log(record_id: str, message: str, sender: str):
         return
 
     sender_clean = str(sender or "user").strip().upper()
+    timestamp = datetime.utcnow().isoformat()
+
     if sender_clean == "USER" and message.lower() == "__init__":
-        new_entry = "SYSTEM_TRIGGER: Brendan started a new quote"
+        new_entry = f"[{timestamp}] SYSTEM_TRIGGER: Brendan started a new quote"
     else:
-        new_entry = f"{sender_clean}: {message}"
+        new_entry = f"[{timestamp}] {sender_clean}: {message}"
 
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
     headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
@@ -1102,6 +1101,7 @@ async def handle_chat_init(session_id: str):
 router = APIRouter()
 
 @router.post("/filter-response")
+
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
@@ -1110,6 +1110,8 @@ async def filter_response_entry(request: Request):
 
         if not session_id:
             raise HTTPException(status_code=400, detail="Session ID is required.")
+
+        log_debug_event(None, "BACKEND", "Incoming Message", f"Session: {session_id}, Message: {message}")
 
         # === Init Trigger (Bypass GPT and use static greeting) ===
         if message.lower() == "__init__":
@@ -1180,6 +1182,11 @@ async def filter_response_entry(request: Request):
         updated_fields = fields.copy()
         updated_fields.update(parsed)
 
+        # === Ensure Essential Fields Stay Intact ===
+        for required in ["bedrooms_v2", "bathrooms_v2", "source"]:
+            if required not in parsed and required in fields:
+                parsed[required] = fields[required]
+
         # === Calculate Quote If Stage Reached ===
         if parsed.get("quote_stage") == "Quote Calculated" and not any(w in message_lower for w in PDF_KEYWORDS):
             try:
@@ -1193,14 +1200,6 @@ async def filter_response_entry(request: Request):
         # === Update Airtable Fields ===
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
-
-        # === Flush Debug Log ===
-        try:
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
-        except Exception as e:
-            log_debug_event(record_id, "BACKEND", "Final Flush Failed", str(e))
 
         # === Final Response ===
         next_actions = generate_next_actions(parsed.get("quote_stage", quote_stage))
