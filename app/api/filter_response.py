@@ -767,8 +767,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "Do NOT repeat this greeting. Never say 'Hi', 'Hello', 'Hey', or 'G’day' again.\n"
             "Start by gently asking the customer what name they’d like the quote to be under — e.g., 'Is there a first name I can pop on the quote?'.\n"
             "Then ask for suburb, bedrooms, bathrooms, and furnished/unfurnished.\n"
-            "IMPORTANT: Always reply in JSON with two fields: 'properties' and 'response'.\n"
-            "Example:\n```json\n{\n  \"properties\": [\n    {\"property\": \"bedrooms_v2\", \"value\": 3},\n    {\"property\": \"furnished\", \"value\": true}\n  ],\n  \"response\": \"Thanks! And is the place furnished or empty?\"\n}\n```"
+            "IMPORTANT: Always reply in JSON with two fields: 'properties' and 'response'."
         )
     }]
     for line in prepared_log.split("\n"):
@@ -829,12 +828,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     if not isinstance(parsed, dict):
         log_debug_event(record_id, "GPT", "Invalid Parse", f"Type: {type(parsed)} | Value: {str(parsed)[:100]}")
-        fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
+        reply = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
-        return [], fallback
+        return [], reply
 
+    # === Validate and Normalize Properties ===
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
@@ -848,9 +848,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply or "Just checking — how many bedrooms and bathrooms are we quoting for?"
 
-    safe_props = [p for p in raw_props if isinstance(p, dict) and "property" in p and "value" in p]
+    # Validate items inside the list
+    safe_props = []
+    for p in raw_props:
+        if isinstance(p, dict) and "property" in p and "value" in p:
+            safe_props.append(p)
+
     if not safe_props:
-        log_debug_event(record_id, "GPT", "Empty Properties", "GPT returned no properties. Using response anyway.")
+        log_debug_event(record_id, "GPT", "Empty Properties", "GPT returned no valid properties. Using response anyway.")
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
@@ -860,7 +865,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
 
-    prop_map = {p["property"]: p["value"] for p in props}
+    prop_map = {}
+    try:
+        prop_map = {p["property"]: p["value"] for p in props}
+    except Exception as e:
+        log_debug_event(record_id, "GPT", "Prop Map Failed", f"Error: {e}")
+        return [], reply or "Just checking — how many bedrooms and bathrooms are we quoting for?"
+
     full_name = prop_map.get("customer_name", "").strip()
     if full_name:
         first_name = full_name.split(" ")[0]
@@ -879,21 +890,22 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Chat Banned"}], final_msg
         else:
-            reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
             log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
+            reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
             flushed = flush_debug_log(record_id)
             if flushed:
                 update_quote_record(record_id, {"debug_log": flushed})
             return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
 
+    # Patch boolean fields
     all_fields = existing.copy()
     all_fields.update(prop_map)
-
     for field in BOOLEAN_FIELDS:
         if field in VALID_AIRTABLE_FIELDS and field not in all_fields:
             all_fields[field] = False
             log_debug_event(record_id, "BACKEND", "Patched Missing Checkbox", f"{field} = False")
 
+    # Skip blank select fields
     props = [
         p for p in props
         if not (
