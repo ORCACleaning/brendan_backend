@@ -1,10 +1,6 @@
 import os
-import uuid
-import base64
 import requests
 from dotenv import load_dotenv
-
-from app.services.pdf_generator import generate_quote_pdf
 from app.utils.logging_utils import log_debug_event
 
 # === Load Environment Variables ===
@@ -33,57 +29,33 @@ def get_ms_access_token() -> str:
         raise ValueError("❌ MS Graph token retrieval failed.")
     return token
 
-# === Send Email Without Attachment ===
-def send_email_outlook(to_email: str, subject: str, body_html: str):
-    access_token = get_ms_access_token()
-    url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
-
-    payload = {
-        "message": {
-            "subject": subject,
-            "body": {"contentType": "HTML", "content": body_html},
-            "toRecipients": [{"emailAddress": {"address": to_email}}],
-        }
-    }
-
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-
-    res = requests.post(url, json=payload, headers=headers)
-    if res.status_code == 202:
-        print(f"✅ Email sent to {to_email}")
-    else:
-        print(f"❌ Failed to send email ({res.status_code}): {res.text}")
-
-# === Send PDF Quote Email ===
-def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id: str):
+# === Send Email with Public Link to PDF ===
+def send_quote_email(to_email: str, customer_name: str, pdf_url: str, quote_id: str):
     """
-    Send the quote email with attached PDF via Microsoft Graph API.
+    Sends a quote email with a public link to the Render-hosted PDF quote (not as an attachment).
     """
     access_token = get_ms_access_token()
     url = f"https://graph.microsoft.com/v1.0/users/{SENDER_EMAIL}/sendMail"
 
-    subject = f"Your Vacate Cleaning Quote from Orca Cleaning ({quote_id})"
+    subject = f"Your Orca Cleaning Vacate Quote ({quote_id})"
     booking_url = f"https://orcacleaning.com.au/schedule?quote_id={quote_id}"
+    name_line = f"Hi {customer_name}," if customer_name else "Hi there,"
 
     body_html = f"""\
-<p>Hi {customer_name or 'there'},</p>
+<p>{name_line}</p>
 
 <p>Thanks for requesting a quote with Orca Cleaning!</p>
-<p>We’ve attached your vacate cleaning quote as a PDF for your records.</p>
+<p>Your vacate clean quote is ready. You can view or download it here:</p>
 
-<p>You can book your clean directly using the link below:</p>
-<p><a href="{booking_url}" style="font-weight: bold; color: #007BFF;">Click here to book online</a></p>
+<p><a href="{pdf_url}" style="font-weight: bold; color: #007BFF;">View Your PDF Quote</a></p>
 
-<p>If you have any questions or need to make changes, just reply to this email — we’re here to help.</p>
+<p>When you're ready to book, just use this link:</p>
+<p><a href="{booking_url}" style="font-weight: bold; color: #28a745;">Book Your Clean</a></p>
+
+<p>If you need to make changes or have any questions, just reply to this email — we’re always happy to help.</p>
 
 <p>Cheers,<br>Brendan<br>Orca Cleaning Team</p>
 """
-
-    with open(pdf_path, "rb") as f:
-        pdf_data = base64.b64encode(f.read()).decode("utf-8")
 
     payload = {
         "message": {
@@ -94,13 +66,6 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
             },
             "toRecipients": [
                 {"emailAddress": {"address": to_email}}
-            ],
-            "attachments": [
-                {
-                    "@odata.type": "#microsoft.graph.fileAttachment",
-                    "name": os.path.basename(pdf_path),
-                    "contentBytes": pdf_data,
-                }
             ]
         }
     }
@@ -111,7 +76,7 @@ def send_quote_email(to_email: str, customer_name: str, pdf_path: str, quote_id:
     }
 
     try:
-        log_debug_event(quote_id, "BACKEND", "Email Sending", f"Sending quote email to {to_email}")
+        log_debug_event(quote_id, "BACKEND", "Email Sending", f"Sending public PDF link to {to_email}")
         res = requests.post(url, json=payload, headers=headers)
 
         if res.status_code == 202:
