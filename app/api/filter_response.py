@@ -814,7 +814,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             start, end = raw.find("{"), raw.rfind("}")
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
-            return json.loads(raw[start:end + 1])
+            parsed = json.loads(raw[start:end + 1])
+            if not isinstance(parsed.get("properties", []), list):
+                raise TypeError("GPT 'properties' field is not a list.")
+            return parsed
         except Exception as e:
             log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt})", str(e))
             return None
@@ -893,6 +896,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 
 # === GPT Error Email Alert ===
