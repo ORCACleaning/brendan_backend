@@ -698,13 +698,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "You are now taking over from that point.\n"
                 "- DO NOT repeat this greeting.\n"
                 "- DO NOT start with phrases like 'no worries' — the user has not spoken yet.\n"
-                "- Begin by asking what name they’d like you to use in the conversation. "
-                "This isn’t for records — it’s just to build trust and keep things relaxed.\n"
-                "- If they prefer to stay anonymous, continue naturally without using a name.\n"
-                "- If they give both first and last name, only use the first name conversationally.\n"
-                "- After that, ask for suburb, number of bedrooms, number of bathrooms, and whether the property is furnished.\n"
-                "- DO NOT ask about carpet steam cleaning or any breakdowns yet.\n"
-                "- Keep your tone professional, relaxed, and warm. You are one of the best quoting agents in Australia."
+                "- Start by asking what name they’d like you to use — just for the conversation. Let them know it's okay if they’d rather not share one.\n"
+                "- If they provide both first and last name, only use the first name conversationally.\n"
+                "- After that, gently ask for the suburb, number of bedrooms, bathrooms, and whether the property is furnished.\n"
+                "- DO NOT ask about carpet steam cleaning or breakdowns at this point.\n"
+                "- Maintain a natural, friendly tone. Don’t sound scripted or robotic — you are a trusted quoting expert, not a form."
             )
         })
 
@@ -716,7 +714,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     messages.append({"role": "user", "content": message.strip()})
 
-    # === Call GPT ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -761,7 +758,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         props.append({"property": "customer_name", "value": first_name})
         log_debug_event(record_id, "GPT", "Temp Name Set", f"First name stored for chat: {first_name}")
 
-    # === Carpet Steam Cleaning Logic ===
+    # === Carpet Cleaning Logic ===
     carpet_fields = [
         "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
         "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
