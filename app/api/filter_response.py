@@ -704,9 +704,7 @@ def generate_next_actions(quote_stage: str):
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
-    from app.services.quote_logic import should_calculate_quote
-    from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS
-
+    
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
