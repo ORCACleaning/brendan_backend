@@ -1089,6 +1089,8 @@ async def handle_chat_init(session_id: str):
 
 # === Brendan API Router ===
 
+router = APIRouter()
+
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
