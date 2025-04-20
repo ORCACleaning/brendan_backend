@@ -552,7 +552,8 @@ def update_quote_record(record_id: str, fields: dict):
 def get_inline_quote_summary(data: dict) -> str:
     """
     Generates a clear, backend-driven quote summary for Brendan to show in chat.
-    Includes total price, estimated time, cleaner count, discount breakdown, selected services, and optional notes.
+    Includes total price, estimated time, cleaner count, discount breakdown, selected services, bedrooms/bathrooms,
+    and optional notes.
     """
 
     price = float(data.get("total_price", 0) or 0)
@@ -563,13 +564,17 @@ def get_inline_quote_summary(data: dict) -> str:
     is_property_manager = str(data.get("is_property_manager", "") or "").lower() in TRUE_VALUES
     carpet_cleaning = str(data.get("carpet_cleaning", "") or "").strip()
 
+    bedrooms = data.get("bedrooms_v2", 0)
+    bathrooms = data.get("bathrooms_v2", 0)
+    furnished = str(data.get("furnished_v2", "") or "").capitalize()
+
     # === Time & Cleaners Calculation ===
     hours = time_est_mins / 60
-    cleaners = max(1, (time_est_mins + 299) // 300)  # cap at 5 hours per cleaner
+    cleaners = max(1, (time_est_mins + 299) // 300)
     hours_per_cleaner = hours / cleaners
     hours_display = int(hours_per_cleaner) if hours_per_cleaner.is_integer() else round(hours_per_cleaner + 0.49)
 
-    # === Dynamic Opening Line ===
+    # === Opening Line ===
     if price >= 800:
         opening = "Here’s what we’re looking at for this job:\n\n"
     elif price <= 300:
@@ -589,6 +594,16 @@ def get_inline_quote_summary(data: dict) -> str:
             summary += f"🏷️ **Discount Applied:** ${discount:.2f} — 10% Vacate Clean Special + 5% Property Manager Bonus\n"
         else:
             summary += f"🏷️ **Discount Applied:** ${discount:.2f} — 10% Vacate Clean Special\n"
+
+    # === Property Details ===
+    if bedrooms or bathrooms or furnished:
+        summary += "\n**Property Details:**\n"
+        if bedrooms:
+            summary += f"- Bedrooms: {bedrooms}\n"
+        if bathrooms:
+            summary += f"- Bathrooms: {bathrooms}\n"
+        if furnished:
+            summary += f"- Furnished: {furnished}\n"
 
     # === Selected Extras ===
     included = []
@@ -625,7 +640,7 @@ def get_inline_quote_summary(data: dict) -> str:
     if note:
         summary += f"\n\n📜 **Note:** {note}"
 
-    # === Final Instructions ===
+    # === Final Prompt ===
     summary += (
         "\n\nThis quote is valid for **7 days**.\n"
         "Would you like me to send it to your email as a PDF, or would you like to make any changes?"
