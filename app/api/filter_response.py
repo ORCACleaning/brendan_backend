@@ -833,6 +833,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
+    if isinstance(raw_props, str):
+        log_debug_event(record_id, "GPT", "Invalid Property Type", f"Got str: '{raw_props[:50]}'")
+        raw_props = []
+
     if isinstance(raw_props, dict):
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
@@ -918,6 +922,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 # === GPT Error Email Alert ===
 
