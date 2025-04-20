@@ -738,20 +738,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
-    existing, current_stage = {}, ""
-    if record_id and not skip_log_lookup:
-        try:
-            url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/Vacate%20Quotes/{record_id}"
-            headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
-            res = requests.get(url, headers=headers)
-            res.raise_for_status()
-            existing = res.json().get("fields", {})
-            current_stage = existing.get("quote_stage", "")
-            log_debug_event(record_id, "BACKEND", "Fetched Airtable Record", f"Stage: {current_stage}")
-        except Exception as e:
-            logger.warning(f"⚠️ Airtable fetch failed: {e}")
-            log_debug_event(record_id, "BACKEND", "Airtable Fetch Failed", str(e))
-
+    # === Build GPT message history ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
         "role": "system",
@@ -786,16 +773,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             )
         })
         log_debug_event(record_id, "GPT", "Init Trigger Detected", "Suppressing repeat greeting message.")
-    elif current_stage == "Quote Calculated":
-        messages.append({
-            "role": "system",
-            "content": "The quote has already been calculated. DO NOT regenerate unless the customer changes details."
-        })
-        log_debug_event(record_id, "GPT", "Quote Already Calculated", "GPT instructed not to regenerate.")
 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
+    # === GPT call helper ===
     def call_gpt_and_parse(msgs, attempt=1):
         try:
             res = client.chat.completions.create(
@@ -810,20 +792,19 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             if start == -1 or end == -1:
                 raise ValueError("JSON block not found.")
             parsed = json.loads(raw[start:end + 1])
-            if not isinstance(parsed, dict):
-                raise TypeError("Parsed block is not a dict")
-            return parsed
+            return parsed if isinstance(parsed, dict) else None
         except Exception as e:
             log_debug_event(record_id, "GPT", f"Parse Failed (Attempt {attempt})", str(e))
             return None
 
+    # === Call GPT ===
     parsed = call_gpt_and_parse(messages, 1)
     if not isinstance(parsed, dict):
         messages.insert(1, {"role": "system", "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."})
         parsed = call_gpt_and_parse(messages, 2)
 
     if not isinstance(parsed, dict):
-        log_debug_event(record_id, "GPT", "Invalid Parse", f"Type: {type(parsed)} | Value: {str(parsed)[:100]}")
+        log_debug_event(record_id, "GPT", "Invalid Parse", f"Final fallback failed — Type: {type(parsed)}")
         reply = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
         flushed = flush_debug_log(record_id)
         if flushed:
@@ -833,20 +814,23 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
+    # === Normalize malformed props ===
     if isinstance(raw_props, str):
-        log_debug_event(record_id, "GPT", "Invalid Property Type", f"Got str: '{raw_props[:50]}'")
+        log_debug_event(record_id, "GPT", "Malformed Property String", f"Got str: {raw_props[:50]}")
         raw_props = []
 
     if isinstance(raw_props, dict):
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
-    elif not isinstance(raw_props, list):
-        log_debug_event(record_id, "GPT", "Malformed Props", f"Expected list or dict, got {type(raw_props)} — Value: {str(raw_props)[:100]}")
+
+    if not isinstance(raw_props, list):
+        log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)} | Value: {str(raw_props)[:100]}")
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
-        return [], reply or "Just checking — how many bedrooms and bathrooms are we quoting for?"
+        return [], reply
 
+    # === Sanitize final props ===
     safe_props = []
     for p in raw_props:
         if isinstance(p, dict) and "property" in p and "value" in p:
@@ -855,71 +839,16 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
 
     if not safe_props:
-        log_debug_event(record_id, "GPT", "Empty Properties", "GPT returned no valid properties. Using response anyway.")
+        log_debug_event(record_id, "GPT", "Empty Properties", "No valid properties returned.")
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
+    # Inject source = Brendan
     props = [p for p in safe_props if p["property"] != "source"]
     props.append({"property": "source", "value": "Brendan"})
-    log_debug_event(record_id, "GPT", "Source Set", "source = Brendan injected")
-
-    try:
-        prop_map = {p["property"]: p["value"] for p in props if isinstance(p, dict) and "property" in p and "value" in p}
-    except Exception as e:
-        log_debug_event(record_id, "GPT", "Prop Map Error", str(e))
-        return [], reply
-
-    full_name = prop_map.get("customer_name", "").strip()
-    if full_name:
-        first_name = full_name.split(" ")[0]
-        props = [p for p in props if p["property"] != "customer_name"]
-        props.append({"property": "customer_name", "value": first_name})
-        log_debug_event(record_id, "GPT", "Temp Name Stored", f"First name used for chat: {first_name}")
-
-    abuse_detected = any(word in message.lower() for word in ["fuck", "shit", "cunt", "dickhead", "wanker"])
-    if abuse_detected:
-        quote_id = quote_id or existing.get("quote_id", "N/A")
-        if current_stage == "Abuse Warning":
-            final_msg = f"Unfortunately we have to end the quote due to language. You're welcome to call our office if you'd like to continue. Quote Number: {quote_id}."
-            log_debug_event(record_id, "BACKEND", "Chat Banned", f"Repeated abuse. Quote ID: {quote_id}")
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
-            return [{"property": "quote_stage", "value": "Chat Banned"}], final_msg
-        else:
-            log_debug_event(record_id, "BACKEND", "Abuse Warning", "First abuse detected.")
-            reply = "Just a quick heads-up — we can’t continue the quote if abusive language is used. Let’s keep it respectful!\n\n" + reply
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
-            return [{"property": "quote_stage", "value": "Abuse Warning"}], reply.strip()
-
-    all_fields = existing.copy()
-    all_fields.update(prop_map)
-    for field in BOOLEAN_FIELDS:
-        if field in VALID_AIRTABLE_FIELDS and field not in all_fields:
-            all_fields[field] = False
-            log_debug_event(record_id, "BACKEND", "Patched Missing Checkbox", f"{field} = False")
-
-    props = [
-        p for p in props
-        if not (
-            p["property"] in FIELD_MAP and
-            FIELD_MAP[p["property"]].get("type") == "single select" and
-            str(p["value"]).strip() == ""
-        )
-    ]
-
-    if should_calculate_quote(all_fields):
-        props.append({"property": "quote_stage", "value": "Quote Calculated"})
-        log_debug_event(record_id, "BACKEND", "Stage Forced", "Backend promoted stage to Quote Calculated")
-
-    log_debug_event(record_id, "GPT", "Properties Parsed", f"Props: {len(props)} | First Line: {reply[:100]}")
-    flushed = flush_debug_log(record_id)
-    if flushed:
-        update_quote_record(record_id, {"debug_log": flushed})
+    log_debug_event(record_id, "GPT", "Source Injected", "source = Brendan")
 
     return props, reply
 
