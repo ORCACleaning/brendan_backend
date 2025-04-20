@@ -1,4 +1,3 @@
-extract
 # === Built-in Python Modules ===
 import json
 import uuid
