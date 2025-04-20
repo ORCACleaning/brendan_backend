@@ -655,7 +655,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
         reply = (
-            "Hey there! Just let me know what suburb we’re quoting for, how many bedrooms and bathrooms there are, "
+            "Just let me know what suburb we’re quoting for, how many bedrooms and bathrooms there are, "
             "and whether the property is furnished or unfurnished."
         )
         if record_id:
@@ -697,14 +697,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 "This quote is fully anonymous and no booking is required — I’m just here to help.\n\nView our Privacy Policy.\"\n\n"
                 "You are now taking over from that point.\n"
                 "- DO NOT repeat this greeting.\n"
-                "- DO NOT start with phrases like 'no worries'. The user has not spoken yet.\n"
-                "- Start with something casual but warm — ask what name they’d like to go by. "
-                "This isn’t for records, just to keep things friendly.\n"
-                "- If they prefer not to share a name, that’s fine — continue naturally without it.\n"
-                "- If they provide both first and last name, just use the first name in the chat.\n"
-                "- After that, ask for suburb, bedrooms, bathrooms, and whether it’s furnished.\n"
-                "- DO NOT ask about carpet cleaning or breakdown yet.\n"
-                "- Make it feel like a friendly one-on-one convo — avoid sounding scripted or like a form."
+                "- DO NOT start with phrases like 'no worries' — the user has not spoken yet.\n"
+                "- Begin by asking what name they’d like you to use in the conversation. "
+                "This isn’t for records — it’s just to build trust and keep things relaxed.\n"
+                "- If they prefer to stay anonymous, continue naturally without using a name.\n"
+                "- If they give both first and last name, only use the first name conversationally.\n"
+                "- After that, ask for suburb, number of bedrooms, number of bathrooms, and whether the property is furnished.\n"
+                "- DO NOT ask about carpet steam cleaning or any breakdowns yet.\n"
+                "- Keep your tone professional, relaxed, and warm. You are one of the best quoting agents in Australia."
             )
         })
 
@@ -716,6 +716,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     messages.append({"role": "user", "content": message.strip()})
 
+    # === Call GPT ===
     def call_gpt(msgs):
         try:
             res = client.chat.completions.create(
@@ -752,13 +753,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     reply = parsed.get("response", "").strip()
     prop_map = {p["property"]: p["value"] for p in props if "property" in p}
 
-    # === Name Handling Logic ===
+    # === Name Handling ===
     name = prop_map.get("customer_name", "").strip()
     if name:
         first_name = name.split(" ")[0]
         props = [p for p in props if p["property"] != "customer_name"]
         props.append({"property": "customer_name", "value": first_name})
-        log_debug_event(record_id, "GPT", "Temp Name Set", f"First name stored for conversation: {first_name}")
+        log_debug_event(record_id, "GPT", "Temp Name Set", f"First name stored for chat: {first_name}")
 
     # === Carpet Steam Cleaning Logic ===
     carpet_fields = [
@@ -776,18 +777,15 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     if current_stage in {"", "Gathering Info"} and not base_ready:
         if carpet_cleaning or any(f in prop_map for f in carpet_fields):
-            log_debug_event(record_id, "GPT", "Suppressed Carpet Fields", "Delayed carpet logic until base quote info is complete.")
+            log_debug_event(record_id, "GPT", "Suppressed Carpet Fields", "Delaying carpet questions until base info is complete.")
             props = [p for p in props if p["property"] not in {"carpet_cleaning", *carpet_fields}]
 
     if base_ready and not carpet_cleaning:
-        log_debug_event(record_id, "GPT", "Carpet Prompt", "Prompting for carpet steam cleaning decision.")
-        return props, "Do you need carpet steam cleaning as part of your vacate clean?"
+        log_debug_event(record_id, "GPT", "Carpet Prompt", "Prompting for carpet cleaning decision.")
+        return props, "Would you like to include carpet steam cleaning in this vacate clean?"
 
     if carpet_cleaning == "Yes":
-        missing = [
-            f for f in carpet_fields
-            if prop_map.get(f) is None and existing.get(f) is None
-        ]
+        missing = [f for f in carpet_fields if prop_map.get(f) is None and existing.get(f) is None]
         if missing:
             msg = (
                 "Thanks! Just to finish off the carpet section — could you tell me roughly how many of these have carpet?\n\n"
