@@ -245,7 +245,7 @@ ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
 def create_new_quote(session_id: str, force_new: bool = False):
     """
     Creates a new Airtable quote record for Brendan.
-    Returns: (quote_id, record_id, "Gathering Info", fields)
+    Returns: (quote_id, record_id, "Gathering Info", fields) 
     """
     try:
         if not session_id:
@@ -315,7 +315,17 @@ def create_new_quote(session_id: str, force_new: bool = False):
         # Adding delay to allow Airtable to process and index the newly created record
         time.sleep(5)  # Wait for Airtable to process the quote and make it available for session lookup
 
-        # Return relevant information after quote creation
+        # Ensure the session is accessible after creation
+        log_debug_event(record_id, "BACKEND", "Session Lookup Start", f"Attempting to fetch session_id={session_id} post-creation")
+
+        # Check if the session exists immediately after creation
+        session_check = get_quote_by_session(session_id)
+        if not session_check:
+            error_msg = f"Session not found after quote creation for session_id={session_id}"
+            log_debug_event(record_id, "BACKEND", "Session Not Found After Creation", error_msg)
+            raise HTTPException(status_code=404, detail=error_msg)
+
+        # Return relevant information after quote creation and successful session lookup
         return quote_id, record_id, "Gathering Info", returned_fields
 
     except requests.exceptions.HTTPError as e:
@@ -369,9 +379,9 @@ def get_quote_by_session(session_id: str):
             "maxRecords": 1
         }
 
-        # Retry logic: Try up to 3 times, with a delay between each attempt
-        max_retries = 3
-        retry_delay = 5  # Delay in seconds between retries
+        # Retry logic with exponential backoff
+        max_retries = 5
+        retry_delay = 2  # Start with 2 seconds for the first retry
 
         for attempt in range(max_retries):
             # Make the API request
@@ -384,8 +394,9 @@ def get_quote_by_session(session_id: str):
                 if not records:
                     log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt+1})", f"No Airtable record found for session_id={session_id}")
                     if attempt < max_retries - 1:
-                        log_debug_event(None, "BACKEND", "Retrying", f"Retrying after {retry_delay}s...")
-                        time.sleep(retry_delay)  # Wait before retrying
+                        delay = retry_delay * (2 ** attempt)  # Exponential backoff
+                        log_debug_event(None, "BACKEND", f"Retrying after {delay}s...")
+                        time.sleep(delay)  # Wait before retrying
                         continue
                     log_debug_event(None, "BACKEND", "Session Not Found After All Attempts", f"Session not found for session_id={session_id} after {max_retries} attempts.")
                     return None  # After all retries, return None
@@ -432,8 +443,9 @@ def get_quote_by_session(session_id: str):
                 logger.warning(f"⚠️ get_quote_by_session() HTTP request failed (Attempt {attempt+1}): {e}")
                 log_debug_event(None, "BACKEND", f"Session Lookup Error (Attempt {attempt+1})", f"HTTP request failed: {str(e)}")
                 if attempt < max_retries - 1:
-                    log_debug_event(None, "BACKEND", "Retrying", f"Retrying after {retry_delay}s...")
-                    time.sleep(retry_delay)  # Wait before retrying
+                    delay = retry_delay * (2 ** attempt)  # Exponential backoff
+                    log_debug_event(None, "BACKEND", f"Retrying after {delay}s...")
+                    time.sleep(delay)  # Wait before retrying
                     continue
                 log_debug_event(None, "BACKEND", "Session Not Found After All Attempts", f"Session not found for session_id={session_id} after {max_retries} attempts.")
                 return None  # After all retries, return None
