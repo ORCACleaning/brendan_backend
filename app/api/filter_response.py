@@ -842,9 +842,11 @@ def generate_next_actions(quote_stage: str, fields: dict):
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     logger.info(f"🟡 extract_properties_from_gpt4() called — record_id: {record_id}, message: {message}")
+    
     if record_id:
         log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(message={message[:100]})")
 
+    # If the message is "__init__", suppress GPT call
     if message.strip() == "__init__":
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
         return [{"property": "source", "value": "Brendan"}], "Just a moment while I get us started..."
@@ -916,8 +918,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             raw = res.choices[0].message.content.strip()
             log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
             log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
+
+            # Check if raw response is malformed before attempting parsing
+            if not raw:
+                log_debug_event(record_id, "GPT", f"Empty Response (Attempt {attempt})", "GPT response is empty.")
+                return None
+
             start, end = raw.find("{"), raw.rfind("}")
-            parsed = json.loads(raw[start:end + 1])
+            parsed = json.loads(raw[start:end + 1])  # Safe parsing
             return parsed
         except Exception as e:
             log_debug_event(record_id, "GPT", f"Parse Failed Attempt {attempt}", str(e))
@@ -1007,7 +1015,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             ], f"Thanks {guessed_name}! Let’s keep going."
 
     return safe_props, reply
-
 
 
 # === GPT Error Email Alert ===
