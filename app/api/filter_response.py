@@ -708,17 +708,23 @@ def get_inline_quote_summary(data: dict) -> str:
 
 # === Generate Next Actions After Quote ===
 
+from app.utils.logging_utils import log_debug_event
+
 def generate_next_actions(quote_stage: str):
     """
     Generates next steps based on the current quote stage.
 
     - After 'Quote Calculated': Offer PDF, email, edit, call office
-    - After 'Gathering Personal Info': Ask for name/email/phone (skip if already gathered)
-    - After 'Personal Info Received': Offer download or booking link
+    - After 'Gathering Personal Info': Ask for name/email/phone
+    - After 'Personal Info Received': Offer download and booking link
+    - Otherwise: Prompt user to continue quote
     """
 
-    if quote_stage == "Quote Calculated":
-        return [
+    stage = str(quote_stage or "").strip()
+    log_debug_event(None, "BACKEND", "generate_next_actions()", f"Generating actions for stage: {stage}")
+
+    if stage == "Quote Calculated":
+        actions = [
             {
                 "action": "quote_ready",
                 "response": (
@@ -736,9 +742,11 @@ def generate_next_actions(quote_stage: str):
                 ]
             }
         ]
+        log_debug_event(None, "BACKEND", "Next Actions Generated", "Quote Calculated → 4 options provided")
+        return actions
 
-    elif quote_stage == "Gathering Personal Info":
-        return [
+    elif stage == "Gathering Personal Info":
+        actions = [
             {
                 "action": "collect_info",
                 "response": (
@@ -748,9 +756,11 @@ def generate_next_actions(quote_stage: str):
                 "options": []
             }
         ]
+        log_debug_event(None, "BACKEND", "Next Actions Generated", "Gathering Personal Info → Asking for contact details")
+        return actions
 
-    elif quote_stage == "Personal Info Received":
-        return [
+    elif stage == "Personal Info Received":
+        actions = [
             {
                 "action": "final_steps",
                 "response": (
@@ -766,16 +776,20 @@ def generate_next_actions(quote_stage: str):
                 ]
             }
         ]
+        log_debug_event(None, "BACKEND", "Next Actions Generated", "Personal Info Received → Final booking options provided")
+        return actions
 
     else:
-        # Fallback
-        return [
+        fallback = [
             {
                 "action": "awaiting_quote",
                 "response": "I’m still gathering details for your quote — let’s finish those first!",
                 "options": []
             }
         ]
+        log_debug_event(None, "BACKEND", "Next Actions Fallback", f"No match for stage: {stage} — prompting to continue")
+        return fallback
+
 
 # === GPT Extraction (Production-Grade) ===
 
@@ -1046,13 +1060,14 @@ def append_message_log(record_id: str, message: str, sender: str):
     message = str(message or "").strip()
     if not message:
         logger.info("⏩ Empty message — skipping append")
+        log_debug_event(record_id, "BACKEND", "Message Skipped", "Empty message not logged")
         return
 
     sender_clean = str(sender or "user").strip().upper()
     timestamp = datetime.utcnow().isoformat()
 
     if sender_clean == "USER" and message.lower() == "__init__":
-        new_entry = f"[{timestamp}] SYSTEM_TRIGGER: Brendan started a new quote"
+        new_entry = f"[{timestamp}] SYSTEM: SYSTEM_TRIGGER: Brendan started a new quote"
     else:
         new_entry = f"[{timestamp}] {sender_clean}: {message}"
 
@@ -1063,7 +1078,9 @@ def append_message_log(record_id: str, message: str, sender: str):
     try:
         res = requests.get(url, headers=headers)
         res.raise_for_status()
-        old_log = str(res.json().get("fields", {}).get("message_log", "")).strip()
+        airtable_data = res.json()
+        old_log = str(airtable_data.get("fields", {}).get("message_log", "")).strip()
+        log_debug_event(record_id, "BACKEND", "Loaded Old Log", f"Length: {len(old_log)}")
     except Exception as e:
         logger.warning(f"⚠️ Could not fetch current message_log: {e}")
         log_debug_event(record_id, "BACKEND", "Message Log Fetch Failed", str(e))
@@ -1075,11 +1092,13 @@ def append_message_log(record_id: str, message: str, sender: str):
     if len(combined_log) > MAX_LOG_LENGTH:
         combined_log = combined_log[-MAX_LOG_LENGTH:]
         was_truncated = True
+        log_debug_event(record_id, "BACKEND", "Log Truncated", f"Combined log exceeded {MAX_LOG_LENGTH} chars — truncated")
 
     # === Save Combined Log ===
     try:
         update_quote_record(record_id, {"message_log": combined_log})
         logger.info(f"✅ message_log updated for {record_id} (len={len(combined_log)})")
+        log_debug_event(record_id, "BACKEND", "Message Log Saved", f"New length: {len(combined_log)} | Truncated: {was_truncated}")
     except Exception as e:
         logger.error(f"❌ Failed to update message_log: {e}")
         log_debug_event(record_id, "BACKEND", "Message Log Update Failed", str(e))
@@ -1102,13 +1121,14 @@ def append_message_log(record_id: str, message: str, sender: str):
     # === Flush Debug Log ===
     try:
         flushed = flush_debug_log(record_id)
-        if flushed and record_id:
+        if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
-        elif flushed:
-            log_debug_event(None, "BACKEND", "Debug Log Lost", "Flushed debug log not saved (missing record_id)")
+            log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(flushed)} chars flushed to Airtable")
+        else:
+            log_debug_event(record_id, "BACKEND", "Debug Log Flush Skipped", "No pending debug log to flush")
     except Exception as e:
         logger.warning(f"⚠️ Failed to flush debug log: {e}")
-        log_debug_event(record_id or None, "BACKEND", "Debug Log Flush Error", str(e))
+        log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
 
 
 # === Handle Privacy Consent === 
