@@ -246,6 +246,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
     Returns: (quote_id, record_id, "Gathering Info", fields)
     """
     try:
+        # Generate a new quote ID
         quote_id = get_next_quote_id()
         url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{quote(TABLE_NAME)}"
         headers = {
@@ -253,7 +254,8 @@ def create_new_quote(session_id: str, force_new: bool = False):
             "Content-Type": "application/json"
         }
 
-        timestamp = datetime.utcnow().isoformat()  # ✅ keep for logs only — do not include in Airtable
+        # Prepare payload fields
+        timestamp = datetime.utcnow().isoformat()  # Keep for logs only — do not include in Airtable
         fields = {
             "session_id": session_id,
             "quote_id": quote_id,
@@ -267,10 +269,12 @@ def create_new_quote(session_id: str, force_new: bool = False):
         log_debug_event(None, "BACKEND", "Creating New Quote", f"Session: {session_id}, Quote ID: {quote_id}, Timestamp: {timestamp} (not sent)")
         log_debug_event(None, "BACKEND", "Injected Source Field", "source = Brendan")
 
+        # Make request to Airtable API to create the quote record
         payload = {"fields": fields}
         res = requests.post(url, headers=headers, json=payload)
-        res.raise_for_status()
+        res.raise_for_status()  # Raise an exception for HTTP errors
 
+        # Parse the response
         response = res.json()
         record_id = response.get("id", "")
         returned_fields = response.get("fields", {})
@@ -278,27 +282,38 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
         log_debug_event(record_id, "BACKEND", "New Quote Created", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
 
-        # Extra validation
+        # Extra validation to ensure that all required fields are present
         required = ["session_id", "quote_id", "quote_stage", "source"]
         for r in required:
             if r not in returned_fields:
                 log_debug_event(record_id, "BACKEND", "Missing Field After Creation", f"{r} is missing in returned_fields")
+                raise HTTPException(status_code=500, detail=f"Missing required field '{r}' in Airtable response.")
 
-        # Flush and store debug log
+        # Flush and store the debug log after quote creation
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
             log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(flushed)} chars flushed post-create")
 
+        # Return relevant information after quote creation
         return quote_id, record_id, "Gathering Info", returned_fields
 
     except requests.exceptions.HTTPError as e:
+        # Handle HTTP errors (Airtable API errors)
         error_msg = f"Airtable Error — Status Code: {res.status_code}, Response: {res.text}"
         logger.error(f"❌ Airtable quote creation failed: {error_msg}")
         log_debug_event(None, "BACKEND", "Quote Creation Failed", error_msg)
         raise HTTPException(status_code=500, detail="Quote creation failed — Airtable error.")
 
+    except KeyError as e:
+        # Handle missing keys in response
+        error_msg = f"Missing key in Airtable response: {str(e)}"
+        logger.error(f"❌ Missing key error during quote creation: {error_msg}")
+        log_debug_event(None, "BACKEND", "Quote Creation Failed", error_msg)
+        raise HTTPException(status_code=500, detail=f"Quote creation failed — missing key: {str(e)}")
+
     except Exception as e:
+        # Handle other unexpected errors
         logger.error(f"❌ Unexpected exception during quote creation: {e}")
         log_debug_event(None, "BACKEND", "Quote Creation Exception", str(e))
         raise HTTPException(status_code=500, detail="Quote creation failed — unexpected error.")
@@ -309,12 +324,14 @@ def create_new_quote(session_id: str, force_new: bool = False):
 def get_quote_by_session(session_id: str):
     """
     Looks up existing quote in Airtable by session_id.
-    Returns dict with quote_id, record_id, quote_stage, fields.
+    Returns a dict with quote_id, record_id, quote_stage, fields.
     Logs all paths for successful, partial, or failed lookups.
     Ensures customer_name is included in the fields.
     """
     try:
+        # Validate session_id
         if not session_id:
+            log_debug_event(None, "BACKEND", "Invalid Session", "Empty session_id passed to get_quote_by_session")
             raise ValueError("Empty session_id passed to get_quote_by_session")
 
         log_debug_event(None, "BACKEND", "Session Lookup Start", f"session_id={session_id}")
@@ -327,29 +344,42 @@ def get_quote_by_session(session_id: str):
             "maxRecords": 1
         }
 
+        # Make the API request
         res = requests.get(url, headers=headers, params=params)
         res.raise_for_status()
 
+        # Check if records are returned
         records = res.json().get("records", [])
         if not records:
-            log_debug_event(None, "BACKEND", "Session Not Found", f"No Airtable record found for {session_id}")
+            log_debug_event(None, "BACKEND", "Session Not Found", f"No Airtable record found for session_id={session_id}")
             return None
 
+        # Extract the first record
         record = records[0]
         fields = record.get("fields", {})
         record_id = record.get("id", "")
 
-        # Ensure customer_name is included in the fields response
+        # Ensure required fields are in the response
+        if not record_id or not fields:
+            log_debug_event(None, "BACKEND", "Session Found But Incomplete", f"Missing record_id or fields for session_id={session_id}")
+            return None
+
+        # Validate required fields in the fields response
+        required_fields = ["quote_id", "quote_stage", "customer_name"]
+        missing_fields = [field for field in required_fields if field not in fields]
+
+        if missing_fields:
+            log_debug_event(record_id, "BACKEND", "Missing Required Fields", f"Missing fields: {', '.join(missing_fields)} for session_id={session_id}")
+            return None
+
+        # If customer_name is present, clean it
         customer_name = fields.get("customer_name", "").strip()
         if customer_name:
             fields["customer_name"] = customer_name
 
+        # Return the result
         quote_id = fields.get("quote_id", "")
         quote_stage = fields.get("quote_stage", "Gathering Info")
-
-        if not record_id or not fields:
-            log_debug_event(None, "BACKEND", "Session Found But Incomplete", f"record_id or fields missing for {session_id}")
-            return None
 
         result = {
             "quote_id": quote_id,
@@ -361,7 +391,14 @@ def get_quote_by_session(session_id: str):
         log_debug_event(record_id, "BACKEND", "Session Found", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
         return result
 
+    except requests.exceptions.RequestException as e:
+        # Handle request errors
+        logger.warning(f"⚠️ get_quote_by_session() HTTP request failed: {e}")
+        log_debug_event(None, "BACKEND", "Session Lookup Error", f"HTTP request failed: {str(e)}")
+        return None
+
     except Exception as e:
+        # Handle other unexpected errors
         logger.warning(f"⚠️ get_quote_by_session() failed: {e}")
         log_debug_event(None, "BACKEND", "Session Lookup Error", str(e))
         return None
@@ -1111,9 +1148,35 @@ async def handle_privacy_consent(message: str, message_lower: str, record_id: st
     Handles privacy consent step before collecting personal info.
     Confirms the customer is happy to provide contact details.
     """
+    # Fetch current privacy consent status from the fields
+    quote_data = get_quote_by_session(session_id)
+    if not quote_data or "fields" not in quote_data:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    fields = quote_data["fields"]
+    privacy_acknowledged = fields.get("privacy_acknowledged", False)
+
+    # If privacy consent has already been acknowledged, skip the consent request
+    if privacy_acknowledged:
+        response = (
+            "Thanks for confirming earlier! Please provide your full name, email, and best contact number, "
+            "and I’ll send your quote straight through as a downloadable PDF."
+        )
+        append_message_log(record_id, "✅ Privacy consent already acknowledged", "system")
+        log_debug_event(record_id, "BACKEND", "Privacy Already Acknowledged", "Customer had already acknowledged privacy consent")
+        return JSONResponse(content={
+            "properties": [{"property": "privacy_acknowledged", "value": True}],
+            "response": response,
+            "next_actions": [],
+            "session_id": session_id
+        })
+
+    # Define accepted consent responses
     approved = {"yes", "yep", "sure", "go ahead", "ok", "okay", "alright", "please do", "y", "yup", "yeh"}
 
+    # Check if the message includes an approval
     if any(word in message_lower for word in approved):
+        # Update the record to acknowledge privacy consent
         update_quote_record(record_id, {"privacy_acknowledged": True})
         append_message_log(record_id, "✅ Privacy consent acknowledged", "system")
 
@@ -1132,7 +1195,7 @@ async def handle_privacy_consent(message: str, message_lower: str, record_id: st
     # If they haven't confirmed yet — show privacy notice
     privacy_msg = (
         "Just so you know — we don’t ask for anything private like bank info. "
-        "Only your name, email and phone so we can send the quote over.\n\n"
+        "Only your name, email, and phone so we can send the quote over.\n\n"
         "Your privacy is 100% respected.\n"
         "You can read our full Privacy Policy here: [https://orcacleaning.com.au/privacy-policy/](https://orcacleaning.com.au/privacy-policy/)\n\n"
         "**Would you like to continue and provide your details now?**"
@@ -1145,6 +1208,7 @@ async def handle_privacy_consent(message: str, message_lower: str, record_id: st
         "next_actions": [],
         "session_id": session_id
     })
+
 
 # === Handle Chat Init === 
 
@@ -1177,6 +1241,9 @@ async def handle_chat_init(session_id: str):
             quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
             session_id = fields.get("session_id", session_id)
             log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session ID: {session_id}, Quote ID: {quote_id}, Record ID: {record_id}")
+        else:
+            # If an existing quote is found, skip the creation process
+            log_debug_event(record_id, "BACKEND", "Existing Quote Found - Skipping Creation", f"Using existing quote: {quote_id}, Record ID: {record_id}")
 
         # === Check if customer_name exists before asking for it ===
         customer_name = fields.get("customer_name", "").strip()
@@ -1221,10 +1288,6 @@ async def handle_chat_init(session_id: str):
 
 
 # === Brendan API Router ===
-
-from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import JSONResponse
-import traceback
 
 # Define the router for the backend
 router = APIRouter()
@@ -1275,14 +1338,14 @@ async def filter_response_entry(request: Request):
                         return JSONResponse(content={
                             "properties": [],
                             "response": prompt,
-                            "next_actions": generate_next_actions("Gathering Info"),
+                            "next_actions": generate_next_actions("Gathering Info", fields),  # FIX: Passing fields here
                             "session_id": session_id
                         })
 
                 return JSONResponse(content={
                     "properties": [],
                     "response": "Thanks! Let’s move ahead then.",
-                    "next_actions": generate_next_actions("Gathering Info"),
+                    "next_actions": generate_next_actions("Gathering Info", fields),  # FIX: Passing fields here
                     "session_id": session_id
                 })
 
@@ -1335,7 +1398,7 @@ async def filter_response_entry(request: Request):
                     return JSONResponse(content={
                         "properties": [],
                         "response": f"Thanks {name}! I’ve just sent your quote to {email}. Let me know if you need help with anything else — or feel free to book directly anytime: https://orcacleaning.com.au/schedule?quote_id={quote_id}",
-                        "next_actions": generate_next_actions("Personal Info Received"),
+                        "next_actions": generate_next_actions("Personal Info Received", fields),  # FIX: Passing fields here
                         "session_id": session_id
                     })
                 except Exception as e:
@@ -1386,7 +1449,7 @@ async def filter_response_entry(request: Request):
         return JSONResponse(content={
             "properties": properties,
             "response": reply,
-            "next_actions": generate_next_actions(parsed.get("quote_stage", quote_stage)),
+            "next_actions": generate_next_actions(parsed.get("quote_stage", quote_stage), fields),  # FIX: Passing fields here
             "session_id": session_id
         })
 
