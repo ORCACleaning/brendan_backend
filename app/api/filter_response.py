@@ -284,6 +284,9 @@ def create_new_quote(session_id: str, force_new: bool = False):
         record_id = response.get("id", "")
         returned_fields = response.get("fields", {})
 
+        # Log the response data and ensure the quote is properly stored
+        log_debug_event(record_id, "BACKEND", "Quote Created in Airtable", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
+
         # Validate that all required fields are present
         required = ["session_id", "quote_id", "quote_stage", "source"]
         for r in required:
@@ -292,6 +295,13 @@ def create_new_quote(session_id: str, force_new: bool = False):
                 log_debug_event(record_id, "BACKEND", "Missing Field After Creation", error_msg)
                 logger.error(f"❌ {error_msg}")
                 raise HTTPException(status_code=500, detail=error_msg)
+
+        # Additional safeguard to check for session_id mismatch
+        if returned_fields.get("session_id") != session_id:
+            error_msg = f"Session ID mismatch: expected {session_id}, got {returned_fields.get('session_id')}"
+            log_debug_event(record_id, "BACKEND", "Session ID Mismatch", error_msg)
+            logger.error(f"❌ {error_msg}")
+            raise HTTPException(status_code=500, detail="Session ID mismatch during quote creation.")
 
         # Flush and store the debug log after quote creation
         flushed = flush_debug_log(record_id)
@@ -377,6 +387,7 @@ def get_quote_by_session(session_id: str):
                         log_debug_event(None, "BACKEND", "Retrying", f"Retrying after {retry_delay}s...")
                         time.sleep(retry_delay)  # Wait before retrying
                         continue
+                    log_debug_event(None, "BACKEND", "Session Not Found After All Attempts", f"Session not found for session_id={session_id} after {max_retries} attempts.")
                     return None  # After all retries, return None
 
                 # Extract the first record
@@ -424,6 +435,7 @@ def get_quote_by_session(session_id: str):
                     log_debug_event(None, "BACKEND", "Retrying", f"Retrying after {retry_delay}s...")
                     time.sleep(retry_delay)  # Wait before retrying
                     continue
+                log_debug_event(None, "BACKEND", "Session Not Found After All Attempts", f"Session not found for session_id={session_id} after {max_retries} attempts.")
                 return None  # After all retries, return None
 
     except Exception as e:
@@ -755,6 +767,7 @@ def generate_next_actions(quote_stage: str, fields: dict):
     # Check if customer_name is already filled
     customer_name_filled = bool(fields.get("customer_name", "").strip())
 
+    # Stage: Quote Calculated
     if stage == "Quote Calculated":
         actions = [
             {
@@ -777,8 +790,8 @@ def generate_next_actions(quote_stage: str, fields: dict):
         log_debug_event(None, "BACKEND", "Next Actions Generated", "Stage: Quote Calculated → 4 quote-ready buttons")
         return actions
 
+    # Stage: Gathering Personal Info
     elif stage == "Gathering Personal Info":
-        # Skip asking for customer name if it's already filled
         if customer_name_filled:
             actions = [
                 {
@@ -806,6 +819,7 @@ def generate_next_actions(quote_stage: str, fields: dict):
         
         return actions
 
+    # Stage: Personal Info Received
     elif stage == "Personal Info Received":
         actions = [
             {
@@ -826,6 +840,7 @@ def generate_next_actions(quote_stage: str, fields: dict):
         log_debug_event(None, "BACKEND", "Next Actions Generated", "Stage: Personal Info Received → Booking options shown")
         return actions
 
+    # Fallback: If the stage is not recognized, provide a generic response
     else:
         fallback = [
             {
@@ -844,7 +859,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     logger.info(f"🟡 extract_properties_from_gpt4() called — record_id: {record_id}, message: {message}")
     
     if record_id:
-        log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(message={message[:100]})")
+        log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(session_id={quote_id}, message={message[:100]})")
 
     # If the message is "__init__", suppress GPT call
     if message.strip() == "__init__":
@@ -868,10 +883,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if record_id and not skip_log_lookup:
         try:
             # Attempt to fetch session data, retry if necessary
-            session_data = get_quote_by_session(record_id)
+            log_debug_event(record_id, "BACKEND", "Session Lookup", f"Looking up session_id={quote_id}")
+            session_data = get_quote_by_session(quote_id)
             if isinstance(session_data, dict):
                 existing_fields = session_data.get("fields", {})
-                log_debug_event(record_id, "GPT", "Existing Fields Fetched", str(existing_fields))
+                log_debug_event(record_id, "GPT", "Existing Fields Fetched", f"Session Data: {existing_fields}")
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
@@ -908,6 +924,15 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready")
 
     def call_gpt_and_parse(attempt=1):
+    """
+    Calls GPT-4 and processes the response.
+    Implements retries and error handling for invalid or incomplete responses.
+    """
+    max_retries = 3
+    retry_delay = 5  # Delay in seconds between retries
+    parsed = None
+
+    for attempt in range(1, max_retries + 1):
         try:
             res = client.chat.completions.create(
                 model="gpt-4-turbo",
@@ -926,20 +951,25 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
             start, end = raw.find("{"), raw.rfind("}")
             parsed = json.loads(raw[start:end + 1])  # Safe parsing
-            return parsed
+            break  # Exit loop if parsing is successful
+
         except Exception as e:
             log_debug_event(record_id, "GPT", f"Parse Failed Attempt {attempt}", str(e))
-            return None
+            if attempt < max_retries:
+                log_debug_event(record_id, "GPT", "Retrying", f"Retrying after {retry_delay}s...")
+                time.sleep(retry_delay)  # Wait before retrying
+            else:
+                log_debug_event(record_id, "GPT", "Final Parse Failed", f"Error after {max_retries} attempts: {str(e)}")
+                return None  # After all retries, return None
 
-    parsed = call_gpt_and_parse(1)
     if not isinstance(parsed, dict):
         messages.insert(1, {
             "role": "system",
             "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."
         })
-        parsed = call_gpt_and_parse(2)
+        return call_gpt_and_parse(attempt + 1)  # Retry if response is still not a valid JSON
 
-    if not isinstance(parsed, dict) or "properties" not in parsed or "response" not in parsed:
+    if "properties" not in parsed or "response" not in parsed:
         log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
         fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
         log_debug_event(record_id, "GPT", "Final Reply", fallback)
@@ -951,6 +981,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
+    # Handling malformed props
     if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
         log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
         fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
@@ -1015,6 +1046,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             ], f"Thanks {guessed_name}! Let’s keep going."
 
     return safe_props, reply
+
 
 
 # === GPT Error Email Alert ===
@@ -1149,15 +1181,21 @@ def append_message_log(record_id: str, message: str, sender: str):
         was_truncated = True
         log_debug_event(record_id, "BACKEND", "Log Truncated", f"Combined log exceeded {MAX_LOG_LENGTH} chars — truncated")
 
-    # Save new message_log to Airtable
-    try:
-        update_quote_record(record_id, {"message_log": combined_log})
-        logger.info(f"✅ message_log updated for {record_id} (len={len(combined_log)})")
-        log_debug_event(record_id, "BACKEND", "Message Log Saved", f"New length: {len(combined_log)} | Truncated: {was_truncated}")
-    except Exception as e:
-        logger.error(f"❌ Failed to update message_log: {e}")
-        log_debug_event(record_id, "BACKEND", "Message Log Update Failed", str(e))
-        return
+    # Retry logic for updating message_log to Airtable
+    retries = 3
+    for attempt in range(retries):
+        try:
+            update_quote_record(record_id, {"message_log": combined_log})
+            logger.info(f"✅ message_log updated for {record_id} (len={len(combined_log)})")
+            log_debug_event(record_id, "BACKEND", "Message Log Saved", f"New length: {len(combined_log)} | Truncated: {was_truncated}")
+            break  # Exit loop after successful update
+        except Exception as e:
+            logger.error(f"❌ Failed to update message_log (Attempt {attempt+1}): {e}")
+            log_debug_event(record_id, "BACKEND", f"Message Log Update Failed (Attempt {attempt+1})", str(e))
+            if attempt < retries - 1:
+                time.sleep(3)  # Delay before retrying
+            else:
+                return  # Return if max retries reached
 
     # Metadata logging
     try:
@@ -1180,7 +1218,6 @@ def append_message_log(record_id: str, message: str, sender: str):
     except Exception as e:
         logger.warning(f"⚠️ Failed to flush debug log: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
-
 
 # === Handle Privacy Consent === 
 
