@@ -1321,48 +1321,66 @@ async def filter_response_entry(request: Request):
         if message.lower() == "__init__":
             try:
                 log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
-                await handle_chat_init(session_id)
 
-                # Get the quote for the session
-                quote_data = get_quote_by_session(session_id)
+                # Check if a valid session already exists
+                existing_quote = get_quote_by_session(session_id)
+                if not existing_quote:
+                    # If no valid session is found, create a new quote
+                    log_debug_event(None, "BACKEND", "Session Not Found, Creating New Quote", f"Creating new quote for session {session_id}")
+                    quote_id, record_id, quote_stage, fields = create_new_quote(session_id, force_new=True)
 
-                if not quote_data:
-                    log_debug_event(None, "BACKEND", "No valid session found", f"Session ID: {session_id} — Creating new quote")
-                    raise HTTPException(status_code=404, detail="No valid session found.")
+                    return JSONResponse(content={
+                        "properties": [{"property": "source", "value": "Brendan"}],
+                        "response": "Welcome aboard! I’m Brendan from Orca Cleaning — I’ll walk you through a quick, private quote.",
+                        "next_actions": generate_next_actions("Gathering Info", fields),  # Pass fields here
+                        "session_id": session_id
+                    })
 
-                record_id = quote_data.get("record_id", "")
-                fields = quote_data.get("fields", {})
+                # If session exists, retrieve quote data
+                quote_id = existing_quote.get("quote_id", "N/A")
+                record_id = existing_quote.get("record_id", "")
+                quote_stage = existing_quote.get("quote_stage", "Gathering Info")
+                fields = existing_quote.get("fields", {})
+                log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
 
-                # Ensure all required fields are filled in the correct order
-                REQUIRED_ORDER = [
-                    "customer_name", "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status"
-                ]
-                for field in REQUIRED_ORDER:
-                    if not fields.get(field):
-                        prompt = {
-                            "customer_name": "What name should I put on the quote?",
-                            "suburb": "What suburb is the property in?",
-                            "bedrooms_v2": "How many bedrooms are there?",
-                            "bathrooms_v2": "And how many bathrooms?",
-                            "furnished_status": "Is the property furnished or unfurnished?"
-                        }[field]
+                # Handle specific quote stages (like gathering personal info or chat banning)
+                if quote_stage == "Chat Banned":
+                    log_debug_event(record_id, "BACKEND", "Blocked Chat", "Chat is banned — denying interaction")
+                    return JSONResponse(content={
+                        "properties": [],
+                        "response": "This chat is closed. Call 1300 918 388 if you still need a quote.",
+                        "next_actions": [],
+                        "session_id": session_id
+                    })
 
-                        append_message_log(record_id, message, "user")
-                        log_debug_event(record_id, "BACKEND", "Asking Missing Field", f"Missing: {field} → {prompt}")
+                if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
+                    log_debug_event(record_id, "BACKEND", "Awaiting Privacy Consent", f"privacy_acknowledged: {fields.get('privacy_acknowledged')}")
+                    return await handle_privacy_consent(message, message.lower(), record_id, session_id)
 
-                        return JSONResponse(content={
-                            "properties": [],
-                            "response": prompt,
-                            "next_actions": generate_next_actions("Gathering Info", fields),  # Pass fields here
-                            "session_id": session_id
-                        })
+                if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
+                    name = fields.get("customer_name", "").strip()
+                    email = fields.get("customer_email", "").strip()
+                    phone = fields.get("customer_phone", "").strip()
+                    log_debug_event(record_id, "BACKEND", "PDF Flow Check", f"Name={name}, Email={email}, Phone={phone}")
 
-                return JSONResponse(content={
-                    "properties": [],
-                    "response": "Thanks! Let’s move ahead then.",
-                    "next_actions": generate_next_actions("Gathering Info", fields),  # Pass fields here
-                    "session_id": session_id
-                })
+                    if name and email and phone:
+                        try:
+                            log_debug_event(record_id, "BACKEND", "Generating PDF", f"Preparing for: {name} ({email})")
+                            pdf_path = generate_quote_pdf(fields)
+                            send_quote_email(email, name, pdf_path, quote_id)
+                            update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
+                            append_message_log(record_id, f"PDF quote sent to {email}", "brendan")
+                            log_debug_event(record_id, "BACKEND", "PDF Sent", f"PDF sent to {email}, stage updated")
+
+                            return JSONResponse(content={
+                                "properties": [],
+                                "response": f"Thanks {name}! I’ve just sent your quote to {email}. Let me know if you need help with anything else — or feel free to book directly anytime: https://orcacleaning.com.au/schedule?quote_id={quote_id}",
+                                "next_actions": generate_next_actions("Personal Info Received", fields),  # Pass fields here
+                                "session_id": session_id
+                            })
+                        except Exception as e:
+                            log_debug_event(record_id, "BACKEND", "PDF/Email Error", traceback.format_exc())
+                            raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
             except Exception as e:
                 log_debug_event(None, "BACKEND", "Init Error", traceback.format_exc())
@@ -1391,38 +1409,32 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
-            log_debug_event(record_id, "BACKEND", "Awaiting Privacy Consent", f"privacy_acknowledged: {fields.get('privacy_acknowledged')}")
-            return await handle_privacy_consent(message, message.lower(), record_id, session_id)
+        # Collect missing fields if any
+        if quote_stage == "Gathering Info":
+            REQUIRED_FIELDS = [
+                "customer_name", "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status"
+            ]
+            for field in REQUIRED_FIELDS:
+                if not fields.get(field):
+                    prompt = {
+                        "customer_name": "What name should I put on the quote?",
+                        "suburb": "What suburb is the property in?",
+                        "bedrooms_v2": "How many bedrooms are there?",
+                        "bathrooms_v2": "And how many bathrooms?",
+                        "furnished_status": "Is the property furnished or unfurnished?"
+                    }[field]
 
-        if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
-            name = fields.get("customer_name", "").strip()
-            email = fields.get("customer_email", "").strip()
-            phone = fields.get("customer_phone", "").strip()
-            log_debug_event(record_id, "BACKEND", "PDF Flow Check", f"name={name}, email={email}, phone={phone}")
-
-            if name and email and phone:
-                try:
-                    log_debug_event(record_id, "BACKEND", "Generating PDF", f"Preparing for: {name} ({email})")
-                    pdf_path = generate_quote_pdf(fields)
-                    send_quote_email(email, name, pdf_path, quote_id)
-                    update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
-                    append_message_log(record_id, f"PDF quote sent to {email}", "brendan")
-                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"PDF sent to {email}, stage updated")
+                    append_message_log(record_id, message, "user")
+                    log_debug_event(record_id, "BACKEND", "Asking Missing Field", f"Missing: {field} → {prompt}")
 
                     return JSONResponse(content={
                         "properties": [],
-                        "response": f"Thanks {name}! I’ve just sent your quote to {email}. Let me know if you need help with anything else — or feel free to book directly anytime: https://orcacleaning.com.au/schedule?quote_id={quote_id}",
-                        "next_actions": generate_next_actions("Personal Info Received", fields),  # Pass fields here
+                        "response": prompt,
+                        "next_actions": generate_next_actions("Gathering Info", fields),  # Pass fields here
                         "session_id": session_id
                     })
-                except Exception as e:
-                    log_debug_event(record_id, "BACKEND", "PDF/Email Error", traceback.format_exc())
-                    raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
-        # Handle other quote stages such as "Quote Calculated" or "Personal Info Received"
-        # Logic for progressing through stages and collecting the remaining required fields.
-
+        # Proceed with regular quote processing if all required fields are present
         append_message_log(record_id, message, "user")
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
         log_debug_event(record_id, "BACKEND", "Calling GPT", f"Input: {message[:100]}")
@@ -1435,6 +1447,7 @@ async def filter_response_entry(request: Request):
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         log_debug_event(record_id, "BACKEND", "Parsed Properties", str(parsed))
 
+        # Ensure required fields are preserved if GPT does not provide them
         for required in ["source", "bedrooms_v2", "bathrooms_v2"]:
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
