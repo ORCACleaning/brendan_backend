@@ -1315,6 +1315,11 @@ async def filter_response_entry(request: Request):
 
                 # Get the quote for the session
                 quote_data = get_quote_by_session(session_id)
+                
+                if quote_data is None:  # Ensure we have valid quote data
+                    log_debug_event(None, "BACKEND", "Session Not Found", f"No valid session found for {session_id}")
+                    raise HTTPException(status_code=404, detail="No valid session found.")
+
                 record_id = quote_data["record_id"]
                 fields = quote_data.get("fields", {})
 
@@ -1338,14 +1343,14 @@ async def filter_response_entry(request: Request):
                         return JSONResponse(content={
                             "properties": [],
                             "response": prompt,
-                            "next_actions": generate_next_actions("Gathering Info", fields),  # FIX: Passing fields here
+                            "next_actions": generate_next_actions("Gathering Info", fields),  # Pass fields here
                             "session_id": session_id
                         })
 
                 return JSONResponse(content={
                     "properties": [],
                     "response": "Thanks! Let’s move ahead then.",
-                    "next_actions": generate_next_actions("Gathering Info", fields),  # FIX: Passing fields here
+                    "next_actions": generate_next_actions("Gathering Info", fields),  # Pass fields here
                     "session_id": session_id
                 })
 
@@ -1398,7 +1403,7 @@ async def filter_response_entry(request: Request):
                     return JSONResponse(content={
                         "properties": [],
                         "response": f"Thanks {name}! I’ve just sent your quote to {email}. Let me know if you need help with anything else — or feel free to book directly anytime: https://orcacleaning.com.au/schedule?quote_id={quote_id}",
-                        "next_actions": generate_next_actions("Personal Info Received", fields),  # FIX: Passing fields here
+                        "next_actions": generate_next_actions("Personal Info Received", fields),  # Pass fields here
                         "session_id": session_id
                     })
                 except Exception as e:
@@ -1449,7 +1454,7 @@ async def filter_response_entry(request: Request):
         return JSONResponse(content={
             "properties": properties,
             "response": reply,
-            "next_actions": generate_next_actions(parsed.get("quote_stage", quote_stage), fields),  # FIX: Passing fields here
+            "next_actions": generate_next_actions(parsed.get("quote_stage", quote_stage), fields),  # Pass fields here
             "session_id": session_id
         })
 
