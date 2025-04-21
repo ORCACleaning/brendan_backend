@@ -2,17 +2,14 @@ import json
 import logging
 import requests
 from datetime import datetime
-
-from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS
 from app.config import settings
 
-logger = logging.getLogger(__name__)
-
 # === Constants ===
-TRUE_VALUES = {"true", "yes", "1", "y", "yeah", "yep"}
 TABLE_NAME = "Vacate Quotes"
-MAX_REASONABLE_INT = 100
+MAX_LOG_LENGTH = 10000  # Adjust as per your requirement
 _log_cache = {}
+
+logger = logging.getLogger(__name__)
 
 # === Debug Logging ===
 def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str = "", message: str = ""):
@@ -42,7 +39,25 @@ def flush_debug_log(record_id: str):
     line_count = len(combined.splitlines())
     log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(combined)} chars flushed to Airtable ({line_count} lines)")
     
-    return combined
+    # Now try to update the debug log to Airtable
+    try:
+        url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+        headers = {
+            "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {"fields": {"debug_log": combined}}
+
+        # Make the request to update Airtable
+        res = requests.patch(url, headers=headers, json=payload)
+        res.raise_for_status()  # Raise an error for bad responses
+
+        logger.info(f"✅ Debug log successfully flushed for record {record_id}")
+        return combined
+    except Exception as e:
+        logger.error(f"❌ Error flushing debug log to Airtable for record {record_id}: {e}")
+        log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
+        return combined  # Return the logs even if the API call failed
 
 
 def update_quote_record(record_id: str, fields: dict):
