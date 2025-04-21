@@ -423,8 +423,8 @@ AIRTABLE_SCHEMA_CACHE = {
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
-    Ensures 'quote_stage' is persisted correctly and all updates conform to Airtable schema.
-    Adds in-memory cache for Airtable schema to prevent redundant GETs.
+    Ensures 'quote_stage' and other fields are safely validated.
+    Flushes debug log at the end.
     """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
@@ -437,11 +437,11 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    # === Use cached schema or fetch once ===
+    # === Load field schema (cached) ===
     actual_keys = AIRTABLE_SCHEMA_CACHE["actual_keys"]
     if not AIRTABLE_SCHEMA_CACHE["fetched"]:
-        schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
         try:
+            schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
             schema_res = requests.get(schema_url, headers={"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"})
             schema_res.raise_for_status()
             tables = schema_res.json().get("tables", [])
@@ -487,7 +487,9 @@ def update_quote_record(record_id: str, fields: dict):
                     logger.warning(f"⚠️ Clamping large int for {corrected_key}: {value}")
                     value = MAX_REASONABLE_INT
             elif corrected_key in BOOLEAN_FIELDS:
-                value = value if isinstance(value, bool) else str(value).strip().lower() in {"yes", "true", "1", "on", "checked", "t"}
+                value = value if isinstance(value, bool) else str(value).strip().lower() in {
+                    "yes", "true", "1", "on", "checked", "t"
+                }
             elif corrected_key in {
                 "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
                 "estimated_time_mins", "discount_applied", "mandurah_surcharge",
@@ -516,10 +518,12 @@ def update_quote_record(record_id: str, fields: dict):
 
         normalized_fields[corrected_key] = value
 
+    # Ensure debug/message logs saved
     for log_field in ["debug_log", "message_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
 
+    # Flush debug log
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
@@ -530,6 +534,7 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Skipped", "No valid fields to apply.")
         return []
 
+    # Final validation
     validated_fields = {k: v for k, v in normalized_fields.items() if k in actual_keys}
     if not validated_fields:
         log_debug_event(record_id, "BACKEND", "Validation Failed", "No matching fields for schema.")
@@ -553,6 +558,7 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Exception in Airtable bulk update: {e}")
         log_debug_event(record_id, "BACKEND", "Bulk Update Exception", str(e))
 
+    # === Fallback: Try updating fields individually ===
     successful = []
     for key, value in validated_fields.items():
         try:
