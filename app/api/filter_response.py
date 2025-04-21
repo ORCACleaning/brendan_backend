@@ -1353,12 +1353,21 @@ async def filter_response_entry(request: Request):
                     quote_id, record_id, quote_stage, fields = create_new_quote(session_id, force_new=True)
 
                     # Adding a delay to allow Airtable to process the new quote and session
-                    time.sleep(5)  # Increased wait time to allow Airtable to process the record
+                    time.sleep(10)  # Wait for the Airtable record to be processed (10 seconds delay)
 
                     # Retry session lookup after delay
                     existing_quote = get_quote_by_session(session_id)
+                    retries = 3
+                    for i in range(retries):
+                        if not existing_quote:
+                            log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {i+1})", f"Retrying session lookup for session_id={session_id}")
+                            time.sleep(5 * (i + 1))  # Exponential backoff for retries (5s, 10s, 15s)
+                            existing_quote = get_quote_by_session(session_id)
+                        else:
+                            break
+
                     if not existing_quote:
-                        log_debug_event(None, "BACKEND", "Failed to Retrieve New Quote", f"Session {session_id} still not found after creating quote.")
+                        log_debug_event(None, "BACKEND", "Failed to Retrieve New Quote", f"Session {session_id} still not found after retries.")
                         raise HTTPException(status_code=404, detail="Session not found after creating quote.")
 
                 # If session exists, retrieve quote data
