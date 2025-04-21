@@ -34,7 +34,7 @@ VALID_AIRTABLE_FIELDS = {
     "pdf_link", "booking_url",
 
     # Traceability
-    "message_log", "gpt_error_log"
+    "message_log", "gpt_error_log", "debug_log"  # ✅ Added debug_log here
 }
 
 # === Field Mapping ===
