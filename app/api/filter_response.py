@@ -1183,9 +1183,34 @@ async def filter_response_entry(request: Request):
                 log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
                 await handle_chat_init(session_id)
 
+                quote_data = get_quote_by_session(session_id)
+                record_id = quote_data["record_id"]
+                fields = quote_data.get("fields", {})
+
+                REQUIRED_ORDER = [
+                    "customer_name", "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status"
+                ]
+                for field in REQUIRED_ORDER:
+                    if not fields.get(field):
+                        prompt = {
+                            "customer_name": "What name should I put on the quote?",
+                            "suburb": "What suburb is the property in?",
+                            "bedrooms_v2": "How many bedrooms are there?",
+                            "bathrooms_v2": "And how many bathrooms?",
+                            "furnished_status": "Is the property furnished or unfurnished?"
+                        }[field]
+
+                        append_message_log(record_id, prompt, "brendan")
+                        return JSONResponse(content={
+                            "properties": [],
+                            "response": prompt,
+                            "next_actions": generate_next_actions("Gathering Info"),
+                            "session_id": session_id
+                        })
+
                 return JSONResponse(content={
                     "properties": [],
-                    "response": "Just a moment while I get us started...",
+                    "response": "Thanks! Let’s move ahead then.",
                     "next_actions": generate_next_actions("Gathering Info"),
                     "session_id": session_id
                 })
