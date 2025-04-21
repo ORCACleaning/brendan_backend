@@ -672,7 +672,8 @@ def generate_next_actions(quote_stage: str):
     - Personal Info Received → Show download, booking, call buttons
     - Other → Prompt user to continue
     """
-
+    
+    # Clean stage input
     stage = str(quote_stage or "").strip()
     log_debug_event(None, "BACKEND", "generate_next_actions()", f"Generating actions for quote_stage = '{stage}'")
 
@@ -744,7 +745,6 @@ def generate_next_actions(quote_stage: str):
         return fallback
 
 
-
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
@@ -778,6 +778,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 log_debug_event(record_id, "GPT", "Existing Fields Fetched", str(existing_fields))
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
+
+    # === Check if name was just asked ===
+    already_asked_name = "what name should i put on the quote" in log.lower()[-300:]
+    name_already_filled = existing_fields.get("customer_name", "").strip() != ""
+    if name_already_filled and already_asked_name:
+        log_debug_event(record_id, "GPT", "Suppressed Repeat Name Prompt", "Already asked & name is filled")
+        return [{"property": "source", "value": "Brendan"}], "Thanks Brad! Let’s keep going."
 
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
@@ -814,7 +821,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             )
             raw = res.choices[0].message.content.strip()
             log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
-            log_debug_event(record_id, "GPT", f"Full GPT Response", raw[:3000])
+            log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
             start, end = raw.find("{"), raw.rfind("}")
             parsed = json.loads(raw[start:end + 1])
             return parsed
@@ -823,7 +830,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             return None
 
     parsed = call_gpt_and_parse(1)
-
     if not isinstance(parsed, dict):
         messages.insert(1, {
             "role": "system",
@@ -994,8 +1000,8 @@ def send_gpt_error_email(error_msg: str):
 def append_message_log(record_id: str, message: str, sender: str):
     """
     Appends a new message to the 'message_log' field in Airtable.
-    Includes timestamp, role, and preserves full order.
-    Flushes debug_log after append to avoid loss.
+    Includes timestamp, sender label, and preserves ordering.
+    Truncates if log exceeds MAX_LOG_LENGTH. Flushes debug_log after save.
     """
     if not record_id:
         logger.error("❌ Cannot append message_log — missing record ID")
@@ -1011,16 +1017,16 @@ def append_message_log(record_id: str, message: str, sender: str):
     sender_clean = str(sender or "user").strip().upper()
     timestamp = datetime.utcnow().isoformat()
 
+    # Format message line
     if sender_clean == "USER" and message.lower() == "__init__":
         new_entry = f"[{timestamp}] SYSTEM: SYSTEM_TRIGGER: Brendan started a new quote"
     else:
         new_entry = f"[{timestamp}] {sender_clean}: {message}"
 
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
-    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
-
-    # === Load Existing Log ===
+    # Fetch current message_log from Airtable
     try:
+        url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{TABLE_NAME}/{record_id}"
+        headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
         res = requests.get(url, headers=headers)
         res.raise_for_status()
         airtable_data = res.json()
@@ -1031,7 +1037,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         log_debug_event(record_id, "BACKEND", "Message Log Fetch Failed", str(e))
         return
 
-    # === Combine and Trim If Needed ===
+    # Combine logs and check for truncation
     combined_log = f"{old_log}\n{new_entry}" if old_log else new_entry
     was_truncated = False
     if len(combined_log) > MAX_LOG_LENGTH:
@@ -1039,7 +1045,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         was_truncated = True
         log_debug_event(record_id, "BACKEND", "Log Truncated", f"Combined log exceeded {MAX_LOG_LENGTH} chars — truncated")
 
-    # === Save Combined Log ===
+    # Save new message_log to Airtable
     try:
         update_quote_record(record_id, {"message_log": combined_log})
         logger.info(f"✅ message_log updated for {record_id} (len={len(combined_log)})")
@@ -1049,7 +1055,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         log_debug_event(record_id, "BACKEND", "Message Log Update Failed", str(e))
         return
 
-    # === Log Debug Metadata ===
+    # Metadata logging
     try:
         detail = (
             "SYSTEM_TRIGGER: Brendan started a new quote"
@@ -1063,7 +1069,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         logger.warning(f"⚠️ Debug log event failed: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Failure", str(e))
 
-    # === Flush Debug Log ===
+    # Flush debug log after all saves
     try:
         flushed = flush_debug_log(record_id)
         if flushed:
