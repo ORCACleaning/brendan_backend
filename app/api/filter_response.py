@@ -373,7 +373,6 @@ def update_quote_record(record_id: str, fields: dict):
 
     log_debug_event(record_id, "BACKEND", "Function Start", f"update_quote_record(record_id={record_id}, fields={list(fields.keys())})")
 
-    # === Pull schema cache ===
     actual_keys = AIRTABLE_SCHEMA_CACHE.get("actual_keys", set())
     if not AIRTABLE_SCHEMA_CACHE.get("fetched"):
         try:
@@ -392,13 +391,11 @@ def update_quote_record(record_id: str, fields: dict):
             logger.warning(f"⚠️ Could not fetch Airtable field schema: {e}")
             log_debug_event(record_id, "BACKEND", "Schema Fetch Failed", str(e))
 
-    # === Skip debug_log if not in schema or not fetched ===
     if not AIRTABLE_SCHEMA_CACHE.get("fetched") or "debug_log" not in actual_keys:
         if "debug_log" in fields:
             fields.pop("debug_log", None)
             log_debug_event(record_id, "BACKEND", "Debug Field Skipped", "debug_log not in schema or schema not fetched")
 
-    # === Normalize and validate ===
     normalized_fields = {}
     MAX_REASONABLE_INT = 100
     SELECT_FIELDS = {"carpet_cleaning", "furnished", "quote_stage"}
@@ -409,13 +406,11 @@ def update_quote_record(record_id: str, fields: dict):
 
         log_debug_event(record_id, "BACKEND", "Raw Field Input", f"{raw_key} → {corrected_key} = {value}")
 
-        # === Reject if not in schema or VALID_AIRTABLE_FIELDS
         if corrected_key not in actual_keys or corrected_key not in VALID_AIRTABLE_FIELDS:
             logger.warning(f"⚠️ Skipping invalid field: {corrected_key}")
             log_debug_event(record_id, "BACKEND", "Field Skipped", f"{corrected_key} is not in schema or allowed fields")
             continue
 
-        # === Overwrite protection ===
         if corrected_key in {"carpet_cleaning", "quote_stage", "source"} and raw_key not in fields:
             log_debug_event(record_id, "BACKEND", "Protected Field Skipped", f"{corrected_key} not explicitly passed")
             continue
@@ -478,7 +473,6 @@ def update_quote_record(record_id: str, fields: dict):
 
         normalized_fields[corrected_key] = value
 
-    # Always flush logs if present
     for log_field in ["debug_log", "message_log"]:
         if log_field in fields and log_field not in normalized_fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] else ""
