@@ -302,6 +302,9 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
         log_debug_event(record_id, "BACKEND", "New Quote Created", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
 
+        # Adding delay to allow Airtable to process and index the newly created record
+        time.sleep(5)  # Wait for Airtable to process the quote and make it available for session lookup
+
         # Return relevant information after quote creation
         return quote_id, record_id, "Gathering Info", returned_fields
 
@@ -356,58 +359,72 @@ def get_quote_by_session(session_id: str):
             "maxRecords": 1
         }
 
-        # Make the API request
-        res = requests.get(url, headers=headers, params=params)
-        res.raise_for_status()
+        # Retry logic: Try up to 3 times, with a delay between each attempt
+        max_retries = 3
+        retry_delay = 5  # Delay in seconds between retries
 
-        # Check if records are returned
-        records = res.json().get("records", [])
-        if not records:
-            log_debug_event(None, "BACKEND", "Session Not Found", f"No Airtable record found for session_id={session_id}")
-            return None
+        for attempt in range(max_retries):
+            # Make the API request
+            try:
+                res = requests.get(url, headers=headers, params=params)
+                res.raise_for_status()
 
-        # Extract the first record
-        record = records[0]
-        fields = record.get("fields", {})
-        record_id = record.get("id", "")
+                # Check if records are returned
+                records = res.json().get("records", [])
+                if not records:
+                    log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt+1})", f"No Airtable record found for session_id={session_id}")
+                    if attempt < max_retries - 1:
+                        log_debug_event(None, "BACKEND", "Retrying", f"Retrying after {retry_delay}s...")
+                        time.sleep(retry_delay)  # Wait before retrying
+                        continue
+                    return None  # After all retries, return None
 
-        # Ensure required fields are in the response
-        if not record_id or not fields:
-            log_debug_event(None, "BACKEND", "Session Found But Incomplete", f"Missing record_id or fields for session_id={session_id}")
-            return None
+                # Extract the first record
+                record = records[0]
+                fields = record.get("fields", {})
+                record_id = record.get("id", "")
 
-        # Validate required fields in the fields response
-        required_fields = ["quote_id", "quote_stage", "customer_name"]
-        missing_fields = [field for field in required_fields if field not in fields]
+                # Ensure required fields are in the response
+                if not record_id or not fields:
+                    log_debug_event(None, "BACKEND", "Session Found But Incomplete", f"Missing record_id or fields for session_id={session_id}")
+                    return None
 
-        if missing_fields:
-            log_debug_event(record_id, "BACKEND", "Missing Required Fields", f"Missing fields: {', '.join(missing_fields)} for session_id={session_id}")
-            return None
+                # Validate required fields in the fields response
+                required_fields = ["quote_id", "quote_stage", "customer_name"]
+                missing_fields = [field for field in required_fields if field not in fields]
 
-        # If customer_name is present, clean it
-        customer_name = fields.get("customer_name", "").strip()
-        if customer_name:
-            fields["customer_name"] = customer_name
+                if missing_fields:
+                    log_debug_event(record_id, "BACKEND", "Missing Required Fields", f"Missing fields: {', '.join(missing_fields)} for session_id={session_id}")
+                    return None
 
-        # Return the result
-        quote_id = fields.get("quote_id", "")
-        quote_stage = fields.get("quote_stage", "Gathering Info")
+                # If customer_name is present, clean it
+                customer_name = fields.get("customer_name", "").strip()
+                if customer_name:
+                    fields["customer_name"] = customer_name
 
-        result = {
-            "quote_id": quote_id,
-            "record_id": record_id,
-            "quote_stage": quote_stage,
-            "fields": fields
-        }
+                # Return the result
+                quote_id = fields.get("quote_id", "")
+                quote_stage = fields.get("quote_stage", "Gathering Info")
 
-        log_debug_event(record_id, "BACKEND", "Session Found", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
-        return result
+                result = {
+                    "quote_id": quote_id,
+                    "record_id": record_id,
+                    "quote_stage": quote_stage,
+                    "fields": fields
+                }
 
-    except requests.exceptions.RequestException as e:
-        # Handle request errors
-        logger.warning(f"⚠️ get_quote_by_session() HTTP request failed: {e}")
-        log_debug_event(None, "BACKEND", "Session Lookup Error", f"HTTP request failed: {str(e)}")
-        return None
+                log_debug_event(record_id, "BACKEND", "Session Found", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
+                return result
+
+            except requests.exceptions.RequestException as e:
+                # Handle request errors
+                logger.warning(f"⚠️ get_quote_by_session() HTTP request failed (Attempt {attempt+1}): {e}")
+                log_debug_event(None, "BACKEND", f"Session Lookup Error (Attempt {attempt+1})", f"HTTP request failed: {str(e)}")
+                if attempt < max_retries - 1:
+                    log_debug_event(None, "BACKEND", "Retrying", f"Retrying after {retry_delay}s...")
+                    time.sleep(retry_delay)  # Wait before retrying
+                    continue
+                return None  # After all retries, return None
 
     except Exception as e:
         # Handle other unexpected errors
@@ -559,6 +576,9 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"🛠 Payload: {json.dumps(validated_fields, indent=2)}")
 
     try:
+        # Make sure that Airtable has processed the record before the update
+        time.sleep(5)  # Added delay to allow Airtable to process the update
+
         res = requests.patch(url, headers=headers, json={"fields": validated_fields})
         if res.ok:
             logger.info("✅ Airtable bulk update successful.")
@@ -845,6 +865,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
+            # Attempt to fetch session data, retry if necessary
             session_data = get_quote_by_session(record_id)
             if isinstance(session_data, dict):
                 existing_fields = session_data.get("fields", {})
@@ -1332,7 +1353,7 @@ async def filter_response_entry(request: Request):
                     quote_id, record_id, quote_stage, fields = create_new_quote(session_id, force_new=True)
 
                     # Adding a delay to allow Airtable to process the new quote and session
-                    time.sleep(2)  # Wait for the Airtable record to be processed
+                    time.sleep(5)  # Increased wait time to allow Airtable to process the record
 
                     # Retry session lookup after delay
                     existing_quote = get_quote_by_session(session_id)
@@ -1488,4 +1509,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error.")
-
