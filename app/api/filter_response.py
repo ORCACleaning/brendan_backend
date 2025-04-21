@@ -739,12 +739,7 @@ def generate_next_actions(quote_stage: str):
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
-    import json
-    import re
-    from app.services.openai_client import client
-    from app.services.airtable_logger import log_debug_event, flush_debug_log
-    from app.services.quote_updater import update_quote_record
-
+   
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
