@@ -438,6 +438,7 @@ def update_quote_record(record_id: str, fields: dict):
 
     normalized_fields = {}
     MAX_REASONABLE_INT = 100
+    SELECT_FIELDS = {"carpet_cleaning", "furnished", "quote_stage"}
 
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
@@ -491,6 +492,11 @@ def update_quote_record(record_id: str, fields: dict):
             value = str(value).strip()
         else:
             value = "" if value is None else str(value).strip()
+
+        # 🚫 Skip invalid blank values for select fields
+        if corrected_key in SELECT_FIELDS and value == "":
+            logger.warning(f"⚠️ Skipping empty select field: {corrected_key}")
+            continue
 
         normalized_fields[corrected_key] = value
 
