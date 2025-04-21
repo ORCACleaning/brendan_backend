@@ -810,6 +810,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             )
             raw = res.choices[0].message.content.strip()
             log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
+            log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
             start, end = raw.find("{"), raw.rfind("}")
             parsed = json.loads(raw[start:end + 1])
             return parsed
