@@ -46,6 +46,8 @@ else:
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# === Global Schema Cache ===
+AIRTABLE_SCHEMA_CACHE = {"actual_keys": [], "valid_fields": []}
 
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
@@ -55,8 +57,6 @@ PDF_KEYWORDS = {
     "pdf", "email", "send quote", "quote please", "email quote",
     "send me quote", "send it", "can you email"
 }
-
-logger.info("✅ [filter_response.py] loaded successfully — traceback available")
 
 # === GPT PROMPT ===
 
