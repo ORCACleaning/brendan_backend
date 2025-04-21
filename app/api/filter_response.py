@@ -1304,6 +1304,16 @@ async def handle_chat_init(session_id: str):
 router = APIRouter()
 
 @router.post("/filter-response")
+import time
+import traceback
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
+from app.services.quote_logic import generate_next_actions, handle_privacy_consent
+from app.services.pdf_generator import generate_quote_pdf
+from app.services.email_sender import send_quote_email
+from app.models import QuoteRequest
+from app.utils import log_debug_event, append_message_log, update_quote_record, get_quote_by_session, create_new_quote, should_calculate_quote, get_inline_quote_summary
+
 async def filter_response_entry(request: Request):
     try:
         # Parse the incoming JSON request
@@ -1390,3 +1400,101 @@ async def filter_response_entry(request: Request):
                 raise HTTPException(status_code=500, detail="Init failed.")
         
         # Existing logic continues here...
+        quote_data = get_quote_by_session(session_id)
+        if not isinstance(quote_data, dict) or "record_id" not in quote_data:
+            log_debug_event(None, "BACKEND", "Session Lookup Failed", f"No valid quote found for session: {session_id}")
+            raise HTTPException(status_code=404, detail="Quote not found.")
+
+        # Proceed with the quote processing if found
+        quote_id = quote_data.get("quote_id", "N/A")
+        record_id = quote_data.get("record_id", "")
+        quote_stage = quote_data.get("quote_stage", "Gathering Info")
+        fields = quote_data.get("fields", {})
+        log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
+
+        # Handle chat banning or progress through stages
+        if quote_stage == "Chat Banned":
+            log_debug_event(record_id, "BACKEND", "Blocked Chat", "Chat is banned — denying interaction")
+            return JSONResponse(content={
+                "properties": [],
+                "response": "This chat is closed. Call 1300 918 388 if you still need a quote.",
+                "next_actions": [],
+                "session_id": session_id
+            })
+
+        # Collect missing fields if any
+        if quote_stage == "Gathering Info":
+            REQUIRED_FIELDS = [
+                "customer_name", "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status"
+            ]
+            for field in REQUIRED_FIELDS:
+                if not fields.get(field):
+                    prompt = {
+                        "customer_name": "What name should I put on the quote?",
+                        "suburb": "What suburb is the property in?",
+                        "bedrooms_v2": "How many bedrooms are there?",
+                        "bathrooms_v2": "And how many bathrooms?",
+                        "furnished_status": "Is the property furnished or unfurnished?"
+                    }[field]
+
+                    append_message_log(record_id, message, "user")
+                    log_debug_event(record_id, "BACKEND", "Asking Missing Field", f"Missing: {field} → {prompt}")
+
+                    return JSONResponse(content={
+                        "properties": [],
+                        "response": prompt,
+                        "next_actions": generate_next_actions("Gathering Info", fields),  # Pass fields here
+                        "session_id": session_id
+                    })
+
+        # Proceed with regular quote processing if all required fields are present
+        append_message_log(record_id, message, "user")
+        message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
+        log_debug_event(record_id, "BACKEND", "Calling GPT", f"Input: {message[:100]}")
+
+        properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
+
+        if not reply:
+            log_debug_event(record_id, "BACKEND", "GPT Returned Empty Reply", "GPT response missing")
+
+        parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
+        log_debug_event(record_id, "BACKEND", "Parsed Properties", str(parsed))
+
+        # Ensure required fields are preserved if GPT does not provide them
+        for required in ["source", "bedrooms_v2", "bathrooms_v2"]:
+            if required not in parsed and required in fields:
+                parsed[required] = fields[required]
+                log_debug_event(record_id, "BACKEND", "Preserved Field", f"{required} = {fields[required]}")
+
+        updated_fields = fields.copy()
+        updated_fields.update(parsed)
+
+        if should_calculate_quote(updated_fields) and quote_stage != "Quote Calculated":
+            try:
+                log_debug_event(record_id, "BACKEND", "Triggering Quote Calculation", "All required fields present")
+                result = calculate_quote(QuoteRequest(**updated_fields))
+                quote_result = result.model_dump()
+                parsed.update(quote_result)
+                parsed["quote_stage"] = "Quote Calculated"
+                reply = get_inline_quote_summary({**quote_result, "record_id": record_id})
+                log_debug_event(record_id, "BACKEND", "Quote Generated", f"Total: ${parsed.get('total_price')} | Time: {parsed.get('estimated_time_mins')} mins")
+            except Exception as e:
+                log_debug_event(record_id, "BACKEND", "Quote Calc Error", traceback.format_exc())
+                reply = "I ran into an issue calculating your quote — want me to try again?"
+
+        log_debug_event(record_id, "BACKEND", "Saving Fields", f"{list(parsed.keys())}")
+        update_quote_record(record_id, parsed)
+        append_message_log(record_id, reply, "brendan")
+        log_debug_event(record_id, "BACKEND", "Returning Final Response", reply[:120])
+
+        return JSONResponse(content={
+            "properties": properties,
+            "response": reply,
+            "next_actions": generate_next_actions(parsed.get("quote_stage", quote_stage), fields),  # Pass fields here
+            "session_id": session_id
+        })
+
+    except Exception as e:
+        log_debug_event(None, "BACKEND", "Fatal Error", traceback.format_exc())
+        raise HTTPException(status_code=500, detail="Internal server error.")
+
