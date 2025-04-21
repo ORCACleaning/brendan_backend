@@ -875,6 +875,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         field, value = p["property"], p["value"]
         if field == "name" or field == "first_name":
             field = "customer_name"
+            if value:
+                # Store customer name in Airtable immediately
+                update_quote_record(record_id, {"customer_name": value})
+                log_debug_event(record_id, "GPT", "Customer Name Captured", f"Stored customer name: {value}")
         elif field == "bedrooms":
             field = "bedrooms_v2"
         elif field == "bathrooms":
