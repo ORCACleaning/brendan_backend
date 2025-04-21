@@ -1186,7 +1186,9 @@ async def handle_chat_init(session_id: str):
         log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
 
         # === Check for existing quote ===
+        log_debug_event(None, "BACKEND", "Session Lookup", f"Looking up session: {session_id}")
         existing = get_quote_by_session(session_id)
+
         quote_id, record_id, stage, fields = None, None, None, {}
 
         if isinstance(existing, dict):
@@ -1204,6 +1206,7 @@ async def handle_chat_init(session_id: str):
 
         # === Create new quote if needed ===
         if not existing:
+            log_debug_event(None, "BACKEND", "Creating Quote", f"No valid existing quote — creating new for session {session_id}")
             quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
             session_id = fields.get("session_id", session_id)
             log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session ID: {session_id}, Quote ID: {quote_id}, Record ID: {record_id}")
@@ -1219,7 +1222,7 @@ async def handle_chat_init(session_id: str):
             update_quote_record(record_id, {"debug_log": flushed})
             log_debug_event(record_id, "BACKEND", "Initial Debug Log Saved", "Flushed to Airtable")
 
-        # === Call GPT on __init__ (safe fallback applied) ===
+        # === Call GPT on __init__ (suppressed first) ===
         try:
             log_debug_event(record_id, "BACKEND", "Calling GPT (__init__)", "Triggering GPT intro response")
             properties, reply = await extract_properties_from_gpt4(
@@ -1233,13 +1236,35 @@ async def handle_chat_init(session_id: str):
                 "Let’s get started! What suburb is the property in, and how many bedrooms and bathrooms are we cleaning?"
             )
 
-        # === Log Brendan reply ===
         append_message_log(record_id, reply, "brendan")
-        log_debug_event(record_id, "BACKEND", "Init Complete", "Brendan sent first message")
+        log_debug_event(record_id, "BACKEND", "Initial Reply Logged", f"{len(reply)} chars")
+
+        # === 🔁 Immediately follow up with second GPT call ===
+        try:
+            log_debug_event(record_id, "GPT", "Follow-up Trigger", "Calling GPT after __init__ to continue")
+            follow_props, follow_reply = await extract_properties_from_gpt4(
+                "what’s next", fields.get("message_log", "")[-3000:], record_id=record_id, quote_id=quote_id
+            )
+            log_debug_event(record_id, "GPT", "Follow-up GPT Response", f"{len(follow_reply)} chars, {len(follow_props)} properties")
+        except Exception as e:
+            log_debug_event(record_id, "GPT", "Follow-up GPT Failed", str(e))
+            follow_props = []
+            follow_reply = None
+
+        if follow_reply:
+            append_message_log(record_id, follow_reply, "brendan")
+            log_debug_event(record_id, "BACKEND", "Follow-up Reply Logged", f"{len(follow_reply)} chars")
+        else:
+            log_debug_event(record_id, "BACKEND", "Follow-up Skipped", "No reply returned")
+
+        all_props = properties + follow_props if follow_props else properties
+        final_reply = follow_reply if follow_reply else reply
+
+        log_debug_event(record_id, "BACKEND", "Init Complete", f"Final response sent. Length: {len(final_reply)}")
 
         return JSONResponse(content={
-            "properties": properties,
-            "response": reply,
+            "properties": all_props,
+            "response": final_reply,
             "next_actions": [],
             "session_id": session_id
         })
