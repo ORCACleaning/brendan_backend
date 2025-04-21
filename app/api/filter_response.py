@@ -445,69 +445,65 @@ def update_quote_record(record_id: str, fields: dict):
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
         corrected_key = next((k for k in actual_keys if k.lower() == key.lower()), key)
+        raw_value_str = str(value)
+
+        log_debug_event(record_id, "BACKEND", "Raw Field Input", f"{raw_key} → {corrected_key} = {raw_value_str}")
 
         if corrected_key not in actual_keys:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
             continue
 
-        if corrected_key == "carpet_cleaning":
-            val = str(value).strip().capitalize()
-            value = val if val in {"Yes", "No"} else ""
-        elif corrected_key == "furnished":
-            val = str(value).strip().lower()
-            if "unfurnished" in val:
-                value = "Unfurnished"
-            elif "furnished" in val:
-                value = "Furnished"
-            else:
-                value = ""
-        elif corrected_key in INTEGER_FIELDS:
-            try:
+        try:
+            if corrected_key == "carpet_cleaning":
+                val = str(value).strip().capitalize()
+                value = val if val in {"Yes", "No"} else ""
+            elif corrected_key == "furnished":
+                val = str(value).strip().lower()
+                if "unfurnished" in val:
+                    value = "Unfurnished"
+                elif "furnished" in val:
+                    value = "Furnished"
+                else:
+                    value = ""
+            elif corrected_key in INTEGER_FIELDS:
                 value = int(float(value))
                 if value > MAX_REASONABLE_INT:
                     logger.warning(f"⚠️ Clamping large int for {corrected_key}: {value}")
                     value = MAX_REASONABLE_INT
-            except:
-                value = 0
-        elif corrected_key in BOOLEAN_FIELDS:
-            value = value if isinstance(value, bool) else str(value).strip().lower() in {"yes", "true", "1", "on", "checked", "t"}
-        elif corrected_key in {
-            "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
-            "estimated_time_mins", "discount_applied", "mandurah_surcharge",
-            "after_hours_surcharge", "weekend_surcharge", "calculated_hours"
-        }:
-            try:
+            elif corrected_key in BOOLEAN_FIELDS:
+                value = value if isinstance(value, bool) else str(value).strip().lower() in {"yes", "true", "1", "on", "checked", "t"}
+            elif corrected_key in {
+                "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
+                "estimated_time_mins", "discount_applied", "mandurah_surcharge",
+                "after_hours_surcharge", "weekend_surcharge", "calculated_hours"
+            }:
                 value = float(value)
-            except:
-                value = 0.0
-        elif corrected_key == "special_requests":
-            if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
-                value = ""
-            else:
-                value = str(value).strip()
-        elif corrected_key == "extra_hours_requested":
-            try:
+            elif corrected_key == "special_requests":
+                if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
+                    value = ""
+                else:
+                    value = str(value).strip()
+            elif corrected_key == "extra_hours_requested":
                 value = float(value) if value not in [None, ""] else 0.0
-            except:
-                value = 0.0
-        elif corrected_key == "pdf_url":
-            value = str(value).strip()
-        else:
-            value = "" if value is None else str(value).strip()
+            elif corrected_key == "pdf_url":
+                value = str(value).strip()
+            else:
+                value = "" if value is None else str(value).strip()
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to normalize {corrected_key}: {e}")
+            log_debug_event(record_id, "BACKEND", "Normalization Error", f"{corrected_key}: {e}")
+            continue
 
-        # 🚫 Skip invalid blank values for select fields
         if corrected_key in SELECT_FIELDS and value == "":
             logger.warning(f"⚠️ Skipping empty select field: {corrected_key}")
             continue
 
         normalized_fields[corrected_key] = value
 
-    # Add debug_log and message_log if present
     for log_field in ["debug_log", "message_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] is not None else ""
 
-    # Always flush debug log last
     debug_log = flush_debug_log(record_id)
     if debug_log:
         normalized_fields["debug_log"] = debug_log
@@ -526,7 +522,6 @@ def update_quote_record(record_id: str, fields: dict):
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(validated_fields, indent=2)}")
 
-    # === Primary Bulk Update ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": validated_fields})
         if res.ok:
@@ -542,7 +537,6 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Exception in Airtable bulk update: {e}")
         log_debug_event(record_id, "BACKEND", "Bulk Update Exception", str(e))
 
-    # === Fallback One-By-One Field Update ===
     successful = []
     for key, value in validated_fields.items():
         try:
