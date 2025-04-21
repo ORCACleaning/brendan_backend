@@ -431,6 +431,7 @@ def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
     Handles batching, safe select handling, debug flushing, and fallback logic.
+    Logs full trace for validation, normalization, payload, success and failures.
     """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
@@ -442,6 +443,8 @@ def update_quote_record(record_id: str, fields: dict):
         "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
         "Content-Type": "application/json"
     }
+
+    log_debug_event(record_id, "BACKEND", "Function Start", f"update_quote_record(record_id={record_id}, fields={list(fields.keys())})")
 
     # === Pull schema cache ===
     actual_keys = AIRTABLE_SCHEMA_CACHE["actual_keys"]
@@ -456,9 +459,11 @@ def update_quote_record(record_id: str, fields: dict):
                     actual_keys = {f["name"] for f in table.get("fields", [])}
                     AIRTABLE_SCHEMA_CACHE["actual_keys"] = actual_keys
                     AIRTABLE_SCHEMA_CACHE["fetched"] = True
+                    log_debug_event(record_id, "BACKEND", "Schema Cached", f"{len(actual_keys)} fields loaded from Airtable schema")
                     break
         except Exception as e:
             logger.warning(f"⚠️ Could not fetch Airtable field schema: {e}")
+            log_debug_event(record_id, "BACKEND", "Schema Fetch Failed", str(e))
 
     # === Normalize and validate ===
     normalized_fields = {}
@@ -473,52 +478,51 @@ def update_quote_record(record_id: str, fields: dict):
 
         if corrected_key not in actual_keys:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
+            log_debug_event(record_id, "BACKEND", "Field Skipped", f"{corrected_key} not in Airtable schema")
             continue
 
         try:
             if corrected_key == "carpet_cleaning":
                 val = str(value).strip().capitalize()
                 value = val if val in {"Yes", "No"} else ""
-
             elif corrected_key == "furnished":
                 val = str(value).strip().capitalize()
                 value = val if val in {"Furnished", "Unfurnished"} else ""
-
             elif corrected_key == "quote_stage":
-                if str(value).strip() not in {"Gathering Info", "Quote Calculated", "Gathering Personal Info", "Personal Info Received", "Booking Confirmed", "Abuse Warning", "Chat Banned"}:
+                allowed = {
+                    "Gathering Info", "Quote Calculated", "Gathering Personal Info",
+                    "Personal Info Received", "Booking Confirmed", "Abuse Warning", "Chat Banned"
+                }
+                if str(value).strip() not in allowed:
+                    log_debug_event(record_id, "BACKEND", "Quote Stage Rejected", f"{value} not in {allowed}")
                     continue
-
             elif corrected_key in INTEGER_FIELDS:
                 if not isinstance(value, (int, float)):
                     value = int(float(value))
                 if value > MAX_REASONABLE_INT:
                     logger.warning(f"⚠️ Clamping large int for {corrected_key}: {value}")
+                    log_debug_event(record_id, "BACKEND", "Int Clamped", f"{corrected_key}: {value}")
                     value = MAX_REASONABLE_INT
-
             elif corrected_key in BOOLEAN_FIELDS:
                 if not isinstance(value, bool):
+                    original = value
                     value = str(value).strip().lower() in {"yes", "true", "1", "on", "checked", "t"}
-
+                    log_debug_event(record_id, "BACKEND", "Bool Normalized", f"{corrected_key}: {original} → {value}")
             elif corrected_key in {
                 "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
                 "estimated_time_mins", "discount_applied", "mandurah_surcharge",
                 "after_hours_surcharge", "weekend_surcharge", "calculated_hours"
             }:
-                if not isinstance(value, (int, float)):
-                    value = float(value)
-
+                value = float(value)
             elif corrected_key == "special_requests":
                 if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                     value = ""
                 else:
                     value = str(value).strip()
-
             elif corrected_key == "extra_hours_requested":
                 value = float(value) if value not in [None, ""] else 0.0
-
             elif corrected_key == "pdf_url":
                 value = str(value).strip()
-
             else:
                 if not isinstance(value, (int, float, bool)):
                     value = "" if value is None else str(value).strip()
@@ -530,11 +534,12 @@ def update_quote_record(record_id: str, fields: dict):
 
         if corrected_key in SELECT_FIELDS and value == "":
             logger.warning(f"⚠️ Skipping empty select field: {corrected_key}")
+            log_debug_event(record_id, "BACKEND", "Empty Select Skipped", corrected_key)
             continue
 
         normalized_fields[corrected_key] = value
 
-    # Always flush logs
+    # Always flush logs if present
     for log_field in ["debug_log", "message_log"]:
         if log_field in fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] else ""
@@ -544,21 +549,18 @@ def update_quote_record(record_id: str, fields: dict):
         normalized_fields["debug_log"] = debug_log
         log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(debug_log)} chars flushed to Airtable")
 
-    # === Skip if nothing to update ===
     if not normalized_fields:
-        log_debug_event(record_id, "BACKEND", "Update Skipped", "No valid fields to apply.")
+        log_debug_event(record_id, "BACKEND", "Update Skipped", "No normalized fields to update.")
         return []
 
-    # Final filter based on Airtable schema
     validated_fields = {k: v for k, v in normalized_fields.items() if k in actual_keys}
     if not validated_fields:
-        log_debug_event(record_id, "BACKEND", "Validation Failed", "No matching fields for schema.")
+        log_debug_event(record_id, "BACKEND", "Validation Failed", "All fields invalid after schema filtering.")
         return []
 
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
     logger.info(f"🛠 Payload: {json.dumps(validated_fields, indent=2)}")
 
-    # === Try bulk update ===
     try:
         res = requests.patch(url, headers=headers, json={"fields": validated_fields})
         if res.ok:
@@ -569,14 +571,15 @@ def update_quote_record(record_id: str, fields: dict):
         logger.error(f"❌ Airtable bulk update failed ({res.status_code})")
         try:
             logger.error(f"🧾 Airtable Error: {res.json()}")
+            log_debug_event(record_id, "BACKEND", "Airtable Error", str(res.json()))
         except:
             logger.error("🧾 Airtable Error: (non-JSON)")
+            log_debug_event(record_id, "BACKEND", "Airtable Error", "Non-JSON response")
 
     except Exception as e:
         logger.error(f"❌ Exception in Airtable bulk update: {e}")
         log_debug_event(record_id, "BACKEND", "Bulk Update Exception", str(e))
 
-    # === Fallback to individual field updates ===
     successful = []
     for key, value in validated_fields.items():
         try:
@@ -596,6 +599,7 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Failed", "No fields updated in fallback.")
 
     return successful
+
 
 
 # === Inline Quote Summary Helper ===
