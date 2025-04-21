@@ -854,7 +854,6 @@ def generate_next_actions(quote_stage: str, fields: dict):
 
 
 # === GPT Extraction (Production-Grade) ===
-
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     logger.info(f"🟡 extract_properties_from_gpt4() called — record_id: {record_id}, message: {message}")
     
@@ -924,129 +923,128 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready")
 
     def call_gpt_and_parse(attempt=1):
-    """
-    Calls GPT-4 and processes the response.
-    Implements retries and error handling for invalid or incomplete responses.
-    """
-    max_retries = 3
-    retry_delay = 5  # Delay in seconds between retries
-    parsed = None
+        """
+        Calls GPT-4 and processes the response.
+        Implements retries and error handling for invalid or incomplete responses.
+        """
+        max_retries = 3
+        retry_delay = 5  # Delay in seconds between retries
+        parsed = None
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            res = client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=messages,
-                max_tokens=3000,
-                temperature=0.4
-            )
-            raw = res.choices[0].message.content.strip()
-            log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
-            log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
+        for attempt in range(1, max_retries + 1):
+            try:
+                res = client.chat.completions.create(
+                    model="gpt-4-turbo",
+                    messages=messages,
+                    max_tokens=3000,
+                    temperature=0.4
+                )
+                raw = res.choices[0].message.content.strip()
+                log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
+                log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
 
-            # Check if raw response is malformed before attempting parsing
-            if not raw:
-                log_debug_event(record_id, "GPT", f"Empty Response (Attempt {attempt})", "GPT response is empty.")
-                return None
+                # Check if raw response is malformed before attempting parsing
+                if not raw:
+                    log_debug_event(record_id, "GPT", f"Empty Response (Attempt {attempt})", "GPT response is empty.")
+                    return None
 
-            start, end = raw.find("{"), raw.rfind("}")
-            parsed = json.loads(raw[start:end + 1])  # Safe parsing
-            break  # Exit loop if parsing is successful
+                start, end = raw.find("{"), raw.rfind("}")
+                parsed = json.loads(raw[start:end + 1])  # Safe parsing
+                break  # Exit loop if parsing is successful
 
-        except Exception as e:
-            log_debug_event(record_id, "GPT", f"Parse Failed Attempt {attempt}", str(e))
-            if attempt < max_retries:
-                log_debug_event(record_id, "GPT", "Retrying", f"Retrying after {retry_delay}s...")
-                time.sleep(retry_delay)  # Wait before retrying
-            else:
-                log_debug_event(record_id, "GPT", "Final Parse Failed", f"Error after {max_retries} attempts: {str(e)}")
-                return None  # After all retries, return None
+            except Exception as e:
+                log_debug_event(record_id, "GPT", f"Parse Failed Attempt {attempt}", str(e))
+                if attempt < max_retries:
+                    log_debug_event(record_id, "GPT", "Retrying", f"Retrying after {retry_delay}s...")
+                    time.sleep(retry_delay)  # Wait before retrying
+                else:
+                    log_debug_event(record_id, "GPT", "Final Parse Failed", f"Error after {max_retries} attempts: {str(e)}")
+                    return None  # After all retries, return None
 
-    if not isinstance(parsed, dict):
-        messages.insert(1, {
-            "role": "system",
-            "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."
-        })
-        return call_gpt_and_parse(attempt + 1)  # Retry if response is still not a valid JSON
+        if not isinstance(parsed, dict):
+            messages.insert(1, {
+                "role": "system",
+                "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."
+            })
+            return call_gpt_and_parse(attempt + 1)  # Retry if response is still not a valid JSON
 
-    if "properties" not in parsed or "response" not in parsed:
-        log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
-        fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-        log_debug_event(record_id, "GPT", "Final Reply", fallback)
-        flushed = flush_debug_log(record_id)
-        if flushed:
-            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
-        return [{"property": "source", "value": "Brendan"}], fallback
-
-    raw_props = parsed.get("properties", [])
-    reply = parsed.get("response", "").strip()
-
-    # Handling malformed props
-    if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
-        log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
-        fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-        log_debug_event(record_id, "GPT", "Final Reply", fallback)
-        flushed = flush_debug_log(record_id)
-        if flushed:
-            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
-        return [{"property": "source", "value": "Brendan"}], fallback
-
-    if isinstance(raw_props, dict):
-        raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
-        log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
-    elif not isinstance(raw_props, list):
-        log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)}")
-        raw_props = []
-
-    log_debug_event(record_id, "GPT", "Parsed GPT Response", f"Reply: {reply[:100]} | Props: {len(raw_props)}")
-
-    safe_props = []
-    for p in raw_props:
-        if not isinstance(p, dict) or "property" not in p or "value" not in p:
-            log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
-            continue
-        field, value = p["property"], p["value"]
-        if field == "name" or field == "first_name":
-            field = "customer_name"
-            if value:
-                # Store customer name in Airtable immediately
-                update_quote_record(record_id, {"customer_name": value})
-                log_debug_event(record_id, "GPT", "Customer Name Captured", f"Stored customer name: {value}")
-        elif field == "bedrooms":
-            field = "bedrooms_v2"
-        elif field == "bathrooms":
-            field = "bathrooms_v2"
-        elif field == "furnished":
-            field = "furnished_status"
-        if field in VALID_AIRTABLE_FIELDS:
-            safe_props.append({"property": field, "value": value})
-        else:
-            log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
-
-    safe_props = [p for p in safe_props if p["property"] != "source"]
-    safe_props.append({"property": "source", "value": "Brendan"})
-    log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
-    log_debug_event(record_id, "GPT", "Final Reply", reply)
-    log_debug_event(record_id, "GPT", "Function Return Payload", str(safe_props))
-
-    flushed = flush_debug_log(record_id)
-    if flushed:
-        update_quote_record(record_id, {"debug_log": flushed})
-
-    if not safe_props or all(p["property"] == "source" for p in safe_props):
-        if len(message.split()) == 1 and message.isalpha():
-            guessed_name = message.strip().title()
-            log_debug_event(record_id, "GPT", "Name Fallback Injected", f"customer_name = {guessed_name}")
-            log_debug_event(record_id, "GPT", "Final Reply", f"Thanks {guessed_name}! Let’s keep going.")
+        if "properties" not in parsed or "response" not in parsed:
+            log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
+            fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
+            log_debug_event(record_id, "GPT", "Final Reply", fallback)
+            flushed = flush_debug_log(record_id)
             if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
-            return [
-                {"property": "customer_name", "value": guessed_name},
-                {"property": "source", "value": "Brendan"}
-            ], f"Thanks {guessed_name}! Let’s keep going."
+                update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+            return [{"property": "source", "value": "Brendan"}], fallback
 
-    return safe_props, reply
+        raw_props = parsed.get("properties", [])
+        reply = parsed.get("response", "").strip()
 
+        # Handling malformed props
+        if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
+            log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
+            fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
+            log_debug_event(record_id, "GPT", "Final Reply", fallback)
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+            return [{"property": "source", "value": "Brendan"}], fallback
+
+        if isinstance(raw_props, dict):
+            raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
+            log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
+        elif not isinstance(raw_props, list):
+            log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)}")
+            raw_props = []
+
+        log_debug_event(record_id, "GPT", "Parsed GPT Response", f"Reply: {reply[:100]} | Props: {len(raw_props)}")
+
+        safe_props = []
+        for p in raw_props:
+            if not isinstance(p, dict) or "property" not in p or "value" not in p:
+                log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
+                continue
+            field, value = p["property"], p["value"]
+            if field == "name" or field == "first_name":
+                field = "customer_name"
+                if value:
+                    # Store customer name in Airtable immediately
+                    update_quote_record(record_id, {"customer_name": value})
+                    log_debug_event(record_id, "GPT", "Customer Name Captured", f"Stored customer name: {value}")
+            elif field == "bedrooms":
+                field = "bedrooms_v2"
+            elif field == "bathrooms":
+                field = "bathrooms_v2"
+            elif field == "furnished":
+                field = "furnished_status"
+            if field in VALID_AIRTABLE_FIELDS:
+                safe_props.append({"property": field, "value": value})
+            else:
+                log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
+
+        safe_props = [p for p in safe_props if p["property"] != "source"]
+        safe_props.append({"property": "source", "value": "Brendan"})
+        log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
+        log_debug_event(record_id, "GPT", "Final Reply", reply)
+        log_debug_event(record_id, "GPT", "Function Return Payload", str(safe_props))
+
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed})
+
+        if not safe_props or all(p["property"] == "source" for p in safe_props):
+            if len(message.split()) == 1 and message.isalpha():
+                guessed_name = message.strip().title()
+                log_debug_event(record_id, "GPT", "Name Fallback Injected", f"customer_name = {guessed_name}")
+                log_debug_event(record_id, "GPT", "Final Reply", f"Thanks {guessed_name}! Let’s keep going.")
+                if flushed:
+                    update_quote_record(record_id, {"debug_log": flushed})
+                return [
+                    {"property": "customer_name", "value": guessed_name},
+                    {"property": "source", "value": "Brendan"}
+                ], f"Thanks {guessed_name}! Let’s keep going."
+
+        return safe_props, reply
 
 
 # === GPT Error Email Alert ===
