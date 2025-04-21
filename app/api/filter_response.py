@@ -260,17 +260,19 @@ def create_new_quote(session_id: str, force_new: bool = False):
             "Content-Type": "application/json"
         }
 
+        timestamp = datetime.utcnow().isoformat()
         fields = {
             "session_id": session_id,
             "quote_id": quote_id,
             "quote_stage": "Gathering Info",
             "privacy_acknowledged": False,
-            "source": "Brendan"
+            "source": "Brendan",
+            "timestamp": timestamp
         }
 
-        # 🚨 Pre-send Logging
         logger.info(f"📤 Creating new quote with payload:\n{json.dumps(fields, indent=2)}")
-        log_debug_event(None, "BACKEND", "Creating New Quote", f"Session: {session_id}, Quote ID: {quote_id}")
+        log_debug_event(None, "BACKEND", "Function Start", f"create_new_quote(session_id={session_id}, force_new={force_new})")
+        log_debug_event(None, "BACKEND", "Creating New Quote", f"Session: {session_id}, Quote ID: {quote_id}, Timestamp: {timestamp}")
 
         payload = {"fields": fields}
         res = requests.post(url, headers=headers, json=payload)
@@ -281,12 +283,19 @@ def create_new_quote(session_id: str, force_new: bool = False):
         returned_fields = response.get("fields", {})
 
         logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
-        log_debug_event(record_id, "BACKEND", "New Quote Created", f"Quote ID: {quote_id}, Session ID: {session_id}")
+        log_debug_event(record_id, "BACKEND", "New Quote Created", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
 
-        # ✅ Immediately flush and store debug_log
+        # Extra validation
+        required = ["session_id", "quote_id", "quote_stage", "source", "timestamp"]
+        for r in required:
+            if r not in returned_fields:
+                log_debug_event(record_id, "BACKEND", "Missing Field After Creation", f"{r} is missing in returned_fields")
+
+        # Flush and store debug log
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
+            log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(flushed)} chars flushed post-create")
 
         return quote_id, record_id, "Gathering Info", returned_fields
 
@@ -300,6 +309,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.error(f"❌ Unexpected exception during quote creation: {e}")
         log_debug_event(None, "BACKEND", "Quote Creation Exception", str(e))
         raise HTTPException(status_code=500, detail="Quote creation failed — unexpected error.")
+
 
 # === Get Quote by Session ===
 
@@ -799,15 +809,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     logger.info(f"🟡 DEBUG: extract_properties_from_gpt4() called — msg: {message}, record_id: {record_id}")
     if record_id:
-        log_debug_event(record_id, "BACKEND", "DEBUG", f"extract_properties_from_gpt4() called with message: {message[:100]}")
+        log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(message={message[:80]})")
 
     if message.strip() == "__init__":
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
         return [], "Just a moment while I get us started..."
 
-    logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
-    if record_id:
-        log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
+    log_debug_event(record_id, "GPT", "GPT Triggered", "Preparing to call GPT-4 for property extraction")
 
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
@@ -815,24 +823,24 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "Just let me know what suburb we’re quoting for, how many bedrooms and bathrooms there are, "
             "and whether the property is furnished or unfurnished."
         )
-        if record_id:
-            log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
+        log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
-    # === Pull existing fields if record_id available ===
+    # === Fetch fields ===
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
             record = get_quote_by_session(session_id=record_id)
             if isinstance(record, dict):
                 existing_fields = record.get("fields", {})
+                log_debug_event(record_id, "GPT", "Fields Fetched", f"{len(existing_fields)} existing fields loaded")
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
-    # === Build GPT message history ===
+    # === Build GPT messages ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
         "role": "system",
@@ -857,12 +865,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             messages.append({"role": "system", "content": line[7:].strip()})
 
     suppress = []
-    if existing_fields.get("customer_name"): suppress.append("customer_name")
-    if existing_fields.get("suburb"): suppress.append("suburb")
-    if existing_fields.get("bedrooms_v2"): suppress.append("bedrooms")
-    if existing_fields.get("bathrooms_v2"): suppress.append("bathrooms")
-    if existing_fields.get("furnished_status"): suppress.append("furnished")
-
+    for k, v in existing_fields.items():
+        if v and k in {"customer_name", "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status"}:
+            suppress.append(k)
     if suppress:
         messages.append({
             "role": "system",
@@ -951,6 +956,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props = [p for p in safe_props if p["property"] != "source"]
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Injected", "source = Brendan")
+    log_debug_event(record_id, "GPT", "Parsed Properties", f"{len(props)} properties extracted")
 
     if record_id:
         flushed = flush_debug_log(record_id)
@@ -1178,8 +1184,9 @@ async def handle_privacy_consent(message: str, message_lower: str, record_id: st
 async def handle_chat_init(session_id: str):
     try:
         log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
-        existing = get_quote_by_session(session_id)
 
+        # === Check for existing quote ===
+        existing = get_quote_by_session(session_id)
         quote_id, record_id, stage, fields = None, None, None, {}
 
         if isinstance(existing, dict):
@@ -1187,29 +1194,38 @@ async def handle_chat_init(session_id: str):
             record_id = existing.get("record_id")
             stage = existing.get("quote_stage", "Gathering Info")
             fields = existing.get("fields", {})
-
             timestamp = fields.get("timestamp")
-            if not timestamp or stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"]:
-                log_debug_event(record_id, "BACKEND", "Stale Quote", f"Stage: {stage}, Timestamp: {timestamp}")
-                existing = None  # Force new quote
 
+            log_debug_event(record_id, "BACKEND", "Existing Quote Found", f"Quote ID: {quote_id}, Stage: {stage}, Timestamp: {timestamp}")
+
+            if not timestamp or stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"]:
+                log_debug_event(record_id, "BACKEND", "Forcing New Quote", f"Stale or locked — Timestamp: {timestamp}, Stage: {stage}")
+                existing = None  # Trigger new quote creation
+
+        # === Create new quote if needed ===
         if not existing:
             quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
             session_id = fields.get("session_id", session_id)
-            log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}")
+            log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session ID: {session_id}, Quote ID: {quote_id}, Record ID: {record_id}")
 
+        # === SYSTEM log entry ===
         append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
+        log_debug_event(record_id, "BACKEND", "System Message Logged", "Brendan start trigger recorded")
 
+        # === Flush initial debug log ===
         flushed = flush_debug_log(record_id)
         if flushed:
+            log_debug_event(record_id, "BACKEND", "Flushing Initial Debug Log", f"{len(flushed)} chars")
             update_quote_record(record_id, {"debug_log": flushed})
+            log_debug_event(record_id, "BACKEND", "Initial Debug Log Saved", "Flushed to Airtable")
 
-        # === GPT CALL WITH FALLBACK ===
+        # === Call GPT on __init__ (safe fallback applied) ===
         try:
-            log_debug_event(record_id, "BACKEND", "Calling GPT", "Calling GPT on __init__")
+            log_debug_event(record_id, "BACKEND", "Calling GPT (__init__)", "Triggering GPT intro response")
             properties, reply = await extract_properties_from_gpt4(
                 "__init__", "USER: __init__", record_id=record_id, quote_id=quote_id, skip_log_lookup=True
             )
+            log_debug_event(record_id, "GPT", "Init GPT Response", f"{len(reply)} chars, {len(properties)} properties")
         except Exception as e:
             log_debug_event(record_id, "GPT", "Init GPT Call Failed", str(e))
             properties = [{"property": "source", "value": "Brendan"}]
@@ -1217,8 +1233,9 @@ async def handle_chat_init(session_id: str):
                 "Let’s get started! What suburb is the property in, and how many bedrooms and bathrooms are we cleaning?"
             )
 
+        # === Log Brendan reply ===
         append_message_log(record_id, reply, "brendan")
-        log_debug_event(record_id, "BACKEND", "Init Complete", "Brendan sent first message.")
+        log_debug_event(record_id, "BACKEND", "Init Complete", "Brendan sent first message")
 
         return JSONResponse(content={
             "properties": properties,
@@ -1237,6 +1254,7 @@ async def handle_chat_init(session_id: str):
 router = APIRouter()
 
 @router.post("/filter-response")
+@router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
@@ -1244,6 +1262,7 @@ async def filter_response_entry(request: Request):
         session_id = str(body.get("session_id", "")).strip()
 
         if not session_id:
+            log_debug_event(None, "BACKEND", "Session Error", "No session_id provided in request")
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
         log_debug_event(None, "BACKEND", "Incoming Message", f"Session: {session_id}, Message: {message}")
@@ -1252,7 +1271,9 @@ async def filter_response_entry(request: Request):
         if message.lower() == "__init__":
             try:
                 log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
-                return await handle_chat_init(session_id)
+                response = await handle_chat_init(session_id)
+                log_debug_event(None, "BACKEND", "Init Response Returned", f"handle_chat_init() completed for session: {session_id}")
+                return response
             except Exception as e:
                 log_debug_event(None, "BACKEND", "Init Error", str(e))
                 raise HTTPException(status_code=500, detail="Init failed.")
@@ -1260,7 +1281,9 @@ async def filter_response_entry(request: Request):
         # === Session Lookup ===
         log_debug_event(None, "BACKEND", "Session Lookup Start", f"Session ID: {session_id}")
         quote_data = get_quote_by_session(session_id)
+
         if not isinstance(quote_data, dict) or "record_id" not in quote_data:
+            log_debug_event(None, "BACKEND", "Session Lookup Failed", f"No valid quote found for session: {session_id}")
             raise HTTPException(status_code=404, detail="Quote not found.")
 
         quote_id = quote_data.get("quote_id", "N/A")
@@ -1333,6 +1356,9 @@ async def filter_response_entry(request: Request):
 
         properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
 
+        if not reply:
+            log_debug_event(record_id, "BACKEND", "Empty Reply", "GPT returned empty reply — check GPT logic")
+
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         updated_fields = fields.copy()
         updated_fields.update(parsed)
@@ -1357,8 +1383,11 @@ async def filter_response_entry(request: Request):
                 reply = "I ran into an issue calculating your quote — want me to try again?"
 
         # === Final Save ===
+        log_debug_event(record_id, "BACKEND", "Saving Parsed Fields", f"Fields to update: {list(parsed.keys())}")
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
+
+        log_debug_event(record_id, "BACKEND", "Returning Response", f"Response: {reply[:80]}...")
 
         return JSONResponse(content={
             "properties": properties,
@@ -1370,4 +1399,5 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
+
 
