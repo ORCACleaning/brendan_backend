@@ -804,8 +804,12 @@ def generate_next_actions(quote_stage: str):
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
+    import re
+    import json
+    from app.services.openai_client import client
     from app.services.quote_logic import should_calculate_quote
     from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS
+    from app.backend.helpers import get_quote_by_session, update_quote_record, flush_debug_log, log_debug_event
 
     logger.info(f"🟡 DEBUG: extract_properties_from_gpt4() called — msg: {message}, record_id: {record_id}")
     if record_id:
@@ -827,18 +831,21 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
-    # === Fetch existing fields ===
+    # === Fetch existing fields from Airtable ===
     existing_fields = {}
+    session_id_lookup = None
     if record_id and not skip_log_lookup:
         try:
-            record = get_quote_by_session(session_id=record_id)
-            if isinstance(record, dict):
-                existing_fields = record.get("fields", {})
+            log_debug_event(record_id, "BACKEND", "Session Lookup", f"Calling get_quote_by_session() with record_id={record_id}")
+            quote_data = get_quote_by_session(session_id=quote_id) if quote_id else get_quote_by_session(record_id)
+            if isinstance(quote_data, dict):
+                existing_fields = quote_data.get("fields", {})
+                session_id_lookup = quote_data.get("fields", {}).get("session_id", "")
                 log_debug_event(record_id, "GPT", "Fields Fetched", f"{len(existing_fields)} existing fields loaded")
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
-    # === Prepare GPT message context ===
+    # === Prepare GPT context ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
         "role": "system",
@@ -875,16 +882,16 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
+    # === GPT Call ===
     def call_gpt_and_parse(msgs, attempt=1):
         try:
+            log_debug_event(record_id, "GPT", f"Calling GPT (Attempt {attempt})", f"{len(msgs)} messages sent")
             res = client.chat.completions.create(
                 model="gpt-4-turbo",
                 messages=msgs,
                 max_tokens=3000,
                 temperature=0.4
             )
-            if not res.choices or not res.choices[0].message or not res.choices[0].message.content:
-                raise ValueError("GPT response missing content.")
             raw = res.choices[0].message.content.strip()
             log_debug_event(record_id, "GPT", f"Raw Attempt {attempt}", raw[:300])
             start, end = raw.find("{"), raw.rfind("}")
@@ -916,6 +923,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], reply
 
+    # === Parse + Remap properties ===
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
@@ -934,7 +942,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], reply
 
-    # === Remap and filter properties ===
     safe_props = []
     for p in raw_props:
         if not isinstance(p, dict) or "property" not in p or "value" not in p:
@@ -944,6 +951,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         field = p["property"]
         value = p["value"]
 
+        # Remap common aliases
         if field == "name" or field == "first_name":
             field = "customer_name"
         elif field == "bedrooms":
@@ -966,7 +974,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], reply
 
-    # Final props list
     props = [p for p in safe_props if p["property"] != "source"]
     props.append({"property": "source", "value": "Brendan"})
 
@@ -979,6 +986,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 # === GPT Error Email Alert ===
 
