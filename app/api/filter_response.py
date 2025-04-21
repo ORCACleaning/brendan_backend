@@ -779,6 +779,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     from app.services.quote_logic import should_calculate_quote
     from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS
 
+    logger.info(f"🟡 DEBUG: extract_properties_from_gpt4() called — msg: {message}, record_id: {record_id}")
+    if record_id:
+        log_debug_event(record_id, "BACKEND", "DEBUG", f"extract_properties_from_gpt4() called with message: {message[:100]}")
+
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
@@ -800,13 +804,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
-            result = get_quote_by_session(session_id=record_id)  # 👈 critical bug — FIXED below
-            if isinstance(result, tuple) and len(result) == 4:
-                _, _, _, existing_fields = result
+            record = get_quote_by_session(record_id)  # ✅ fixed (not session_id)
+            if isinstance(record, dict):
+                existing_fields = record.get("fields", {})
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
-    # === Build message context ===
+    # === Build GPT message history ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
         "role": "system",
@@ -859,6 +863,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
+    # === GPT Call + Parser ===
     def call_gpt_and_parse(msgs, attempt=1):
         try:
             res = client.chat.completions.create(
