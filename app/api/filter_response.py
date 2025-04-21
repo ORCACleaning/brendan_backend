@@ -255,8 +255,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
             "quote_id": quote_id,
             "quote_stage": "Gathering Info",
             "privacy_acknowledged": False,
-            "source": "Brendan",
-            "timestamp": timestamp
+            "source": "Brendan"
         }
 
         logger.info(f"📤 Creating new quote with payload:\n{json.dumps(fields, indent=2)}")
@@ -275,7 +274,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
         log_debug_event(record_id, "BACKEND", "New Quote Created", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
 
         # Extra validation
-        required = ["session_id", "quote_id", "quote_stage", "source", "timestamp"]
+        required = ["session_id", "quote_id", "quote_stage", "source"]
         for r in required:
             if r not in returned_fields:
                 log_debug_event(record_id, "BACKEND", "Missing Field After Creation", f"{r} is missing in returned_fields")
