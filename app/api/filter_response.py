@@ -1269,7 +1269,6 @@ async def handle_chat_init(session_id: str):
 router = APIRouter()
 
 @router.post("/filter-response")
-@router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
@@ -1305,7 +1304,7 @@ async def filter_response_entry(request: Request):
         record_id = quote_data.get("record_id", "")
         quote_stage = quote_data.get("quote_stage", "Gathering Info")
         fields = quote_data.get("fields", {})
-        log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}")
+        log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
 
         # === Block if banned ===
         if quote_stage == "Chat Banned":
@@ -1319,7 +1318,7 @@ async def filter_response_entry(request: Request):
 
         # === Privacy Consent Flow ===
         if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
-            log_debug_event(record_id, "BACKEND", "Awaiting Privacy Consent", "Delegating to privacy handler")
+            log_debug_event(record_id, "BACKEND", "Awaiting Privacy Consent", f"privacy_acknowledged: {fields.get('privacy_acknowledged')}")
             return await handle_privacy_consent(message, message.lower(), record_id, session_id)
 
         # === PDF Flow ===
@@ -1327,15 +1326,16 @@ async def filter_response_entry(request: Request):
             name = fields.get("customer_name", "").strip()
             email = fields.get("customer_email", "").strip()
             phone = fields.get("customer_phone", "").strip()
+            log_debug_event(record_id, "BACKEND", "PDF Flow Check", f"name={name}, email={email}, phone={phone}")
 
             if name and email and phone:
                 try:
-                    log_debug_event(record_id, "BACKEND", "Generating PDF", f"Preparing PDF for: {name} ({email})")
+                    log_debug_event(record_id, "BACKEND", "Generating PDF", f"Preparing for: {name} ({email})")
                     pdf_path = generate_quote_pdf(fields)
                     send_quote_email(email, name, pdf_path, quote_id)
                     update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
                     append_message_log(record_id, f"PDF quote sent to {email}", "brendan")
-                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"Sent to {email}, updated stage to 'Personal Info Received'")
+                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"PDF sent to {email}, stage updated")
 
                     return JSONResponse(content={
                         "properties": [],
@@ -1344,7 +1344,7 @@ async def filter_response_entry(request: Request):
                         "session_id": session_id
                     })
                 except Exception as e:
-                    log_debug_event(record_id, "BACKEND", "PDF/Email Error", str(e))
+                    log_debug_event(record_id, "BACKEND", "PDF/Email Error", traceback.format_exc())
                     raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
         # === Locked Stage Handling ===
@@ -1353,10 +1353,12 @@ async def filter_response_entry(request: Request):
             if any(k in message.lower() for k in PDF_KEYWORDS):
                 reply = "Sure — I’ll just grab your name, email and phone so I can send your quote across now."
                 update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
+                log_debug_event(record_id, "BACKEND", "PDF Keyword Triggered", "Switched to Gathering Personal Info")
             else:
                 reply = "This quote is already prepared. Would you like me to email it, or are you ready to book?"
+                log_debug_event(record_id, "BACKEND", "Locked Stage Reply", f"No action keywords found, reply: {reply}")
+
             append_message_log(record_id, reply, "brendan")
-            log_debug_event(record_id, "BACKEND", "Locked Stage Reply", f"Quote stage = {quote_stage} → Reply: {reply}")
             return JSONResponse(content={
                 "properties": [],
                 "response": reply,
@@ -1367,18 +1369,19 @@ async def filter_response_entry(request: Request):
         # === Main GPT Extraction ===
         append_message_log(record_id, message, "user")
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
-        log_debug_event(record_id, "BACKEND", "Calling GPT", f"Calling GPT on message: {message[:100]}")
+        log_debug_event(record_id, "BACKEND", "Calling GPT", f"Input: {message[:100]}")
 
         properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
 
         if not reply:
-            log_debug_event(record_id, "BACKEND", "Empty Reply", "GPT returned empty reply — check GPT logic")
+            log_debug_event(record_id, "BACKEND", "GPT Returned Empty Reply", "GPT response missing")
 
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
+        log_debug_event(record_id, "BACKEND", "Parsed Properties", str(parsed))
+
         updated_fields = fields.copy()
         updated_fields.update(parsed)
 
-        # === Preserve required fields if missing ===
         for required in ["source", "bedrooms_v2", "bathrooms_v2"]:
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
@@ -1387,22 +1390,22 @@ async def filter_response_entry(request: Request):
         # === Quote Calculation ===
         if should_calculate_quote(updated_fields) and quote_stage != "Quote Calculated":
             try:
-                log_debug_event(record_id, "BACKEND", "Triggering Quote Calculation", f"Fields sufficient — calculating now")
+                log_debug_event(record_id, "BACKEND", "Triggering Quote Calculation", "All required fields present")
                 result = calculate_quote(QuoteRequest(**updated_fields))
-                parsed.update(result.model_dump())
+                quote_result = result.model_dump()
+                parsed.update(quote_result)
                 parsed["quote_stage"] = "Quote Calculated"
-                reply = get_inline_quote_summary(result.model_dump())
-                log_debug_event(record_id, "BACKEND", "Quote Ready", f"${parsed.get('total_price')} for {parsed.get('estimated_time_mins')} mins")
+                reply = get_inline_quote_summary(quote_result)
+                log_debug_event(record_id, "BACKEND", "Quote Generated", f"Total: ${parsed.get('total_price')} | Time: {parsed.get('estimated_time_mins')} mins")
             except Exception as e:
-                log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
+                log_debug_event(record_id, "BACKEND", "Quote Calc Error", traceback.format_exc())
                 reply = "I ran into an issue calculating your quote — want me to try again?"
 
-        # === Final Save ===
-        log_debug_event(record_id, "BACKEND", "Saving Parsed Fields", f"Fields to update: {list(parsed.keys())}")
+        log_debug_event(record_id, "BACKEND", "Saving Fields", f"{list(parsed.keys())}")
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
 
-        log_debug_event(record_id, "BACKEND", "Returning Response", f"Response: {reply[:80]}...")
+        log_debug_event(record_id, "BACKEND", "Returning Final Response", reply[:120])
 
         return JSONResponse(content={
             "properties": properties,
@@ -1412,7 +1415,7 @@ async def filter_response_entry(request: Request):
         })
 
     except Exception as e:
-        log_debug_event(None, "BACKEND", "Fatal Error", str(e))
+        log_debug_event(None, "BACKEND", "Fatal Error", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error.")
 
 
