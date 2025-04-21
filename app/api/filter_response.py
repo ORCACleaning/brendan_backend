@@ -47,6 +47,7 @@ else:
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+
 # === Global Schema Cache ===
 AIRTABLE_SCHEMA_CACHE = {
     "fetched": False,
@@ -1304,16 +1305,6 @@ async def handle_chat_init(session_id: str):
 router = APIRouter()
 
 @router.post("/filter-response")
-import time
-import traceback
-from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-from app.services.quote_logic import generate_next_actions, handle_privacy_consent
-from app.services.pdf_generator import generate_quote_pdf
-from app.services.email_sender import send_quote_email
-from app.models import QuoteRequest
-from app.utils import log_debug_event, append_message_log, update_quote_record, get_quote_by_session, create_new_quote, should_calculate_quote, get_inline_quote_summary
-
 async def filter_response_entry(request: Request):
     try:
         # Parse the incoming JSON request
