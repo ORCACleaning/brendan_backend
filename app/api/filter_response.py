@@ -1009,6 +1009,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     return safe_props, reply
 
 
+
 # === GPT Error Email Alert ===
 
 def send_gpt_error_email(error_msg: str):
@@ -1353,19 +1354,17 @@ async def filter_response_entry(request: Request):
                     quote_id, record_id, quote_stage, fields = create_new_quote(session_id, force_new=True)
 
                     # Adding a delay to allow Airtable to process the new quote and session
-                    time.sleep(10)  # Wait for the Airtable record to be processed (10 seconds delay)
+                    retry_attempts = 5
+                    for attempt in range(retry_attempts):
+                        time.sleep(5 * (attempt + 1))  # Exponential backoff: 5s, 10s, 15s, etc.
 
-                    # Retry session lookup after delay
-                    existing_quote = get_quote_by_session(session_id)
-                    retries = 3
-                    for i in range(retries):
-                        if not existing_quote:
-                            log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {i+1})", f"Retrying session lookup for session_id={session_id}")
-                            time.sleep(5 * (i + 1))  # Exponential backoff for retries (5s, 10s, 15s)
-                            existing_quote = get_quote_by_session(session_id)
-                        else:
+                        # Retry session lookup after delay
+                        existing_quote = get_quote_by_session(session_id)
+                        if existing_quote:
                             break
-
+                        else:
+                            log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt + 1})", f"Retrying session lookup for session_id={session_id}")
+                    
                     if not existing_quote:
                         log_debug_event(None, "BACKEND", "Failed to Retrieve New Quote", f"Session {session_id} still not found after retries.")
                         raise HTTPException(status_code=404, detail="Session not found after creating quote.")
@@ -1419,7 +1418,7 @@ async def filter_response_entry(request: Request):
             except Exception as e:
                 log_debug_event(None, "BACKEND", "Init Error", traceback.format_exc())
                 raise HTTPException(status_code=500, detail="Init failed.")
-        
+
         # Existing logic continues here...
         quote_data = get_quote_by_session(session_id)
         if not isinstance(quote_data, dict) or "record_id" not in quote_data:
