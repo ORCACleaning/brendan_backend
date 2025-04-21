@@ -310,17 +310,17 @@ def get_quote_by_session(session_id: str) -> dict:
     Always returns a dict: {"quote_id": ..., "record_id": ..., "quote_stage": ..., "fields": {...}}
     """
 
-    # === Validate input ===
+    # === Input validation ===
     if not session_id:
         logger.warning("⚠️ get_quote_by_session called with empty session_id")
         return {}
 
-    if session_id.startswith("rec"):
-        logger.error(f"❌ Invalid session_id passed (looks like record_id): {session_id}")
+    if session_id.startswith("rec") and len(session_id) == 17:
+        logger.error(f"❌ Invalid input — record_id passed as session_id: {session_id}")
         log_debug_event(None, "BACKEND", "Invalid Session ID", f"Looks like record_id: {session_id}")
         return {}
 
-    # === Prepare Airtable query ===
+    # === Build Airtable request ===
     safe_table_name = quote(TABLE_NAME)
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
     headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
@@ -354,7 +354,7 @@ def get_quote_by_session(session_id: str) -> dict:
 
     records = response_data.get("records", []) if response_data else []
 
-    # === Create new quote if not found ===
+    # === No records found — create a new quote ===
     if not records:
         try:
             quote_id = get_next_quote_id()
@@ -375,8 +375,8 @@ def get_quote_by_session(session_id: str) -> dict:
             created = create_res.json()
             record_id = created.get("id", "")
             fields = created.get("fields", {})
+            logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
             log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session ID: {session_id}, Quote ID: {quote_id}")
-            logger.info(f"✅ New quote created — ID: {quote_id} | Record ID: {record_id}")
 
             flushed = flush_debug_log(record_id)
             if flushed:
@@ -390,11 +390,11 @@ def get_quote_by_session(session_id: str) -> dict:
             }
 
         except Exception as e:
-            logger.error(f"❌ Failed to create new quote for session {session_id}: {e}")
+            logger.error(f"❌ Failed to create new quote: {e}")
             log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
             return {}
 
-    # === Return existing quote ===
+    # === Record found — return existing data ===
     record = records[0]
     record_id = record.get("id", "")
     fields = record.get("fields", {})
@@ -783,6 +783,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if record_id:
         log_debug_event(record_id, "BACKEND", "DEBUG", f"extract_properties_from_gpt4() called with message: {message[:100]}")
 
+    if message.strip() == "__init__":
+        log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
+        return [], "Just a moment while I get us started..."
+
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
@@ -804,7 +808,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
-            record = get_quote_by_session(record_id)  # ✅ fixed (not session_id)
+            record = get_quote_by_session(session_id=record_id)
             if isinstance(record, dict):
                 existing_fields = record.get("fields", {})
         except Exception as e:
@@ -841,19 +845,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if existing_fields.get("bathrooms_v2"): suppress.append("bathrooms")
     if existing_fields.get("furnished_status"): suppress.append("furnished")
 
-    if message.strip() == "__init__":
-        messages.append({
-            "role": "system",
-            "content": (
-                "The user has just opened the chat. The greeting was already shown.\n"
-                "- Do not say 'Hi', 'Hey', 'Hello' or 'G’day'.\n"
-                "- Ask what name to use with something polite and low-pressure like: 'Is there a first name I can pop on the quote?'\n"
-                "- Then ask suburb, bedrooms, bathrooms, and furnished/unfurnished.\n"
-                "- Suppress carpet and extras until base info is in."
-            )
-        })
-        log_debug_event(record_id, "GPT", "Init Trigger Detected", "Suppressing repeat greeting message.")
-
     if suppress:
         messages.append({
             "role": "system",
@@ -863,7 +854,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
-    # === GPT Call + Parser ===
     def call_gpt_and_parse(msgs, attempt=1):
         try:
             res = client.chat.completions.create(
@@ -872,6 +862,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 max_tokens=3000,
                 temperature=0.4
             )
+            if not res.choices or not res.choices[0].message or not res.choices[0].message.content:
+                raise ValueError("GPT response missing content.")
             raw = res.choices[0].message.content.strip()
             log_debug_event(record_id, "GPT", f"Raw Attempt {attempt}", raw[:300])
             start, end = raw.find("{"), raw.rfind("}")
@@ -938,7 +930,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], reply
 
-    # Always inject Brendan as source
     props = [p for p in safe_props if p["property"] != "source"]
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Injected", "source = Brendan")
