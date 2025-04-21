@@ -301,6 +301,106 @@ def create_new_quote(session_id: str, force_new: bool = False):
         raise HTTPException(status_code=500, detail="Failed to create new quote.")
 
 
+# === Get Quote by Session ===
+
+def get_quote_by_session(session_id: str):
+    """
+    Retrieves the latest quote record from Airtable using session_id.
+    If no record is found, creates a new one.
+    Returns: (quote_id, record_id, quote_stage, fields)
+    """
+    if not session_id:
+        logger.warning("⚠️ get_quote_by_session called with empty session_id")
+        return None
+
+    safe_table_name = quote(TABLE_NAME)
+    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
+    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
+    params = {
+        "filterByFormula": f"{{session_id}}='{session_id}'",
+        "sort[0][field]": "timestamp",
+        "sort[0][direction]": "desc",
+        "pageSize": 1
+    }
+
+    logger.info(f"🔍 Looking up quote by session_id: {session_id}")
+    log_debug_event(None, "BACKEND", "Session Lookup Start", f"Session ID: {session_id}")
+
+    response_data = None
+    for attempt in range(3):
+        try:
+            log_debug_event(None, "BACKEND", "Session Lookup Request", f"Attempt {attempt + 1} — GET to Airtable")
+            res = requests.get(url, headers=headers, params=params)
+            res.raise_for_status()
+            response_data = res.json()
+            log_debug_event(None, "BACKEND", "Session Lookup Success", f"Data received on attempt {attempt + 1}")
+            break
+        except Exception as e:
+            logger.warning(f"⚠️ Airtable fetch failed (Attempt {attempt + 1}/3): {e}")
+            log_debug_event(None, "BACKEND", "Session Lookup Attempt Failed", f"Attempt {attempt + 1}: {str(e)}")
+            if attempt == 2:
+                logger.error(f"❌ Final failure after 3 attempts for session_id: {session_id}")
+                log_debug_event(None, "BACKEND", "Session Lookup Final Failure", str(e))
+                return None
+            sleep(1)
+
+    records = response_data.get("records", []) if response_data else []
+
+    # === Create new quote if not found ===
+    if not records:
+        try:
+            quote_id = get_next_quote_id()
+            new_fields = {
+                "session_id": session_id,
+                "quote_id": quote_id,
+                "quote_stage": "Gathering Info",
+                "privacy_acknowledged": False,
+                "source": "Brendan"
+            }
+
+            create_res = requests.post(
+                url,
+                headers={**headers, "Content-Type": "application/json"},
+                json={"fields": new_fields}
+            )
+            create_res.raise_for_status()
+            created = create_res.json()
+            record_id = created.get("id", "")
+            fields = created.get("fields", {})
+            log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session ID: {session_id}, Quote ID: {quote_id}")
+            logger.info(f"✅ New quote created — ID: {quote_id} | Record ID: {record_id}")
+
+            flushed = flush_debug_log(record_id)
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
+
+            return quote_id, record_id, "Gathering Info", fields
+
+        except Exception as e:
+            logger.error(f"❌ Failed to create new quote for session {session_id}: {e}")
+            log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
+            return None
+
+    # === Return existing quote ===
+    record = records[0]
+    record_id = record.get("id", "")
+    fields = record.get("fields", {})
+    quote_id = fields.get("quote_id", "N/A")
+    quote_stage = fields.get("quote_stage", "Gathering Info")
+
+    if len(fields.keys()) < 10:
+        log_debug_event(record_id, "BACKEND", "Record Warning", f"Returned with only {len(fields)} fields — may be incomplete")
+
+    log_debug_event(record_id, "BACKEND", "Session Lookup Complete", f"Found quote_id: {quote_id}, stage: {quote_stage}")
+    logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
+
+    flushed = flush_debug_log(record_id)
+    if flushed:
+        update_quote_record(record_id, {"debug_log": flushed})
+
+    return quote_id, record_id, quote_stage, fields
+
+
 # === Update Quote Record ===
 
 # === Airtable Schema Cache ===
@@ -350,9 +450,8 @@ def update_quote_record(record_id: str, fields: dict):
     for raw_key, value in fields.items():
         key = FIELD_MAP.get(raw_key, raw_key)
         corrected_key = next((k for k in actual_keys if k.lower() == key.lower()), key)
-        raw_value_str = str(value)
 
-        log_debug_event(record_id, "BACKEND", "Raw Field Input", f"{raw_key} → {corrected_key} = {raw_value_str}")
+        log_debug_event(record_id, "BACKEND", "Raw Field Input", f"{raw_key} → {corrected_key} = {value}")
 
         if corrected_key not in actual_keys:
             logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
@@ -361,48 +460,54 @@ def update_quote_record(record_id: str, fields: dict):
         try:
             if corrected_key == "carpet_cleaning":
                 val = str(value).strip().capitalize()
-                value = val if val in {"Yes", "No"} else ""
+                value = val if val in {"Yes", "No"} else None
+
             elif corrected_key == "furnished":
-                val = str(value).strip().lower()
-                if "unfurnished" in val:
-                    value = "Unfurnished"
-                elif "furnished" in val:
-                    value = "Furnished"
-                else:
-                    value = ""
+                val = str(value).strip().capitalize()
+                value = val if val in {"Furnished", "Unfurnished"} else None
+
             elif corrected_key in INTEGER_FIELDS:
-                value = int(float(value))
+                if not isinstance(value, (int, float)):
+                    value = int(float(value))
                 if value > MAX_REASONABLE_INT:
                     logger.warning(f"⚠️ Clamping large int for {corrected_key}: {value}")
                     value = MAX_REASONABLE_INT
+
             elif corrected_key in BOOLEAN_FIELDS:
-                value = value if isinstance(value, bool) else str(value).strip().lower() in {
-                    "yes", "true", "1", "on", "checked", "t"
-                }
+                if not isinstance(value, bool):
+                    value = str(value).strip().lower() in {"yes", "true", "1", "on", "checked", "t"}
+
             elif corrected_key in {
                 "gst_applied", "total_price", "base_hourly_rate", "price_per_session",
                 "estimated_time_mins", "discount_applied", "mandurah_surcharge",
                 "after_hours_surcharge", "weekend_surcharge", "calculated_hours"
             }:
-                value = float(value)
+                if not isinstance(value, (int, float)):
+                    value = float(value)
+
             elif corrected_key == "special_requests":
                 if not value or str(value).strip().lower() in {"no", "none", "false", "no special requests", "n/a"}:
                     value = ""
                 else:
                     value = str(value).strip()
+
             elif corrected_key == "extra_hours_requested":
                 value = float(value) if value not in [None, ""] else 0.0
+
             elif corrected_key == "pdf_url":
                 value = str(value).strip()
+
             else:
-                value = "" if value is None else str(value).strip()
+                if not isinstance(value, (int, float, bool)):
+                    value = "" if value is None else str(value).strip()
+
         except Exception as e:
             logger.warning(f"⚠️ Failed to normalize {corrected_key}: {e}")
             log_debug_event(record_id, "BACKEND", "Normalization Error", f"{corrected_key}: {e}")
             continue
 
-        if corrected_key in SELECT_FIELDS and value == "":
-            logger.warning(f"⚠️ Skipping empty select field: {corrected_key}")
+        if corrected_key in SELECT_FIELDS and (value is None or value == ""):
+            logger.warning(f"⚠️ Skipping invalid select field: {corrected_key}")
             continue
 
         normalized_fields[corrected_key] = value
@@ -468,7 +573,6 @@ def update_quote_record(record_id: str, fields: dict):
 
     return successful
 
-
 # === Inline Quote Summary Helper ===
 
 def get_inline_quote_summary(data: dict) -> str:
@@ -477,7 +581,6 @@ def get_inline_quote_summary(data: dict) -> str:
     Includes total price, estimated time, cleaner count, discount breakdown, selected services, bedrooms/bathrooms,
     and optional notes.
     """
-
     price = float(data.get("total_price", 0) or 0)
     time_est_mins = int(data.get("estimated_time_mins", 0) or 0)
     discount = float(data.get("discount_applied", 0) or 0)
@@ -488,7 +591,10 @@ def get_inline_quote_summary(data: dict) -> str:
 
     bedrooms = data.get("bedrooms_v2", 0)
     bathrooms = data.get("bathrooms_v2", 0)
-    furnished = str(data.get("furnished_v2", "") or "").capitalize()
+
+    # Handle both furnished_v2 and furnished_status
+    furnished_raw = data.get("furnished_v2") or data.get("furnished_status") or ""
+    furnished = str(furnished_raw).strip().capitalize()
 
     # === Time & Cleaners Calculation ===
     hours = time_est_mins / 60
@@ -569,6 +675,7 @@ def get_inline_quote_summary(data: dict) -> str:
     )
 
     return summary.strip()
+
 
 # === Generate Next Actions After Quote ===
 
@@ -669,8 +776,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if record_id and not skip_log_lookup:
         try:
             result = get_quote_by_session(session_id=record_id)
-            if isinstance(result, tuple) and len(result) == 4:
-                _, _, _, existing_fields = result
+            if isinstance(result, dict):
+                existing_fields = result.get("fields", {})
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
@@ -762,27 +869,25 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         reply = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
         flushed = flush_debug_log(record_id)
         if flushed:
-            update_quote_record(record_id, {"debug_log": flushed})
-        return [], reply
+            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+        return [{"property": "source", "value": "Brendan"}], reply
 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
-    # === Normalize malformed props ===
-    if isinstance(raw_props, str):
-        log_debug_event(record_id, "GPT", "Malformed Property String", f"Got str: {raw_props[:50]}")
-        raw_props = []
-
     if isinstance(raw_props, dict):
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
+    elif isinstance(raw_props, str):
+        log_debug_event(record_id, "GPT", "Malformed Property String", raw_props)
+        raw_props = []
 
     if not isinstance(raw_props, list):
         log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)} | Value: {str(raw_props)[:100]}")
         flushed = flush_debug_log(record_id)
         if flushed:
-            update_quote_record(record_id, {"debug_log": flushed})
-        return [], reply
+            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+        return [{"property": "source", "value": "Brendan"}], reply
 
     # === Final sanitization ===
     safe_props = []
@@ -798,8 +903,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         log_debug_event(record_id, "GPT", "Empty Properties", "No valid properties returned.")
         flushed = flush_debug_log(record_id)
         if flushed:
-            update_quote_record(record_id, {"debug_log": flushed})
-        return [], reply
+            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+        return [{"property": "source", "value": "Brendan"}], reply
 
     # Inject source = Brendan
     props = [p for p in safe_props if p["property"] != "source"]
@@ -873,9 +978,13 @@ def send_gpt_error_email(error_msg: str):
                     logger.error(f"❌ Failed to log unexpected email error: {log_e}")
                 return
 
-        # Try flushing debug log from record_id inside error body
+        # === Flush debug log from record_id inside error body ===
         try:
-            match = re.search(r"record[_ ]?id[:=]?[^\w]?(\w{5,})", error_msg, re.IGNORECASE)
+            match = re.search(
+                r"(?i)record[_\s]?id\s*[:=]?\s*['\"]?([a-zA-Z0-9]{5,})['\"]?",
+                error_msg,
+                re.MULTILINE
+            )
             if match:
                 record_id = match.group(1).strip()
                 flushed = flush_debug_log(record_id)
@@ -965,11 +1074,14 @@ def append_message_log(record_id: str, message: str, sender: str):
     # === Flush Debug Log ===
     try:
         flushed = flush_debug_log(record_id)
-        if flushed:
+        if flushed and record_id:
             update_quote_record(record_id, {"debug_log": flushed})
+        elif flushed:
+            log_debug_event(None, "BACKEND", "Debug Log Lost", "Flushed debug log not saved (missing record_id)")
     except Exception as e:
         logger.warning(f"⚠️ Failed to flush debug log: {e}")
-        log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
+        log_debug_event(record_id or None, "BACKEND", "Debug Log Flush Error", str(e))
+
 
 # === Handle Privacy Consent === 
 
@@ -1020,33 +1132,32 @@ async def handle_chat_init(session_id: str):
         log_debug_event(None, "BACKEND", "Init Triggered", f"User opened chat — Session: {session_id}")
         existing = get_quote_by_session(session_id)
 
-        if existing:
-            try:
-                quote_id, record_id, stage, fields = existing
-                timestamp = fields.get("timestamp")
-                if not timestamp or stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"]:
-                    raise ValueError("Stale or completed quote, creating new.")
-                log_debug_event(record_id, "BACKEND", "Existing Quote", f"Continuing session: {quote_id}")
-            except Exception as e:
-                log_debug_event(None, "BACKEND", "Quote Reuse Blocked", str(e))
-                existing = None
+        quote_id, record_id, stage, fields = None, None, None, {}
+
+        if isinstance(existing, dict):
+            quote_id = existing.get("quote_id")
+            record_id = existing.get("record_id")
+            stage = existing.get("quote_stage", "Gathering Info")
+            fields = existing.get("fields", {})
+
+            timestamp = fields.get("timestamp")
+            if not timestamp or stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"]:
+                log_debug_event(record_id, "BACKEND", "Stale Quote", f"Stage: {stage}, Timestamp: {timestamp}")
+                existing = None  # Force new quote
 
         if not existing:
             quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
             session_id = fields.get("session_id", session_id)
             log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}")
 
-        # Append init to message log
         append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
-        # Flush debug log immediately after init
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
 
-        # Let GPT take over — init message is passed into conversation as 'user: __init__'
         properties, reply = await extract_properties_from_gpt4(
-            "__init__", "USER: __init__", record_id=record_id, quote_id=None, skip_log_lookup=True
+            "__init__", "USER: __init__", record_id=record_id, quote_id=quote_id, skip_log_lookup=True
         )
 
         append_message_log(record_id, reply, "brendan")
@@ -1063,9 +1174,8 @@ async def handle_chat_init(session_id: str):
         log_debug_event(None, "BACKEND", "Fatal Init Error", str(e))
         raise HTTPException(status_code=500, detail="Failed to initialize Brendan.")
 
-# === Brendan API Router ===
 
-router = APIRouter()
+# === Brendan API Router ===
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -1087,10 +1197,19 @@ async def filter_response_entry(request: Request):
                 raise HTTPException(status_code=500, detail="Init failed.")
 
         quote_data = get_quote_by_session(session_id)
-        if not quote_data:
+        if not isinstance(quote_data, dict):
             raise HTTPException(status_code=404, detail="Quote not found.")
 
-        quote_id, record_id, quote_stage, fields = quote_data
+        quote_id = quote_data.get("quote_id")
+        record_id = quote_data.get("record_id")
+        quote_stage = quote_data.get("quote_stage", "Gathering Info")
+        fields = quote_data.get("fields", {})
+
+        # === Re-init if stale or completed ===
+        if quote_stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not quote_id or not record_id:
+            log_debug_event(None, "BACKEND", "Stale Quote", f"Stage: {quote_stage} — Reinitializing")
+            return await handle_chat_init(session_id)
+
         message_lower = message.lower()
 
         if quote_stage == "Chat Banned":
@@ -1169,22 +1288,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
-
-
-@router.post("/log-debug")
-async def frontend_log_debug(request: Request):
-    try:
-        data = await request.json()
-        session_id = str(data.get("session_id", "")).strip()
-        source = str(data.get("source", "FRONTEND")).strip().upper()
-        message = str(data.get("message", "")).strip()
-
-        if not session_id or not message:
-            raise HTTPException(status_code=400, detail="Missing session_id or message")
-
-        log_debug_event(None, source, "Frontend Log", f"[{session_id}] {message}")
-        return JSONResponse(content={"status": "ok"})
-
-    except Exception as e:
-        logger.warning(f"⚠️ Failed to log frontend debug: {e}")
-        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
