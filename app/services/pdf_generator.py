@@ -21,6 +21,16 @@ def generate_quote_pdf(data: dict) -> str:
     Generate a PDF quote using customer data and save it in the public folder.
     Returns the public Render URL of the generated PDF.
     """
+
+    # === Validate Minimum Required Fields ===
+    required = ["quote_id", "customer_name", "customer_email", "total_price", "estimated_time_mins", "quote_stage"]
+    for field in required:
+        if field not in data or data[field] in [None, "", False]:
+            raise ValueError(f"Cannot generate PDF — missing required field: {field}")
+
+    if data.get("quote_stage") not in ["Quote Calculated", "Personal Info Received"]:
+        raise ValueError(f"PDF cannot be generated — invalid quote_stage: {data.get('quote_stage')}")
+
     os.makedirs(STATIC_PDF_DIR, exist_ok=True)
 
     # === Clean and normalize input data ===
@@ -78,13 +88,20 @@ def generate_quote_pdf(data: dict) -> str:
 
     # === Format job breakdown ===
     job_items = []
+
     if cleaned.get("carpet_cleaning") == "Yes":
-        for room_type in ["carpet_mainroom_count", "carpet_smallroom_count", "carpet_hallway_count", "carpet_stairs_count"]:
+        for room_type in [
+            "carpet_mainroom_count", "carpet_smallroom_count",
+            "carpet_hallway_count", "carpet_stairs_count"
+        ]:
             val = data.get(room_type)
             if isinstance(val, int) and val > 0:
                 job_items.append(f"{val} × {FIELD_MAP.get(room_type, room_type).replace('_', ' ').capitalize()}")
 
-    for addon in ["oven_cleaning", "garage_cleaning", "window_cleaning", "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning"]:
+    for addon in [
+        "oven_cleaning", "garage_cleaning", "window_cleaning",
+        "upholstery_cleaning", "after_hours_cleaning", "weekend_cleaning"
+    ]:
         if data.get(addon):
             job_items.append(FIELD_MAP.get(addon, addon).replace('_', ' ').capitalize())
 
