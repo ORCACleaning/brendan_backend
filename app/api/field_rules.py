@@ -6,7 +6,7 @@ VALID_AIRTABLE_FIELDS = {
     "quote_id", "timestamp", "source", "session_id", "quote_stage", "quote_notes", "privacy_acknowledged",
 
     # Property Details
-    "suburb", "bedrooms_v2", "bathrooms_v2", "furnished",
+    "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status",
 
     # Cleaning Options - Checkboxes / Extras
     "oven_cleaning", "window_cleaning", "window_count", "blind_cleaning",
@@ -15,7 +15,7 @@ VALID_AIRTABLE_FIELDS = {
     "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager",
 
     # Carpet Cleaning Breakdown
-    "carpet_cleaning",  # Now a Single Select: "Yes", "No", or empty
+    "carpet_cleaning",  # ✅ Now a Single Select: "Yes", "No", or empty
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
     "carpet_halway_count", "carpet_stairs_count", "carpet_other_count",
 
@@ -37,10 +37,10 @@ VALID_AIRTABLE_FIELDS = {
     "message_log", "gpt_error_log"
 }
 
-# Field Mapping
+# === Field Mapping ===
 FIELD_MAP = {k: k for k in VALID_AIRTABLE_FIELDS}
 
-# Fields that must always be cast to Integer
+# === Integer-only Fields ===
 INTEGER_FIELDS = {
     "bedrooms_v2", "bathrooms_v2", "window_count",
     "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
@@ -49,7 +49,7 @@ INTEGER_FIELDS = {
     "number_of_sessions"
 }
 
-# Fields that must always be Boolean True/False
+# === Boolean-only Fields (must normalize to True/False) ===
 BOOLEAN_FIELDS = {
     "oven_cleaning",
     "window_cleaning",
@@ -68,7 +68,7 @@ BOOLEAN_FIELDS = {
     "privacy_acknowledged"
 }
 
-# Fields that are Single Select (Expected specific string values)
+# === Single Select Fields (expected exact string values) ===
 SINGLE_SELECT_FIELDS = {
-    "carpet_cleaning"  # Expected values: "Yes", "No", or ""
+    "carpet_cleaning"  # Allowed: "Yes", "No", or ""
 }
