@@ -311,6 +311,11 @@ def get_quote_by_session(session_id: str):
     Returns dict with quote_id, record_id, quote_stage, fields.
     """
     try:
+        if not session_id:
+            raise ValueError("Empty session_id passed to get_quote_by_session")
+
+        log_debug_event(None, "BACKEND", "Session Lookup Start", f"session_id={session_id}")
+
         safe_table_name = quote(TABLE_NAME)
         url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
         headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
@@ -322,18 +327,24 @@ def get_quote_by_session(session_id: str):
         res = requests.get(url, headers=headers, params=params)
         res.raise_for_status()
 
-        data = res.json().get("records", [])
-        if not data:
+        records = res.json().get("records", [])
+        if not records:
+            log_debug_event(None, "BACKEND", "Session Not Found", f"No Airtable record found for {session_id}")
             return None
 
-        record = data[0]
+        record = records[0]
         fields = record.get("fields", {})
-        return {
-            "quote_id": fields.get("quote_id"),
-            "record_id": record.get("id"),
+        record_id = record.get("id")
+
+        result = {
+            "quote_id": fields.get("quote_id", ""),
+            "record_id": record_id,
             "quote_stage": fields.get("quote_stage", "Gathering Info"),
             "fields": fields
         }
+
+        log_debug_event(record_id, "BACKEND", "Session Found", f"quote_id={result['quote_id']}, stage={result['quote_stage']}")
+        return result
 
     except Exception as e:
         logger.warning(f"⚠️ get_quote_by_session() failed: {e}")
@@ -732,10 +743,12 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if record_id:
         log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(message={message[:100]})")
 
+    # === Init suppression ===
     if message.strip() == "__init__":
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
         return [{"property": "source", "value": "Brendan"}], "Just a moment while I get us started..."
 
+    # === Handle weak inputs ===
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
         reply = (
@@ -748,16 +761,18 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], reply
 
+    # === Fetch existing fields ===
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
-            session_data = get_quote_by_session(record_id)  # 🔄 Treat record_id as session_id (fixed usage)
+            session_data = get_quote_by_session(record_id)
             if isinstance(session_data, dict):
                 existing_fields = session_data.get("fields", {})
                 log_debug_event(record_id, "GPT", "Existing Fields Fetched", str(existing_fields))
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
+    # === Prepare message history ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
         "role": "system",
@@ -783,6 +798,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready")
 
+    # === GPT Call ===
     def call_gpt_and_parse(attempt=1):
         try:
             res = client.chat.completions.create(
@@ -856,6 +872,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         else:
             log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
 
+    # Inject source tag and save debug log
     safe_props = [p for p in safe_props if p["property"] != "source"]
     safe_props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
