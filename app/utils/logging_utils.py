@@ -208,7 +208,6 @@ def log_debug_event(record_id: str = None, source: str = "BACKEND", label: str =
 
     _log_cache[record_id].append(entry)
 
-
 def flush_debug_log(record_id: str):
     if not record_id:
         return ""
@@ -219,6 +218,10 @@ def flush_debug_log(record_id: str):
 
     combined = "\n".join(logs).strip()
     _log_cache[record_id] = []
+
+    line_count = len(combined.splitlines())
+    log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(combined)} chars flushed to Airtable ({line_count} lines)")
+    
     return combined
 
 
