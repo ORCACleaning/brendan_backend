@@ -815,8 +815,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
         return [], "Just a moment while I get us started..."
 
-    log_debug_event(record_id, "GPT", "GPT Triggered", "Preparing to call GPT-4 for property extraction")
-
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
         reply = (
@@ -829,7 +827,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
-    # === Fetch fields ===
+    # === Fetch existing fields ===
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
@@ -840,7 +838,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
-    # === Build GPT messages ===
+    # === Prepare GPT message context ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
         "role": "system",
@@ -936,14 +934,29 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], reply
 
+    # === Remap and filter properties ===
     safe_props = []
     for p in raw_props:
-        if isinstance(p, dict) and "property" in p and "value" in p:
-            if p["property"] == "name":
-                p["property"] = "customer_name"
-            safe_props.append(p)
-        else:
+        if not isinstance(p, dict) or "property" not in p or "value" not in p:
             log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
+            continue
+
+        field = p["property"]
+        value = p["value"]
+
+        if field == "name" or field == "first_name":
+            field = "customer_name"
+        elif field == "bedrooms":
+            field = "bedrooms_v2"
+        elif field == "bathrooms":
+            field = "bathrooms_v2"
+        elif field == "furnished":
+            field = "furnished_status"
+
+        if field in VALID_AIRTABLE_FIELDS:
+            safe_props.append({"property": field, "value": value})
+        else:
+            log_debug_event(record_id, "GPT", f"Skipped Unknown Field", f"{field} = {value}")
 
     if not safe_props:
         log_debug_event(record_id, "GPT", "Empty Properties", "No valid properties returned.")
@@ -953,8 +966,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], reply
 
+    # Final props list
     props = [p for p in safe_props if p["property"] != "source"]
     props.append({"property": "source", "value": "Brendan"})
+
     log_debug_event(record_id, "GPT", "Source Injected", "source = Brendan")
     log_debug_event(record_id, "GPT", "Parsed Properties", f"{len(props)} properties extracted")
 
@@ -964,7 +979,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 
 # === GPT Error Email Alert ===
 
