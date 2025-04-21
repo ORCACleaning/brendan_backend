@@ -733,7 +733,9 @@ def generate_next_actions(quote_stage: str):
 # === GPT Extraction (Production-Grade) ===
 
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
-   
+    from app.services.quote_logic import should_calculate_quote
+    from app.api.field_rules import VALID_AIRTABLE_FIELDS, BOOLEAN_FIELDS, INTEGER_FIELDS
+
     logger.info("🧠 Calling GPT-4 Turbo to extract properties...")
     if record_id:
         log_debug_event(record_id, "BACKEND", "Calling GPT-4", f"Message: {message[:100]}")
@@ -751,6 +753,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
+    # === Fetch current Airtable data to suppress repeat prompts ===
+    existing_fields = {}
+    if record_id:
+        record = get_quote_by_session(record_id)
+        if record:
+            existing_fields = record.get("fields", {})
+
     # === Build GPT message history ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
@@ -760,7 +769,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "The customer has already seen this greeting from the frontend:\n\n"
             "“G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
             "This quote is fully anonymous and no booking is required — I’m just here to help. View our Privacy Policy.”\n\n"
-            "Do NOT repeat this greeting. Never say 'Hi', 'Hello', 'Hey', or 'G’day' again.\n"
+            "Do NOT repeat this greeting. Never say 'Hi', 'Hello', 'Hey', or 'G’day'.\n"
             "Start by gently asking the customer what name they’d like the quote to be under — e.g., 'Is there a first name I can pop on the quote?'.\n"
             "Then ask for suburb, bedrooms, bathrooms, and furnished/unfurnished.\n"
             "IMPORTANT: Always reply in JSON with two fields: 'properties' and 'response'."
@@ -774,6 +783,19 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         elif line.startswith("SYSTEM:"):
             messages.append({"role": "system", "content": line[7:].strip()})
 
+    # Suppress repeated prompts for known fields
+    suppress = []
+    if existing_fields.get("customer_name"):
+        suppress.append("customer_name")
+    if existing_fields.get("suburb"):
+        suppress.append("suburb")
+    if existing_fields.get("bedrooms_v2"):
+        suppress.append("bedrooms")
+    if existing_fields.get("bathrooms_v2"):
+        suppress.append("bathrooms")
+    if existing_fields.get("furnished_status"):
+        suppress.append("furnished")
+
     if message == "__init__":
         messages.append({
             "role": "system",
@@ -786,6 +808,12 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             )
         })
         log_debug_event(record_id, "GPT", "Init Trigger Detected", "Suppressing repeat greeting message.")
+
+    if suppress:
+        messages.append({
+            "role": "system",
+            "content": f"These fields are already known: {', '.join(suppress)}. Do not ask for them again."
+        })
 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
@@ -864,6 +892,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props = [p for p in safe_props if p["property"] != "source"]
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Injected", "source = Brendan")
+
+    flushed = flush_debug_log(record_id)
+    if flushed:
+        update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
 
