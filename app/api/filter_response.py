@@ -1,13 +1,14 @@
 # === Built-in Python Modules ===
 import os
+import re
 import json
 import uuid
+import base64
+import smtplib
 import logging
 import requests
 import inflect
-import smtplib
-import re
-import base64
+import traceback  # ✅ required for error reporting
 from time import sleep
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
@@ -35,26 +36,7 @@ from app.services.quote_id_utils import get_next_quote_id
 from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS, BOOLEAN_FIELDS
 from app.utils.logging_utils import log_debug_event, flush_debug_log
 
-# === Airtable Table Name ===
-TABLE_NAME = "Vacate Quotes"
-
-# === System Constants ===
-MAX_LOG_LENGTH = 10000
-QUOTE_EXPIRY_DAYS = 7
-LOG_TRUNCATE_LENGTH = 10000
-
-PDF_SYSTEM_MESSAGE = """
-SYSTEM: Brendan has already provided the customer with their full quote summary. 
-The customer has now asked for the quote to be sent as a PDF or emailed.
-
-Do NOT regenerate or repeat the quote summary.
-Your only task is to politely collect their name, email, and phone number so Brendan can send the quote as a PDF.
-
-Once you collect those details, wait for confirmation or further instructions.
-"""
-
 # === OpenAI Client Setup ===
-import openai
 from openai import OpenAI
 
 if not os.getenv("OPENAI_API_KEY"):
@@ -317,6 +299,43 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
 
 # === Get Quote by Session ===
+
+# === Get Quote by Session ===
+
+def get_quote_by_session(session_id: str):
+    """
+    Looks up existing quote in Airtable by session_id.
+    Returns dict with quote_id, record_id, quote_stage, fields.
+    """
+    try:
+        safe_table_name = quote(TABLE_NAME)
+        url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
+        headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
+        params = {
+            "filterByFormula": f"{{session_id}} = '{session_id}'",
+            "maxRecords": 1
+        }
+
+        res = requests.get(url, headers=headers, params=params)
+        res.raise_for_status()
+
+        data = res.json().get("records", [])
+        if not data:
+            return None
+
+        record = data[0]
+        fields = record.get("fields", {})
+        return {
+            "quote_id": fields.get("quote_id"),
+            "record_id": record.get("id"),
+            "quote_stage": fields.get("quote_stage", "Gathering Info"),
+            "fields": fields
+        }
+
+    except Exception as e:
+        logger.warning(f"⚠️ get_quote_by_session() failed: {e}")
+        log_debug_event(None, "BACKEND", "Session Lookup Error", str(e))
+        return None
 
 
 # === Update Quote Record ====
@@ -729,9 +748,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
-            data = get_quote_by_session(record_id)
-            if isinstance(data, dict):
-                existing_fields = data.get("fields", {})
+            session_data = get_quote_by_session(record_id)  # 🔄 Treat record_id as session_id (fixed usage)
+            if isinstance(session_data, dict):
+                existing_fields = session_data.get("fields", {})
                 log_debug_event(record_id, "GPT", "Existing Fields Fetched", str(existing_fields))
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
@@ -780,7 +799,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     parsed = call_gpt_and_parse(1)
 
-    # Retry on failure (Fix 3)
     if not isinstance(parsed, dict):
         messages.insert(1, {
             "role": "system",
@@ -788,7 +806,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         })
         parsed = call_gpt_and_parse(2)
 
-    # Strict schema validation (Fix 4)
     if not isinstance(parsed, dict) or "properties" not in parsed or "response" not in parsed:
         log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
         fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
@@ -800,7 +817,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
-    # Fix 2: Discard if props is a list of strings like ["name", "suburb"]
     if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
         log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
         fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
