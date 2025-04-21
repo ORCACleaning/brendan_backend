@@ -1156,38 +1156,58 @@ async def handle_privacy_consent(message: str, message_lower: str, record_id: st
 # === Handle Chat Init === 
 
 async def handle_chat_init(session_id: str):
-    """
-    Handles chat initialization (__init__).
-    Always creates a fresh quote record and returns a clean response.
-    Skips GPT response since greeting is handled by frontend.
-    """
     try:
         log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
+        existing = get_quote_by_session(session_id)
 
-        # ✅ Always force new quote on __init__
-        quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
-        session_id = fields.get("session_id", session_id)
+        quote_id, record_id, stage, fields = None, None, None, {}
 
-        log_debug_event(record_id, "BACKEND", "Quote Created", f"Quote ID: {quote_id} | Stage: {stage}")
+        if isinstance(existing, dict):
+            quote_id = existing.get("quote_id")
+            record_id = existing.get("record_id")
+            stage = existing.get("quote_stage", "Gathering Info")
+            fields = existing.get("fields", {})
 
-        # === Message log: SYSTEM_TRIGGER only (no reply yet) ===
+            timestamp = fields.get("timestamp")
+            if not timestamp or stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"]:
+                log_debug_event(record_id, "BACKEND", "Stale Quote", f"Stage: {stage}, Timestamp: {timestamp}")
+                existing = None  # Force new quote
+
+        if not existing:
+            quote_id, record_id, stage, fields = create_new_quote(session_id, force_new=True)
+            session_id = fields.get("session_id", session_id)
+            log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}")
+
         append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
 
-        # === Flush debug log early ===
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
 
-        # ✅ No GPT reply — frontend already showed greeting
+        # === GPT CALL WITH FALLBACK ===
+        try:
+            log_debug_event(record_id, "BACKEND", "Calling GPT", "Calling GPT on __init__")
+            properties, reply = await extract_properties_from_gpt4(
+                "__init__", "USER: __init__", record_id=record_id, quote_id=quote_id, skip_log_lookup=True
+            )
+        except Exception as e:
+            log_debug_event(record_id, "GPT", "Init GPT Call Failed", str(e))
+            properties = [{"property": "source", "value": "Brendan"}]
+            reply = (
+                "Let’s get started! What suburb is the property in, and how many bedrooms and bathrooms are we cleaning?"
+            )
+
+        append_message_log(record_id, reply, "brendan")
+        log_debug_event(record_id, "BACKEND", "Init Complete", "Brendan sent first message.")
+
         return JSONResponse(content={
-            "properties": [{"property": "source", "value": "Brendan"}],
-            "response": None,
+            "properties": properties,
+            "response": reply,
             "next_actions": [],
             "session_id": session_id
         })
 
     except Exception as e:
-        logger.error(f"❌ handle_chat_init failed: {e}")
         log_debug_event(None, "BACKEND", "Fatal Init Error", str(e))
         raise HTTPException(status_code=500, detail="Failed to initialize Brendan.")
 
