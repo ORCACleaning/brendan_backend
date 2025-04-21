@@ -1180,6 +1180,7 @@ async def handle_chat_init(session_id: str):
 router = APIRouter()
 
 @router.post("/filter-response")
+@router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
@@ -1202,12 +1203,12 @@ async def filter_response_entry(request: Request):
         if not isinstance(quote_data, dict):
             raise HTTPException(status_code=404, detail="Quote not found.")
 
-        quote_id = quote_data.get("quote_id")
-        record_id = quote_data.get("record_id")
+        quote_id = quote_data.get("quote_id", "N/A")
+        record_id = quote_data.get("record_id", "")
         quote_stage = quote_data.get("quote_stage", "Gathering Info")
         fields = quote_data.get("fields", {})
 
-        # === Re-init if stale or completed ===
+        # === Re-init if stale or incomplete ===
         if quote_stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not quote_id or not record_id:
             log_debug_event(None, "BACKEND", "Stale Quote", f"Stage: {quote_stage} — Reinitializing")
             return await handle_chat_init(session_id)
@@ -1290,3 +1291,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
+
