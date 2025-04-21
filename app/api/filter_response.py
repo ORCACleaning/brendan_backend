@@ -763,6 +763,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+        log_debug_event(record_id, "GPT", "Final Reply", reply)
         return [{"property": "source", "value": "Brendan"}], reply
 
     existing_fields = {}
@@ -810,7 +811,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             )
             raw = res.choices[0].message.content.strip()
             log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
-            log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
+            log_debug_event(record_id, "GPT", f"Full GPT Response", raw[:3000])
             start, end = raw.find("{"), raw.rfind("}")
             parsed = json.loads(raw[start:end + 1])
             return parsed
@@ -830,6 +831,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if not isinstance(parsed, dict) or "properties" not in parsed or "response" not in parsed:
         log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
         fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
+        log_debug_event(record_id, "GPT", "Final Reply", fallback)
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
@@ -841,6 +843,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
         log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
         fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
+        log_debug_event(record_id, "GPT", "Final Reply", fallback)
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
@@ -877,16 +880,18 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     safe_props = [p for p in safe_props if p["property"] != "source"]
     safe_props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
+    log_debug_event(record_id, "GPT", "Final Reply", reply)
+    log_debug_event(record_id, "GPT", "Function Return Payload", str(safe_props))
 
     flushed = flush_debug_log(record_id)
     if flushed:
         update_quote_record(record_id, {"debug_log": flushed})
 
-    # ✅ Final fallback: rescue single-name replies
     if not safe_props or all(p["property"] == "source" for p in safe_props):
         if len(message.split()) == 1 and message.isalpha():
             guessed_name = message.strip().title()
             log_debug_event(record_id, "GPT", "Name Fallback Injected", f"customer_name = {guessed_name}")
+            log_debug_event(record_id, "GPT", "Final Reply", f"Thanks {guessed_name}! Let’s keep going.")
             if flushed:
                 update_quote_record(record_id, {"debug_log": flushed})
             return [
