@@ -1197,11 +1197,30 @@ async def filter_response_entry(request: Request):
         if message.lower() == "__init__":
             try:
                 log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
-                response = await handle_chat_init(session_id)
-                log_debug_event(None, "BACKEND", "Init Response Returned", f"handle_chat_init() completed for session: {session_id}")
-                return response
+                await handle_chat_init(session_id)
+                quote_data = get_quote_by_session(session_id)
+                record_id = quote_data["record_id"]
+                quote_id = quote_data["quote_id"]
+                log = quote_data["fields"].get("message_log", "")
+
+                properties, gpt_response = await extract_properties_from_gpt4(
+                    "Hi Brendan", log, record_id=record_id, quote_id=quote_id
+                )
+
+                if properties:
+                    await update_quote_record(record_id, {p["property"]: p["value"] for p in properties if "property" in p and "value" in p})
+
+                log_debug_event(record_id, "BACKEND", "Init Response Returned", f"handle_chat_init() and GPT response completed for session: {session_id}")
+
+                return JSONResponse(content={
+                    "properties": properties,
+                    "response": gpt_response,
+                    "next_actions": generate_next_actions("Gathering Info"),
+                    "session_id": session_id
+                })
+
             except Exception as e:
-                log_debug_event(None, "BACKEND", "Init Error", str(e))
+                log_debug_event(None, "BACKEND", "Init Error", traceback.format_exc())
                 raise HTTPException(status_code=500, detail="Init failed.")
 
         quote_data = get_quote_by_session(session_id)
@@ -1272,13 +1291,10 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Field Prompting Logic ===
         REQUIRED_ORDER = [
             "customer_name", "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status",
             "carpet_cleaning", "carpet_mainroom_count", "carpet_stairs_count", "carpet_other_count"
         ]
-
-        # Check if carpet_cleaning is "Yes" before asking breakdowns
         skip_carpet_counts = fields.get("carpet_cleaning") == "No"
         for field in REQUIRED_ORDER:
             if field.startswith("carpet_") and skip_carpet_counts:
@@ -1306,7 +1322,6 @@ async def filter_response_entry(request: Request):
                     "session_id": session_id
                 })
 
-        # === Call GPT only for open-ended extras ===
         append_message_log(record_id, message, "user")
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
         log_debug_event(record_id, "BACKEND", "Calling GPT", f"Input: {message[:100]}")
@@ -1356,4 +1371,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error.")
-
