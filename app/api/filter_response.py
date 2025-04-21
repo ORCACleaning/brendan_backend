@@ -540,7 +540,6 @@ def update_quote_record(record_id: str, fields: dict):
     return successful
 
 
-
 # === Inline Quote Summary Helper ===
 
 def get_inline_quote_summary(data: dict) -> str:
