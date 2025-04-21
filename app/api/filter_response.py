@@ -249,7 +249,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
             "Content-Type": "application/json"
         }
 
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.utcnow().isoformat()  # ✅ keep for logs only — do not include in Airtable
         fields = {
             "session_id": session_id,
             "quote_id": quote_id,
@@ -260,7 +260,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
         logger.info(f"📤 Creating new quote with payload:\n{json.dumps(fields, indent=2)}")
         log_debug_event(None, "BACKEND", "Function Start", f"create_new_quote(session_id={session_id}, force_new={force_new})")
-        log_debug_event(None, "BACKEND", "Creating New Quote", f"Session: {session_id}, Quote ID: {quote_id}, Timestamp: {timestamp}")
+        log_debug_event(None, "BACKEND", "Creating New Quote", f"Session: {session_id}, Quote ID: {quote_id}, Timestamp: {timestamp} (not sent)")
 
         payload = {"fields": fields}
         res = requests.post(url, headers=headers, json=payload)
@@ -298,8 +298,6 @@ def create_new_quote(session_id: str, force_new: bool = False):
         log_debug_event(None, "BACKEND", "Quote Creation Exception", str(e))
         raise HTTPException(status_code=500, detail="Quote creation failed — unexpected error.")
 
-
-# === Get Quote by Session ===
 
 # === Get Quote by Session ===
 
