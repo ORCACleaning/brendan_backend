@@ -1251,12 +1251,14 @@ async def filter_response_entry(request: Request):
         # === Init Trigger ===
         if message.lower() == "__init__":
             try:
+                log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
                 return await handle_chat_init(session_id)
             except Exception as e:
                 log_debug_event(None, "BACKEND", "Init Error", str(e))
                 raise HTTPException(status_code=500, detail="Init failed.")
 
         # === Session Lookup ===
+        log_debug_event(None, "BACKEND", "Session Lookup Start", f"Session ID: {session_id}")
         quote_data = get_quote_by_session(session_id)
         if not isinstance(quote_data, dict) or "record_id" not in quote_data:
             raise HTTPException(status_code=404, detail="Quote not found.")
@@ -1265,9 +1267,11 @@ async def filter_response_entry(request: Request):
         record_id = quote_data.get("record_id", "")
         quote_stage = quote_data.get("quote_stage", "Gathering Info")
         fields = quote_data.get("fields", {})
+        log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}")
 
-        # === Block if completed ===
-        if quote_stage in ["Chat Banned"]:
+        # === Block if banned ===
+        if quote_stage == "Chat Banned":
+            log_debug_event(record_id, "BACKEND", "Blocked Chat", "Chat is banned — denying interaction")
             return JSONResponse(content={
                 "properties": [],
                 "response": "This chat is closed. Call 1300 918 388 if you still need a quote.",
@@ -1275,11 +1279,12 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Privacy Consent Handler ===
+        # === Privacy Consent Flow ===
         if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
+            log_debug_event(record_id, "BACKEND", "Awaiting Privacy Consent", "Delegating to privacy handler")
             return await handle_privacy_consent(message, message.lower(), record_id, session_id)
 
-        # === Handle PDF Sending ===
+        # === PDF Flow ===
         if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
             name = fields.get("customer_name", "").strip()
             email = fields.get("customer_email", "").strip()
@@ -1287,11 +1292,12 @@ async def filter_response_entry(request: Request):
 
             if name and email and phone:
                 try:
+                    log_debug_event(record_id, "BACKEND", "Generating PDF", f"Preparing PDF for: {name} ({email})")
                     pdf_path = generate_quote_pdf(fields)
                     send_quote_email(email, name, pdf_path, quote_id)
-                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"PDF sent to {email}")
                     update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
                     append_message_log(record_id, f"PDF quote sent to {email}", "brendan")
+                    log_debug_event(record_id, "BACKEND", "PDF Sent", f"Sent to {email}, updated stage to 'Personal Info Received'")
 
                     return JSONResponse(content={
                         "properties": [],
@@ -1303,14 +1309,16 @@ async def filter_response_entry(request: Request):
                     log_debug_event(record_id, "BACKEND", "PDF/Email Error", str(e))
                     raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
-        # === Skip updates if quote is locked ===
+        # === Locked Stage Handling ===
         if quote_stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"]:
             append_message_log(record_id, message, "user")
-            reply = "This quote is already prepared. Would you like me to email it, or are you ready to book?"
             if any(k in message.lower() for k in PDF_KEYWORDS):
                 reply = "Sure — I’ll just grab your name, email and phone so I can send your quote across now."
                 update_quote_record(record_id, {"quote_stage": "Gathering Personal Info"})
+            else:
+                reply = "This quote is already prepared. Would you like me to email it, or are you ready to book?"
             append_message_log(record_id, reply, "brendan")
+            log_debug_event(record_id, "BACKEND", "Locked Stage Reply", f"Quote stage = {quote_stage} → Reply: {reply}")
             return JSONResponse(content={
                 "properties": [],
                 "response": reply,
@@ -1318,9 +1326,10 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Process user message ===
+        # === Main GPT Extraction ===
         append_message_log(record_id, message, "user")
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
+        log_debug_event(record_id, "BACKEND", "Calling GPT", f"Calling GPT on message: {message[:100]}")
 
         properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
 
@@ -1328,14 +1337,16 @@ async def filter_response_entry(request: Request):
         updated_fields = fields.copy()
         updated_fields.update(parsed)
 
-        # === Ensure required fields are preserved ===
+        # === Preserve required fields if missing ===
         for required in ["source", "bedrooms_v2", "bathrooms_v2"]:
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
+                log_debug_event(record_id, "BACKEND", "Preserved Field", f"{required} = {fields[required]}")
 
-        # === Auto-calculate quote ===
+        # === Quote Calculation ===
         if should_calculate_quote(updated_fields) and quote_stage != "Quote Calculated":
             try:
+                log_debug_event(record_id, "BACKEND", "Triggering Quote Calculation", f"Fields sufficient — calculating now")
                 result = calculate_quote(QuoteRequest(**updated_fields))
                 parsed.update(result.model_dump())
                 parsed["quote_stage"] = "Quote Calculated"
@@ -1343,8 +1354,9 @@ async def filter_response_entry(request: Request):
                 log_debug_event(record_id, "BACKEND", "Quote Ready", f"${parsed.get('total_price')} for {parsed.get('estimated_time_mins')} mins")
             except Exception as e:
                 log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
+                reply = "I ran into an issue calculating your quote — want me to try again?"
 
-        # === Final save ===
+        # === Final Save ===
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
 
@@ -1358,3 +1370,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
+
