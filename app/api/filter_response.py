@@ -252,28 +252,28 @@ def create_new_quote(session_id: str, force_new: bool = False):
     Creates a new Airtable quote record for Brendan.
     Returns: (quote_id, record_id, "Gathering Info", fields)
     """
-    quote_id = get_next_quote_id()
-
-    fields = {
-        "session_id": session_id,
-        "quote_id": quote_id,
-        "quote_stage": "Gathering Info",
-        "privacy_acknowledged": False,
-        "source": "Brendan"
-    }
-
-    headers = {
-        "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
-        "Content-Type": "application/json"
-    }
-
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{quote(TABLE_NAME)}"
-    payload = {"fields": fields}
-
-    # ✅ Log payload before sending to Airtable
-    logger.error(f"🚨 Payload before Airtable POST:\n{json.dumps(fields, indent=2)}")
-
     try:
+        quote_id = get_next_quote_id()
+
+        fields = {
+            "session_id": session_id,
+            "quote_id": quote_id,
+            "quote_stage": "Gathering Info",
+            "privacy_acknowledged": False,
+            "source": "Brendan"
+        }
+
+        headers = {
+            "Authorization": f"Bearer {settings.AIRTABLE_API_KEY}",
+            "Content-Type": "application/json"
+        }
+
+        url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{quote(TABLE_NAME)}"
+        payload = {"fields": fields}
+
+        # ✅ Log payload before sending to Airtable
+        logger.error(f"🚨 Payload before Airtable POST:\n{json.dumps(fields, indent=2)}")
+
         res = requests.post(url, headers=headers, json=payload)
         res.raise_for_status()
         record = res.json()
@@ -299,117 +299,6 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.error(f"❌ Exception during quote creation: {e}")
         log_debug_event(None, "BACKEND", "Quote Creation Exception", str(e))
         raise HTTPException(status_code=500, detail="Failed to create new quote.")
-
-# === Get Quote by Session ID ===
-
-def get_quote_by_session(session_id: str):
-    """
-    Retrieves the latest quote record from Airtable using session_id.
-    If no record is found, creates a new one.
-    Returns: {
-        "quote_id": str,
-        "record_id": str,
-        "quote_stage": str,
-        "fields": dict
-    }
-    """
-    if not session_id:
-        logger.warning("⚠️ get_quote_by_session called with empty session_id")
-        return None
-
-    safe_table_name = quote(TABLE_NAME)
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
-    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
-    params = {
-        "filterByFormula": f"{{session_id}}='{session_id}'",
-        "sort[0][field]": "timestamp",
-        "sort[0][direction]": "desc",
-        "pageSize": 1
-    }
-
-    logger.info(f"🔍 Looking up quote by session_id: {session_id}")
-    log_debug_event(None, "BACKEND", "Session Lookup Start", f"Session ID: {session_id}")
-
-    response_data = None
-    for attempt in range(3):
-        try:
-            log_debug_event(None, "BACKEND", "Session Lookup Request", f"Attempt {attempt + 1} — GET to Airtable")
-            res = requests.get(url, headers=headers, params=params)
-            res.raise_for_status()
-            response_data = res.json()
-            log_debug_event(None, "BACKEND", "Session Lookup Success", f"Data received on attempt {attempt + 1}")
-            break
-        except Exception as e:
-            logger.warning(f"⚠️ Airtable fetch failed (Attempt {attempt + 1}/3): {e}")
-            log_debug_event(None, "BACKEND", "Session Lookup Attempt Failed", f"Attempt {attempt + 1}: {str(e)}")
-            if attempt == 2:
-                logger.error(f"❌ Final failure after 3 attempts for session_id: {session_id}")
-                log_debug_event(None, "BACKEND", "Session Lookup Final Failure", str(e))
-                return None
-            sleep(1)
-
-    records = response_data.get("records", []) if response_data else []
-
-    # === Create new quote if not found ===
-    if not records:
-        from app.services.quote_id_utils import get_next_quote_id
-
-        new_quote_id = get_next_quote_id()
-        new_data = {
-            "session_id": session_id,
-            "quote_id": new_quote_id,
-            "quote_stage": "Gathering Info",
-            "privacy_acknowledged": False,
-            "source": "Brendan"
-        }
-
-        try:
-            create_res = requests.post(
-                url,
-                headers={**headers, "Content-Type": "application/json"},
-                json={"fields": new_data}
-            )
-            create_res.raise_for_status()
-            created = create_res.json()
-            record_id = created.get("id", "")
-            fields = created.get("fields", {})
-            log_debug_event(record_id, "BACKEND", "New Quote Created", f"session_id: {session_id}, quote_id: {new_quote_id}")
-            logger.info(f"✅ New quote created — ID: {new_quote_id} | Record ID: {record_id}")
-            return {
-                "quote_id": new_quote_id,
-                "record_id": record_id,
-                "quote_stage": "Gathering Info",
-                "fields": fields
-            }
-        except Exception as e:
-            logger.error(f"❌ Failed to create new quote for session {session_id}: {e}")
-            log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
-            return None
-
-    # === Return existing quote ===
-    record = records[0]
-    record_id = record.get("id", "")
-    fields = record.get("fields", {})
-    quote_id = fields.get("quote_id", "N/A")
-    quote_stage = fields.get("quote_stage", "Gathering Info")
-
-    if len(fields.keys()) < 10:
-        log_debug_event(record_id, "BACKEND", "Record Warning", f"Returned with only {len(fields)} fields — may be incomplete")
-
-    log_debug_event(record_id, "BACKEND", "Session Lookup Complete", f"Found quote_id: {quote_id}, stage: {quote_stage}")
-    logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
-
-    # Flush debug log
-    flushed = flush_debug_log(record_id)
-    if flushed:
-        update_quote_record(record_id, {"debug_log": flushed})
-
-    return {
-        "quote_id": quote_id,
-        "record_id": record_id,
-        "quote_stage": quote_stage,
-        "fields": fields
-    }
 
 
 # === Update Quote Record ===
