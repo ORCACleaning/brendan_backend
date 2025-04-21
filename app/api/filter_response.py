@@ -749,27 +749,22 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if record_id:
         log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(message={message[:100]})")
 
-    # === Init suppression ===
     if message.strip() == "__init__":
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
         return [{"property": "source", "value": "Brendan"}], "Just a moment while I get us started..."
 
-    # === Handle weak or placeholder inputs ===
     weak_inputs = {
         "hi", "hello", "hey", "you there", "you there?", "you hear me", "you hear me?", "what’s up",
         "ok", "okay", "what’s next", "next", "oi", "yo", "?", "test"
     }
     if message.lower().strip() in weak_inputs:
-        reply = (
-            "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-        )
+        reply = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
         log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], reply
 
-    # === Fetch existing fields ===
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
@@ -780,7 +775,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
-    # === Prepare message history ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
     messages = [{
         "role": "system",
@@ -806,7 +800,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready")
 
-    # === GPT Call ===
     def call_gpt_and_parse(attempt=1):
         try:
             res = client.chat.completions.create(
@@ -835,9 +828,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     if not isinstance(parsed, dict) or "properties" not in parsed or "response" not in parsed:
         log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
-        fallback = (
-            "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-        )
+        fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
@@ -846,18 +837,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
-    # === Catch list of strings (malformed) ===
     if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
         log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
-        fallback = (
-            "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-        )
+        fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], fallback
 
-    # === Fix dict prop format ===
     if isinstance(raw_props, dict):
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
@@ -867,7 +854,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     log_debug_event(record_id, "GPT", "Parsed GPT Response", f"Reply: {reply[:100]} | Props: {len(raw_props)}")
 
-    # === Map legacy field names ===
     safe_props = []
     for p in raw_props:
         if not isinstance(p, dict) or "property" not in p or "value" not in p:
@@ -887,7 +873,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         else:
             log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
 
-    # === Inject source tag and flush log ===
     safe_props = [p for p in safe_props if p["property"] != "source"]
     safe_props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
@@ -1197,23 +1182,10 @@ async def filter_response_entry(request: Request):
             try:
                 log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
                 await handle_chat_init(session_id)
-                quote_data = get_quote_by_session(session_id)
-                record_id = quote_data["record_id"]
-                quote_id = quote_data["quote_id"]
-                log = quote_data["fields"].get("message_log", "")
-
-                properties, gpt_response = await extract_properties_from_gpt4(
-                    "Hi Brendan", log, record_id=record_id, quote_id=quote_id
-                )
-
-                if properties:
-                    update_quote_record(record_id, {p["property"]: p["value"] for p in properties if "property" in p and "value" in p})
-
-                log_debug_event(record_id, "BACKEND", "Init Response Returned", f"handle_chat_init() and GPT response completed for session: {session_id}")
 
                 return JSONResponse(content={
-                    "properties": properties,
-                    "response": gpt_response,
+                    "properties": [],
+                    "response": "Just a moment while I get us started...",
                     "next_actions": generate_next_actions("Gathering Info"),
                     "session_id": session_id
                 })
