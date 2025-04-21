@@ -779,9 +779,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
-            record = get_quote_by_session(record_id)
-            if isinstance(record, dict):
-                existing_fields = record.get("fields", {})
+            result = get_quote_by_session(session_id=record_id)
+            if isinstance(result, tuple) and len(result) == 4:
+                _, _, _, existing_fields = result
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
@@ -917,13 +917,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Injected", "source = Brendan")
 
-    # Final flush
     flushed = flush_debug_log(record_id)
     if flushed:
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
-
 
 
 # === GPT Error Email Alert ===
