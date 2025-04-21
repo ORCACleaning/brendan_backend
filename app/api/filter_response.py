@@ -1224,7 +1224,6 @@ async def handle_chat_init(session_id: str):
 
 router = APIRouter()
 
-@router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
@@ -1259,7 +1258,9 @@ async def filter_response_entry(request: Request):
                             "furnished_status": "Is the property furnished or unfurnished?"
                         }[field]
 
-                        append_message_log(record_id, prompt, "brendan")
+                        append_message_log(record_id, message, "user")
+                        log_debug_event(record_id, "BACKEND", "Asking Missing Field", f"Missing: {field} → {prompt}")
+
                         return JSONResponse(content={
                             "properties": [],
                             "response": prompt,
