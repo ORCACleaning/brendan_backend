@@ -246,6 +246,9 @@ def create_new_quote(session_id: str, force_new: bool = False):
     Returns: (quote_id, record_id, "Gathering Info", fields)
     """
     try:
+        if not session_id:
+            raise ValueError("Session ID is required for creating a new quote.")
+        
         # Generate a new quote ID
         quote_id = get_next_quote_id()
         url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{quote(TABLE_NAME)}"
@@ -279,15 +282,14 @@ def create_new_quote(session_id: str, force_new: bool = False):
         record_id = response.get("id", "")
         returned_fields = response.get("fields", {})
 
-        logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
-        log_debug_event(record_id, "BACKEND", "New Quote Created", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
-
-        # Extra validation to ensure that all required fields are present
+        # Validate that all required fields are present
         required = ["session_id", "quote_id", "quote_stage", "source"]
         for r in required:
             if r not in returned_fields:
-                log_debug_event(record_id, "BACKEND", "Missing Field After Creation", f"{r} is missing in returned_fields")
-                raise HTTPException(status_code=500, detail=f"Missing required field '{r}' in Airtable response.")
+                error_msg = f"Missing required field '{r}' in Airtable response"
+                log_debug_event(record_id, "BACKEND", "Missing Field After Creation", error_msg)
+                logger.error(f"❌ {error_msg}")
+                raise HTTPException(status_code=500, detail=error_msg)
 
         # Flush and store the debug log after quote creation
         flushed = flush_debug_log(record_id)
@@ -295,15 +297,23 @@ def create_new_quote(session_id: str, force_new: bool = False):
             update_quote_record(record_id, {"debug_log": flushed})
             log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(flushed)} chars flushed post-create")
 
+        logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
+        log_debug_event(record_id, "BACKEND", "New Quote Created", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
+
         # Return relevant information after quote creation
         return quote_id, record_id, "Gathering Info", returned_fields
 
     except requests.exceptions.HTTPError as e:
-        # Handle HTTP errors (Airtable API errors)
         error_msg = f"Airtable Error — Status Code: {res.status_code}, Response: {res.text}"
         logger.error(f"❌ Airtable quote creation failed: {error_msg}")
         log_debug_event(None, "BACKEND", "Quote Creation Failed", error_msg)
         raise HTTPException(status_code=500, detail="Quote creation failed — Airtable error.")
+
+    except ValueError as e:
+        error_msg = f"Invalid input: {e}"
+        logger.error(f"❌ Invalid input: {error_msg}")
+        log_debug_event(None, "BACKEND", "Invalid Input", error_msg)
+        raise HTTPException(status_code=400, detail=error_msg)
 
     except KeyError as e:
         # Handle missing keys in response
@@ -1315,12 +1325,12 @@ async def filter_response_entry(request: Request):
 
                 # Get the quote for the session
                 quote_data = get_quote_by_session(session_id)
-                
-                if quote_data is None:  # Ensure we have valid quote data
-                    log_debug_event(None, "BACKEND", "Session Not Found", f"No valid session found for {session_id}")
+
+                if not quote_data:
+                    log_debug_event(None, "BACKEND", "No valid session found", f"Session ID: {session_id} — Creating new quote")
                     raise HTTPException(status_code=404, detail="No valid session found.")
 
-                record_id = quote_data["record_id"]
+                record_id = quote_data.get("record_id", "")
                 fields = quote_data.get("fields", {})
 
                 # Ensure all required fields are filled in the correct order
