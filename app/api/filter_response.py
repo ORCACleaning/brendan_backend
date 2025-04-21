@@ -374,8 +374,8 @@ def update_quote_record(record_id: str, fields: dict):
     log_debug_event(record_id, "BACKEND", "Function Start", f"update_quote_record(record_id={record_id}, fields={list(fields.keys())})")
 
     # === Pull schema cache ===
-    actual_keys = AIRTABLE_SCHEMA_CACHE["actual_keys"]
-    if not AIRTABLE_SCHEMA_CACHE["fetched"]:
+    actual_keys = AIRTABLE_SCHEMA_CACHE.get("actual_keys", set())
+    if not AIRTABLE_SCHEMA_CACHE.get("fetched"):
         try:
             schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
             schema_res = requests.get(schema_url, headers={"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"})
@@ -391,6 +391,12 @@ def update_quote_record(record_id: str, fields: dict):
         except Exception as e:
             logger.warning(f"⚠️ Could not fetch Airtable field schema: {e}")
             log_debug_event(record_id, "BACKEND", "Schema Fetch Failed", str(e))
+
+    # === Skip debug_log if not in schema or not fetched ===
+    if not AIRTABLE_SCHEMA_CACHE.get("fetched") or "debug_log" not in actual_keys:
+        if "debug_log" in fields:
+            fields.pop("debug_log", None)
+            log_debug_event(record_id, "BACKEND", "Debug Field Skipped", "debug_log not in schema or schema not fetched")
 
     # === Normalize and validate ===
     normalized_fields = {}
@@ -474,11 +480,11 @@ def update_quote_record(record_id: str, fields: dict):
 
     # Always flush logs if present
     for log_field in ["debug_log", "message_log"]:
-        if log_field in fields:
+        if log_field in fields and log_field not in normalized_fields:
             normalized_fields[log_field] = str(fields[log_field]) if fields[log_field] else ""
 
     debug_log = flush_debug_log(record_id)
-    if debug_log:
+    if debug_log and "debug_log" in actual_keys:
         normalized_fields["debug_log"] = debug_log
         log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(debug_log)} chars flushed to Airtable")
 
@@ -532,6 +538,7 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Failed", "No fields updated in fallback.")
 
     return successful
+
 
 
 # === Inline Quote Summary Helper ===
@@ -748,12 +755,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
         return [{"property": "source", "value": "Brendan"}], "Just a moment while I get us started..."
 
-    # === Handle weak inputs ===
-    weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
+    # === Handle weak or placeholder inputs ===
+    weak_inputs = {
+        "hi", "hello", "hey", "you there", "you there?", "you hear me", "you hear me?", "what’s up",
+        "ok", "okay", "what’s next", "next", "oi", "yo", "?", "test"
+    }
     if message.lower().strip() in weak_inputs:
         reply = (
-            "Just let me know what suburb we’re quoting for, how many bedrooms and bathrooms there are, "
-            "and whether the property is furnished or unfurnished."
+            "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
         )
         log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
         flushed = flush_debug_log(record_id)
@@ -827,7 +836,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     if not isinstance(parsed, dict) or "properties" not in parsed or "response" not in parsed:
         log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
-        fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
+        fallback = (
+            "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
+        )
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
@@ -836,14 +847,18 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
+    # === Catch list of strings (malformed) ===
     if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
         log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
-        fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
+        fallback = (
+            "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
+        )
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
         return [{"property": "source", "value": "Brendan"}], fallback
 
+    # === Fix dict prop format ===
     if isinstance(raw_props, dict):
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
@@ -853,6 +868,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     log_debug_event(record_id, "GPT", "Parsed GPT Response", f"Reply: {reply[:100]} | Props: {len(raw_props)}")
 
+    # === Map legacy field names ===
     safe_props = []
     for p in raw_props:
         if not isinstance(p, dict) or "property" not in p or "value" not in p:
@@ -872,7 +888,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         else:
             log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
 
-    # Inject source tag and save debug log
+    # === Inject source tag and flush log ===
     safe_props = [p for p in safe_props if p["property"] != "source"]
     safe_props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
@@ -1133,6 +1149,9 @@ async def handle_chat_init(session_id: str):
         append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
         log_debug_event(record_id, "BACKEND", "System Message Logged", "Brendan start trigger recorded")
 
+        # === Inject source field directly ===
+        update_quote_record(record_id, {"source": "Brendan"})
+
         # === Flush initial debug log ===
         flushed = flush_debug_log(record_id)
         if flushed:
@@ -1140,49 +1159,16 @@ async def handle_chat_init(session_id: str):
             update_quote_record(record_id, {"debug_log": flushed})
             log_debug_event(record_id, "BACKEND", "Initial Debug Log Saved", "Flushed to Airtable")
 
-        # === Call GPT on __init__ (suppressed first) ===
-        try:
-            log_debug_event(record_id, "BACKEND", "Calling GPT (__init__)", "Triggering GPT intro response")
-            properties, reply = await extract_properties_from_gpt4(
-                "__init__", "USER: __init__", record_id=record_id, quote_id=quote_id, skip_log_lookup=True
-            )
-            log_debug_event(record_id, "GPT", "Init GPT Response", f"{len(reply)} chars, {len(properties)} properties")
-        except Exception as e:
-            log_debug_event(record_id, "GPT", "Init GPT Call Failed", str(e))
-            properties = [{"property": "source", "value": "Brendan"}]
-            reply = (
-                "Let’s get started! What suburb is the property in, and how many bedrooms and bathrooms are we cleaning?"
-            )
-
+        # === Use fixed welcome response (no GPT call) ===
+        reply = "Just a moment while I get us started..."
         append_message_log(record_id, reply, "brendan")
         log_debug_event(record_id, "BACKEND", "Initial Reply Logged", f"{len(reply)} chars")
 
-        # === 🔁 Immediately follow up with second GPT call ===
-        try:
-            log_debug_event(record_id, "GPT", "Follow-up Trigger", "Calling GPT after __init__ to continue")
-            follow_props, follow_reply = await extract_properties_from_gpt4(
-                "what’s next", fields.get("message_log", "")[-3000:], record_id=record_id, quote_id=quote_id
-            )
-            log_debug_event(record_id, "GPT", "Follow-up GPT Response", f"{len(follow_reply)} chars, {len(follow_props)} properties")
-        except Exception as e:
-            log_debug_event(record_id, "GPT", "Follow-up GPT Failed", str(e))
-            follow_props = []
-            follow_reply = None
-
-        if follow_reply:
-            append_message_log(record_id, follow_reply, "brendan")
-            log_debug_event(record_id, "BACKEND", "Follow-up Reply Logged", f"{len(follow_reply)} chars")
-        else:
-            log_debug_event(record_id, "BACKEND", "Follow-up Skipped", "No reply returned")
-
-        all_props = properties + follow_props if follow_props else properties
-        final_reply = follow_reply if follow_reply else reply
-
-        log_debug_event(record_id, "BACKEND", "Init Complete", f"Final response sent. Length: {len(final_reply)}")
+        log_debug_event(record_id, "BACKEND", "Init Complete", f"Final response sent. Length: {len(reply)}")
 
         return JSONResponse(content={
-            "properties": all_props,
-            "response": final_reply,
+            "properties": [{"property": "source", "value": "Brendan"}],
+            "response": reply,
             "next_actions": [],
             "session_id": session_id
         })
@@ -1190,7 +1176,6 @@ async def handle_chat_init(session_id: str):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Init Error", str(e))
         raise HTTPException(status_code=500, detail="Failed to initialize Brendan.")
-
 
 # === Brendan API Router ===
 
