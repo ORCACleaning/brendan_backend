@@ -47,7 +47,11 @@ else:
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # === Global Schema Cache ===
-AIRTABLE_SCHEMA_CACHE = {"actual_keys": [], "valid_fields": []}
+AIRTABLE_SCHEMA_CACHE = {
+    "fetched": False,
+    "actual_keys": [],
+    "valid_fields": []
+}
 
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
