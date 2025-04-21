@@ -396,11 +396,17 @@ def get_quote_by_session(session_id: str):
 
 # === Update Quote Record ===
 
+# === Airtable Schema Cache ===
+AIRTABLE_SCHEMA_CACHE = {
+    "actual_keys": set(),
+    "fetched": False
+}
+
 def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
     Ensures 'quote_stage' is persisted correctly and all updates conform to Airtable schema.
-    Handles fallback retries and flushes debug log after update.
+    Adds in-memory cache for Airtable schema to prevent redundant GETs.
     """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
@@ -413,18 +419,22 @@ def update_quote_record(record_id: str, fields: dict):
         "Content-Type": "application/json"
     }
 
-    schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
-    actual_keys = set()
-    try:
-        schema_res = requests.get(schema_url, headers={"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"})
-        schema_res.raise_for_status()
-        tables = schema_res.json().get("tables", [])
-        for table in tables:
-            if table.get("name") == TABLE_NAME:
-                actual_keys = {f["name"] for f in table.get("fields", [])}
-                break
-    except Exception as e:
-        logger.warning(f"⚠️ Could not fetch Airtable field schema: {e}")
+    # === Use cached schema or fetch once ===
+    actual_keys = AIRTABLE_SCHEMA_CACHE["actual_keys"]
+    if not AIRTABLE_SCHEMA_CACHE["fetched"]:
+        schema_url = f"https://api.airtable.com/v0/meta/bases/{settings.AIRTABLE_BASE_ID}/tables"
+        try:
+            schema_res = requests.get(schema_url, headers={"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"})
+            schema_res.raise_for_status()
+            tables = schema_res.json().get("tables", [])
+            for table in tables:
+                if table.get("name") == TABLE_NAME:
+                    actual_keys = {f["name"] for f in table.get("fields", [])}
+                    AIRTABLE_SCHEMA_CACHE["actual_keys"] = actual_keys
+                    AIRTABLE_SCHEMA_CACHE["fetched"] = True
+                    break
+        except Exception as e:
+            logger.warning(f"⚠️ Could not fetch Airtable field schema: {e}")
 
     normalized_fields = {}
     MAX_REASONABLE_INT = 100
@@ -858,74 +868,81 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
 def send_gpt_error_email(error_msg: str):
     """
-    Sends an email to admin if GPT extraction fails and logs the error event.
-    Also flushes debug log if a record_id is found in the error body.
+    Sends a critical error email if GPT extraction fails.
+    If logging or email fails, logs to Render console as fallback.
     """
+    try:
+        sender_email = "info@orcacleaning.com.au"
+        recipient_email = "admin@orcacleaning.com.au"
+        smtp_server = "smtp.office365.com"
+        smtp_port = 587
+        smtp_pass = settings.SMTP_PASS
 
-    sender_email = "info@orcacleaning.com.au"
-    recipient_email = "admin@orcacleaning.com.au"
-    smtp_server = "smtp.office365.com"
-    smtp_port = 587
-    smtp_pass = settings.SMTP_PASS
-
-    if not smtp_pass:
-        logger.error("❌ Missing SMTP password — cannot send GPT error email.")
-        try:
-            log_debug_event(None, "BACKEND", "Email Send Failed", "Missing SMTP_PASS environment variable")
-        except Exception as e:
-            logger.error(f"❌ Error logging failure: {e}")
-        return
-
-    msg = MIMEText(error_msg)
-    msg["Subject"] = "🚨 Brendan GPT Extraction Error"
-    msg["From"] = sender_email
-    msg["To"] = recipient_email
-
-    for attempt in range(2):
-        try:
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.starttls()
-                server.login(sender_email, smtp_pass)
-                server.sendmail(
-                    from_addr=sender_email,
-                    to_addrs=[recipient_email],
-                    msg=msg.as_string()
-                )
-            logger.info("✅ GPT error email sent successfully.")
+        if not smtp_pass:
+            logger.error("❌ Missing SMTP_PASS — cannot send GPT error email.")
             try:
-                log_debug_event(None, "BACKEND", "GPT Error Email Sent", f"Error email sent to {recipient_email} (attempt {attempt + 1})")
+                log_debug_event(None, "BACKEND", "Email Send Failed", "Missing SMTP_PASS environment variable")
             except Exception as e:
-                logger.error(f"❌ Error logging email send success: {e}")
-            break  # Exit after success
-        except smtplib.SMTPException as e:
-            logger.warning(f"⚠️ SMTP error (attempt {attempt + 1}/2): {e}")
-            if attempt == 1:
-                logger.error("❌ Failed to send GPT error email after 2 attempts.")
-                try:
-                    log_debug_event(None, "BACKEND", "GPT Error Email Failed", f"SMTP error: {str(e)}")
-                except Exception as log_e:
-                    logger.error(f"❌ Error logging email send failure: {log_e}")
-            else:
-                sleep(5)
-        except Exception as e:
-            logger.error(f"❌ Unexpected error sending GPT error email: {e}")
-            try:
-                log_debug_event(None, "BACKEND", "Unexpected Email Error", str(e))
-            except Exception as log_e:
-                logger.error(f"❌ Error logging unexpected email failure: {log_e}")
+                logger.error(f"❌ Failed to log missing SMTP_PASS: {e}")
             return
 
-    # Attempt flush even without known record_id
-    try:
-        record_id_match = re.search(r"record[_ ]?id[:=]?[^\w]?(\w{5,})", error_msg, re.IGNORECASE)
-        if record_id_match:
-            record_id = record_id_match.group(1).strip()
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
+        msg = MIMEText(error_msg)
+        msg["Subject"] = "🚨 Brendan GPT Extraction Error"
+        msg["From"] = sender_email
+        msg["To"] = recipient_email
+
+        for attempt in range(2):
+            try:
+                with smtplib.SMTP(smtp_server, smtp_port) as server:
+                    server.starttls()
+                    server.login(sender_email, smtp_pass)
+                    server.sendmail(sender_email, [recipient_email], msg.as_string())
+
+                logger.info("✅ GPT error email sent successfully.")
+                try:
+                    log_debug_event(None, "BACKEND", "GPT Error Email Sent", f"Sent to {recipient_email} (attempt {attempt + 1})")
+                except Exception as log_success:
+                    logger.warning(f"⚠️ Logging success failed: {log_success}")
+                break
+
+            except smtplib.SMTPException as smtp_error:
+                logger.warning(f"⚠️ SMTP error (attempt {attempt + 1}/2): {smtp_error}")
+                if attempt == 1:
+                    logger.error("❌ Failed to send GPT error email after 2 attempts.")
+                    try:
+                        log_debug_event(None, "BACKEND", "GPT Error Email Failed", f"SMTP error: {smtp_error}")
+                    except Exception as log_fail:
+                        logger.error(f"❌ Failed to log SMTP error: {log_fail}")
+                else:
+                    sleep(5)
+
+            except Exception as e:
+                logger.error(f"❌ Unexpected error sending GPT error email: {e}")
+                try:
+                    log_debug_event(None, "BACKEND", "Unexpected Email Error", str(e))
+                except Exception as log_e:
+                    logger.error(f"❌ Failed to log unexpected email error: {log_e}")
+                return
+
+        # Try flushing debug log from record_id inside error body
+        try:
+            match = re.search(r"record[_ ]?id[:=]?[^\w]?(\w{5,})", error_msg, re.IGNORECASE)
+            if match:
+                record_id = match.group(1).strip()
+                flushed = flush_debug_log(record_id)
+                if flushed:
+                    update_quote_record(record_id, {"debug_log": flushed})
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to flush debug log after error: {e}")
+            try:
+                log_debug_event(None, "BACKEND", "Debug Log Flush Error", str(e))
+            except:
+                logger.error(f"❌ Could not log flush failure: {e}")
+
     except Exception as e:
-        logger.warning(f"⚠️ Failed to flush debug log in send_gpt_error_email: {e}")
-        log_debug_event(None, "BACKEND", "Debug Log Flush Error", str(e))
+        logger.error(f"💥 FATAL: send_gpt_error_email() failed to execute: {e}")
+        # No log_debug_event fallback — only raw console log
+
 
 # === Append Message Log ===
 
@@ -1005,6 +1022,48 @@ def append_message_log(record_id: str, message: str, sender: str):
         logger.warning(f"⚠️ Failed to flush debug log: {e}")
         log_debug_event(record_id, "BACKEND", "Debug Log Flush Error", str(e))
 
+# === Handle Privacy Consent === 
+
+async def handle_privacy_consent(message: str, message_lower: str, record_id: str, session_id: str):
+    """
+    Handles privacy consent step before collecting personal info.
+    Confirms the customer is happy to provide contact details.
+    """
+    approved = {"yes", "yep", "sure", "go ahead", "ok", "okay", "alright", "please do", "y", "yup", "yeh"}
+
+    if any(word in message_lower for word in approved):
+        update_quote_record(record_id, {"privacy_acknowledged": True})
+        append_message_log(record_id, "✅ Privacy consent acknowledged", "system")
+
+        response = (
+            "Thanks for confirming! Just pop in your full name, email, and best contact number, "
+            "and I’ll send that quote straight through as a downloadable PDF."
+        )
+        log_debug_event(record_id, "BACKEND", "Privacy Acknowledged", "Customer approved data collection")
+        return JSONResponse(content={
+            "properties": [{"property": "privacy_acknowledged", "value": True}],
+            "response": response,
+            "next_actions": [],
+            "session_id": session_id
+        })
+
+    # If they haven't confirmed yet — show privacy notice
+    privacy_msg = (
+        "Just so you know — we don’t ask for anything private like bank info. "
+        "Only your name, email and phone so we can send the quote over.\n\n"
+        "Your privacy is 100% respected.\n"
+        "You can read our full Privacy Policy here: [https://orcacleaning.com.au/privacy-policy/](https://orcacleaning.com.au/privacy-policy/)\n\n"
+        "**Would you like to continue and provide your details now?**"
+    )
+    log_debug_event(record_id, "BACKEND", "Privacy Prompt", "Awaiting consent before collecting contact details")
+
+    return JSONResponse(content={
+        "properties": [],
+        "response": privacy_msg,
+        "next_actions": [],
+        "session_id": session_id
+    })
+
 # === Handle Chat Init === 
 
 async def handle_chat_init(session_id: str):
@@ -1058,8 +1117,6 @@ async def handle_chat_init(session_id: str):
 # === Brendan API Router ===
 
 router = APIRouter()
-
-# === Brendan API Router ===
 
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
@@ -1163,3 +1220,22 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
+
+
+@router.post("/log-debug")
+async def frontend_log_debug(request: Request):
+    try:
+        data = await request.json()
+        session_id = str(data.get("session_id", "")).strip()
+        source = str(data.get("source", "FRONTEND")).strip().upper()
+        message = str(data.get("message", "")).strip()
+
+        if not session_id or not message:
+            raise HTTPException(status_code=400, detail="Missing session_id or message")
+
+        log_debug_event(None, source, "Frontend Log", f"[{session_id}] {message}")
+        return JSONResponse(content={"status": "ok"})
+
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to log frontend debug: {e}")
+        return JSONResponse(status_code=500, content={"status": "error", "detail": str(e)})
