@@ -265,6 +265,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"📤 Creating new quote with payload:\n{json.dumps(fields, indent=2)}")
         log_debug_event(None, "BACKEND", "Function Start", f"create_new_quote(session_id={session_id}, force_new={force_new})")
         log_debug_event(None, "BACKEND", "Creating New Quote", f"Session: {session_id}, Quote ID: {quote_id}, Timestamp: {timestamp} (not sent)")
+        log_debug_event(None, "BACKEND", "Injected Source Field", "source = Brendan")
 
         payload = {"fields": fields}
         res = requests.post(url, headers=headers, json=payload)
@@ -309,6 +310,7 @@ def get_quote_by_session(session_id: str):
     """
     Looks up existing quote in Airtable by session_id.
     Returns dict with quote_id, record_id, quote_stage, fields.
+    Logs all paths for successful, partial, or failed lookups.
     """
     try:
         if not session_id:
@@ -334,16 +336,23 @@ def get_quote_by_session(session_id: str):
 
         record = records[0]
         fields = record.get("fields", {})
-        record_id = record.get("id")
+        record_id = record.get("id", "")
+
+        quote_id = fields.get("quote_id", "")
+        quote_stage = fields.get("quote_stage", "Gathering Info")
+
+        if not record_id or not fields:
+            log_debug_event(None, "BACKEND", "Session Found But Incomplete", f"record_id or fields missing for {session_id}")
+            return None
 
         result = {
-            "quote_id": fields.get("quote_id", ""),
+            "quote_id": quote_id,
             "record_id": record_id,
-            "quote_stage": fields.get("quote_stage", "Gathering Info"),
+            "quote_stage": quote_stage,
             "fields": fields
         }
 
-        log_debug_event(record_id, "BACKEND", "Session Found", f"quote_id={result['quote_id']}, stage={result['quote_stage']}")
+        log_debug_event(record_id, "BACKEND", "Session Found", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
         return result
 
     except Exception as e:
