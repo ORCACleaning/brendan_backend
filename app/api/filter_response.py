@@ -743,6 +743,7 @@ def generate_next_actions(quote_stage: str):
 
 
 # === GPT Extraction (Production-Grade) ===
+
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     logger.info(f"🟡 extract_properties_from_gpt4() called — record_id: {record_id}, message: {message}")
     if record_id:
@@ -873,6 +874,26 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
 
     safe_props = [p for p in safe_props if p["property"] != "source"]
+    safe_props.append({"property": "source", "value": "Brendan"})
+    log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
+
+    flushed = flush_debug_log(record_id)
+    if flushed:
+        update_quote_record(record_id, {"debug_log": flushed})
+
+    # ✅ Final fallback: rescue single-name replies
+    if not safe_props or all(p["property"] == "source" for p in safe_props):
+        if len(message.split()) == 1 and message.isalpha():
+            guessed_name = message.strip().title()
+            log_debug_event(record_id, "GPT", "Name Fallback Injected", f"customer_name = {guessed_name}")
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
+            return [
+                {"property": "customer_name", "value": guessed_name},
+                {"property": "source", "value": "Brendan"}
+            ], f"Thanks {guessed_name}! Let’s keep going."
+
+    return safe_props, reply
 
 
 # === GPT Error Email Alert ===
