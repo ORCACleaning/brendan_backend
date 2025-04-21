@@ -1,54 +1,34 @@
 from app.models.quote_models import QuoteRequest, QuoteResponse
 from app.config import logger
 
-REQUIRED_QUOTE_FIELDS = [
-    "suburb", "bedrooms_v2", "bathrooms_v2", "furnished", "oven_cleaning", "window_cleaning",
-    "blind_cleaning", "carpet_cleaning", "deep_cleaning", "fridge_cleaning", "range_hood_cleaning",
+REQUIRED_FIELDS_FOR_QUOTE = [
+    "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status",
+    "oven_cleaning", "window_cleaning", "blind_cleaning",
+    "carpet_cleaning", "deep_cleaning", "fridge_cleaning", "range_hood_cleaning",
     "wall_cleaning", "balcony_cleaning", "garage_cleaning", "upholstery_cleaning",
-    "after_hours_cleaning", "weekend_cleaning", "mandurah_property", "is_property_manager",
-    "special_requests", "special_request_minutes_min", "special_request_minutes_max"
+    "after_hours_cleaning", "weekend_cleaning", "mandurah_property",
+    "is_property_manager", "special_requests",
+    "special_request_minutes_min", "special_request_minutes_max",
+    "window_count",
+    "carpet_mainroom_count", "carpet_stairs_count", "carpet_other_count",
+    "quote_id"
 ]
-
-CARPET_BREAKDOWN_FIELDS = [
-    "carpet_bedroom_count", "carpet_mainroom_count", "carpet_study_count",
-    "carpet_halway_count", "carpet_stairs_count", "carpet_other_count"
-]
-
-PROPERTY_MANAGER_FIELDS = ["real_estate_name", "number_of_sessions"]
 
 def should_calculate_quote(fields: dict) -> bool:
-    # Check core required fields
-    for key in REQUIRED_QUOTE_FIELDS:
-        if key not in fields or fields[key] in [None, "", False]:
-            return False
+    missing = []
+    for key in REQUIRED_FIELDS_FOR_QUOTE:
+        if key not in fields or fields[key] in ["", None, False]:
+            missing.append(key)
 
-    # Check carpet breakdown only if carpet_cleaning is "Yes"
+    # Carpet breakdown required if carpet_cleaning == "Yes"
     if fields.get("carpet_cleaning") == "Yes":
-        for key in CARPET_BREAKDOWN_FIELDS:
-            if key not in fields or fields[key] in [None, ""]:
-                return False
+        for carpet_field in ["carpet_mainroom_count", "carpet_stairs_count", "carpet_other_count"]:
+            if fields.get(carpet_field) in ["", None]:
+                missing.append(carpet_field)
 
-    # Check property manager fields if applicable
-    if str(fields.get("is_property_manager", "")).strip().lower() in {"true", "yes", "1"}:
-        for key in PROPERTY_MANAGER_FIELDS:
-            if key not in fields or fields[key] in [None, "", False]:
-                return False
-
-    # Ensure optional add-on checkboxes are explicitly filled (True or False)
-    optional_booleans = [
-        "garage_cleaning",
-        "upholstery_cleaning",
-        "weekend_cleaning",
-        "after_hours_cleaning",
-        "window_cleaning",
-        "balcony_cleaning",
-        "blind_cleaning",
-        "wall_washing",
-        "fridge_cleaning"
-    ]
-    for key in optional_booleans:
-        if key not in fields:
-            return False
+    if missing:
+        logger.warning(f"🟡 Quote not ready — missing fields: {missing}")
+        return False
 
     return True
 
@@ -91,7 +71,7 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
                 log_debug_event(record_id, "BACKEND", "Extra Service Time", f"{service}: +{time} mins")
 
         if data.window_cleaning:
-            wc = (data.window_count or 0)
+            wc = data.window_count or 0
             base_minutes += wc * 10
             log_debug_event(record_id, "BACKEND", "Window Cleaning Time", f"{wc} windows: +{wc * 10} mins")
 
@@ -107,16 +87,13 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
             base_minutes += 45
             log_debug_event(record_id, "BACKEND", "Upholstery Cleaning Time", "+45 mins")
 
-        if str(data.furnished).strip().lower() == "furnished":
+        if str(data.furnished_status).strip().lower() == "furnished":
             base_minutes += 60
             log_debug_event(record_id, "BACKEND", "Furnished Bonus Time", "+60 mins")
 
         if str(data.carpet_cleaning).strip() == "Yes":
             carpet_breakdown = {
-                "bedroom": (data.carpet_bedroom_count or 0) * 30,
                 "mainroom": (data.carpet_mainroom_count or 0) * 45,
-                "study": (data.carpet_study_count or 0) * 25,
-                "hallway": (data.carpet_halway_count or 0) * 20,
                 "stairs": (data.carpet_stairs_count or 0) * 35,
                 "other": (data.carpet_other_count or 0) * 30
             }
@@ -129,9 +106,9 @@ def calculate_quote(data: QuoteRequest) -> QuoteResponse:
         log_debug_event(record_id, "BACKEND", "Base Time Calculated", f"{base_minutes} mins")
 
     except Exception as e:
-        logger.warning(f"\u26a0\ufe0f Error in base time calculation: {e}")
-        base_minutes = 0
+        logger.warning(f"⚠️ Error in base time calculation: {e}")
         log_debug_event(record_id, "BACKEND", "Calculation Error", f"Base time error: {e}")
+        base_minutes = 0
 
     min_total_mins = base_minutes
     max_total_mins = base_minutes
