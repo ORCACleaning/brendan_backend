@@ -1,4 +1,5 @@
 # === Built-in Python Modules ===
+import os
 import json
 import uuid
 import logging
