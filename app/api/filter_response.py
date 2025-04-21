@@ -306,7 +306,12 @@ def get_quote_by_session(session_id: str):
     """
     Retrieves the latest quote record from Airtable using session_id.
     If no record is found, creates a new one.
-    Returns: (quote_id, record_id, quote_stage, fields)
+    Returns: {
+        "quote_id": str,
+        "record_id": str,
+        "quote_stage": str,
+        "fields": dict
+    }
     """
     if not session_id:
         logger.warning("⚠️ get_quote_by_session called with empty session_id")
@@ -345,7 +350,7 @@ def get_quote_by_session(session_id: str):
 
     records = response_data.get("records", []) if response_data else []
 
-    # === Create new quote if no record exists ===
+    # === Create new quote if not found ===
     if not records:
         from app.services.quote_id_utils import get_next_quote_id
 
@@ -354,7 +359,8 @@ def get_quote_by_session(session_id: str):
             "session_id": session_id,
             "quote_id": new_quote_id,
             "quote_stage": "Gathering Info",
-            "privacy_acknowledged": False
+            "privacy_acknowledged": False,
+            "source": "Brendan"
         }
 
         try:
@@ -364,37 +370,47 @@ def get_quote_by_session(session_id: str):
                 json={"fields": new_data}
             )
             create_res.raise_for_status()
-            record = create_res.json()
-            record_id = record.get("id", "")
-            fields = record.get("fields", {})
-            logger.info(f"✅ New quote created — ID: {new_quote_id} | Record ID: {record_id}")
+            created = create_res.json()
+            record_id = created.get("id", "")
+            fields = created.get("fields", {})
             log_debug_event(record_id, "BACKEND", "New Quote Created", f"session_id: {session_id}, quote_id: {new_quote_id}")
-            return new_quote_id, record_id, "Gathering Info", fields
+            logger.info(f"✅ New quote created — ID: {new_quote_id} | Record ID: {record_id}")
+            return {
+                "quote_id": new_quote_id,
+                "record_id": record_id,
+                "quote_stage": "Gathering Info",
+                "fields": fields
+            }
         except Exception as e:
             logger.error(f"❌ Failed to create new quote for session {session_id}: {e}")
             log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
             return None
 
-    # === Return existing record ===
+    # === Return existing quote ===
     record = records[0]
     record_id = record.get("id", "")
     fields = record.get("fields", {})
     quote_id = fields.get("quote_id", "N/A")
     quote_stage = fields.get("quote_stage", "Gathering Info")
 
-    # === Log shallow record warning ===
     if len(fields.keys()) < 10:
         log_debug_event(record_id, "BACKEND", "Record Warning", f"Returned with only {len(fields)} fields — may be incomplete")
 
-    logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
     log_debug_event(record_id, "BACKEND", "Session Lookup Complete", f"Found quote_id: {quote_id}, stage: {quote_stage}")
+    logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
 
-    # === Flush debug log after successful lookup ===
+    # Flush debug log
     flushed = flush_debug_log(record_id)
     if flushed:
         update_quote_record(record_id, {"debug_log": flushed})
 
-    return quote_id, record_id, quote_stage, fields
+    return {
+        "quote_id": quote_id,
+        "record_id": record_id,
+        "quote_stage": quote_stage,
+        "fields": fields
+    }
+
 
 # === Update Quote Record ===
 
@@ -755,10 +771,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     # === Fetch current Airtable data to suppress repeat prompts ===
     existing_fields = {}
-    if record_id:
-        record = get_quote_by_session(record_id)
-        if record:
-            existing_fields = record.get("fields", {})
+    if record_id and not skip_log_lookup:
+        try:
+            record = get_quote_by_session(record_id)
+            if isinstance(record, dict):
+                existing_fields = record.get("fields", {})
+        except Exception as e:
+            log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
     # === Build GPT message history ===
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
@@ -775,6 +794,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "IMPORTANT: Always reply in JSON with two fields: 'properties' and 'response'."
         )
     }]
+
     for line in prepared_log.split("\n"):
         if line.startswith("USER:") and line.strip() != "USER: __init__":
             messages.append({"role": "user", "content": line[5:].strip()})
@@ -785,16 +805,11 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     # Suppress repeated prompts for known fields
     suppress = []
-    if existing_fields.get("customer_name"):
-        suppress.append("customer_name")
-    if existing_fields.get("suburb"):
-        suppress.append("suburb")
-    if existing_fields.get("bedrooms_v2"):
-        suppress.append("bedrooms")
-    if existing_fields.get("bathrooms_v2"):
-        suppress.append("bathrooms")
-    if existing_fields.get("furnished_status"):
-        suppress.append("furnished")
+    if existing_fields.get("customer_name"): suppress.append("customer_name")
+    if existing_fields.get("suburb"): suppress.append("suburb")
+    if existing_fields.get("bedrooms_v2"): suppress.append("bedrooms")
+    if existing_fields.get("bathrooms_v2"): suppress.append("bathrooms")
+    if existing_fields.get("furnished_status"): suppress.append("furnished")
 
     if message == "__init__":
         messages.append({
@@ -841,7 +856,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     # === Call GPT ===
     parsed = call_gpt_and_parse(messages, 1)
     if not isinstance(parsed, dict):
-        messages.insert(1, {"role": "system", "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."})
+        messages.insert(1, {
+            "role": "system",
+            "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."
+        })
         parsed = call_gpt_and_parse(messages, 2)
 
     if not isinstance(parsed, dict):
@@ -871,7 +889,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             update_quote_record(record_id, {"debug_log": flushed})
         return [], reply
 
-    # === Sanitize final props ===
+    # === Final sanitization ===
     safe_props = []
     for p in raw_props:
         if isinstance(p, dict) and "property" in p and "value" in p:
@@ -893,11 +911,13 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     props.append({"property": "source", "value": "Brendan"})
     log_debug_event(record_id, "GPT", "Source Injected", "source = Brendan")
 
+    # Final flush
     flushed = flush_debug_log(record_id)
     if flushed:
         update_quote_record(record_id, {"debug_log": flushed})
 
     return props, reply
+
 
 
 # === GPT Error Email Alert ===
