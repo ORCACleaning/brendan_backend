@@ -1,5 +1,3 @@
-logger.info("✅ [filter_response.py] loaded successfully — traceback available")
-
 # === Built-in Python Modules ===
 import os
 import re
@@ -57,6 +55,8 @@ PDF_KEYWORDS = {
     "pdf", "email", "send quote", "quote please", "email quote",
     "send me quote", "send it", "can you email"
 }
+
+logger.info("✅ [filter_response.py] loaded successfully — traceback available")
 
 # === GPT PROMPT ===
 
