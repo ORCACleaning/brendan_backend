@@ -311,6 +311,7 @@ def get_quote_by_session(session_id: str):
     Looks up existing quote in Airtable by session_id.
     Returns dict with quote_id, record_id, quote_stage, fields.
     Logs all paths for successful, partial, or failed lookups.
+    Ensures customer_name is included in the fields.
     """
     try:
         if not session_id:
@@ -337,6 +338,11 @@ def get_quote_by_session(session_id: str):
         record = records[0]
         fields = record.get("fields", {})
         record_id = record.get("id", "")
+
+        # Ensure customer_name is included in the fields response
+        customer_name = fields.get("customer_name", "").strip()
+        if customer_name:
+            fields["customer_name"] = customer_name
 
         quote_id = fields.get("quote_id", "")
         quote_stage = fields.get("quote_stage", "Gathering Info")
@@ -367,7 +373,7 @@ def update_quote_record(record_id: str, fields: dict):
     """
     Updates a record in Airtable with normalized fields.
     Handles batching, safe select handling, debug flushing, and fallback logic.
-    Logs full trace for validation, normalization, payload, success and failures.
+    Logs full trace for validation, normalization, payload, success, and failures.
     """
     if not record_id:
         logger.warning("⚠️ update_quote_record called with no record_id")
@@ -661,11 +667,11 @@ def get_inline_quote_summary(data: dict) -> str:
 
 # === Generate Next Actions After Quote ===
 
-def generate_next_actions(quote_stage: str):
+def generate_next_actions(quote_stage: str, fields: dict):
     """
     Generates next step button sets based on the current quote stage.
     Backend controls all button logic — GPT no longer decides.
-
+    
     Stages:
     - Quote Calculated → Show PDF/email/edit/call buttons
     - Gathering Personal Info → Ask for name/email/phone (no buttons)
@@ -676,6 +682,9 @@ def generate_next_actions(quote_stage: str):
     # Clean stage input
     stage = str(quote_stage or "").strip()
     log_debug_event(None, "BACKEND", "generate_next_actions()", f"Generating actions for quote_stage = '{stage}'")
+
+    # Check if customer_name is already filled
+    customer_name_filled = bool(fields.get("customer_name", "").strip())
 
     if stage == "Quote Calculated":
         actions = [
@@ -700,17 +709,32 @@ def generate_next_actions(quote_stage: str):
         return actions
 
     elif stage == "Gathering Personal Info":
-        actions = [
-            {
-                "action": "collect_info",
-                "response": (
-                    "No worries — just need a couple quick details so I can send your quote.\n\n"
-                    "**What’s your full name, email address, and best contact number?**"
-                ),
-                "options": []
-            }
-        ]
-        log_debug_event(None, "BACKEND", "Next Actions Generated", "Stage: Gathering Personal Info → Asking for contact details")
+        # Skip asking for customer name if it's already filled
+        if customer_name_filled:
+            actions = [
+                {
+                    "action": "collect_info",
+                    "response": (
+                        "No worries — just need a couple more quick details so I can send your quote.\n\n"
+                        "**Please provide your email address and best contact number.**"
+                    ),
+                    "options": []
+                }
+            ]
+            log_debug_event(None, "BACKEND", "Next Actions Generated", "Stage: Gathering Personal Info → Asking for email/phone (name already filled)")
+        else:
+            actions = [
+                {
+                    "action": "collect_info",
+                    "response": (
+                        "No worries — just need a couple quick details so I can send your quote.\n\n"
+                        "**What’s your full name, email address, and best contact number?**"
+                    ),
+                    "options": []
+                }
+            ]
+            log_debug_event(None, "BACKEND", "Next Actions Generated", "Stage: Gathering Personal Info → Asking for name/email/phone")
+        
         return actions
 
     elif stage == "Personal Info Received":
@@ -914,6 +938,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     return safe_props, reply
 
+
 # === GPT Error Email Alert ===
 
 def send_gpt_error_email(error_msg: str):
@@ -1017,14 +1042,12 @@ def append_message_log(record_id: str, message: str, sender: str):
         log_debug_event(record_id, "BACKEND", "Message Skipped", "Empty message not logged")
         return
 
+    # Normalize sender and set timestamp
     sender_clean = str(sender or "user").strip().upper()
     timestamp = datetime.utcnow().isoformat()
 
-    # Format message line
-    if sender_clean == "USER" and message.lower() == "__init__":
-        new_entry = f"[{timestamp}] SYSTEM: SYSTEM_TRIGGER: Brendan started a new quote"
-    else:
-        new_entry = f"[{timestamp}] {sender_clean}: {message}"
+    # Format message line with timestamp and sender
+    new_entry = f"[{timestamp}] {sender_clean}: {message}"
 
     # Fetch current message_log from Airtable
     try:
@@ -1040,7 +1063,7 @@ def append_message_log(record_id: str, message: str, sender: str):
         log_debug_event(record_id, "BACKEND", "Message Log Fetch Failed", str(e))
         return
 
-    # Combine logs and check for truncation
+    # Combine old log with new entry and check for truncation
     combined_log = f"{old_log}\n{new_entry}" if old_log else new_entry
     was_truncated = False
     if len(combined_log) > MAX_LOG_LENGTH:
@@ -1060,11 +1083,7 @@ def append_message_log(record_id: str, message: str, sender: str):
 
     # Metadata logging
     try:
-        detail = (
-            "SYSTEM_TRIGGER: Brendan started a new quote"
-            if sender_clean == "USER" and message.lower() == "__init__"
-            else f"{sender_clean} message logged ({len(message)} chars)"
-        )
+        detail = f"{sender_clean} message logged ({len(message)} chars)"
         if was_truncated:
             detail += " | ⚠️ Log truncated"
         log_debug_event(record_id, "BACKEND", "Message Appended", detail)
@@ -1159,6 +1178,20 @@ async def handle_chat_init(session_id: str):
             session_id = fields.get("session_id", session_id)
             log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session ID: {session_id}, Quote ID: {quote_id}, Record ID: {record_id}")
 
+        # === Check if customer_name exists before asking for it ===
+        customer_name = fields.get("customer_name", "").strip()
+        if customer_name:
+            # If customer name is already filled, skip asking for it and proceed to the next step
+            log_debug_event(record_id, "BACKEND", "Customer Name Found", f"Customer name already set: {customer_name}")
+            reply = "Thanks for that! Let’s keep going with the next steps."
+            append_message_log(record_id, reply, "brendan")
+            log_debug_event(record_id, "BACKEND", "Reply Sent", f"Reply: {reply}")
+        else:
+            # Ask for customer name if not already filled
+            reply = "What name should I put on the quote?"
+            append_message_log(record_id, reply, "brendan")
+            log_debug_event(record_id, "BACKEND", "Request Name", f"Requesting name from user.")
+
         # === SYSTEM log entry ===
         append_message_log(record_id, "SYSTEM_TRIGGER: Brendan started a new quote", "system")
         log_debug_event(record_id, "BACKEND", "System Message Logged", "Brendan start trigger recorded")
@@ -1173,11 +1206,6 @@ async def handle_chat_init(session_id: str):
             update_quote_record(record_id, {"debug_log": flushed})
             log_debug_event(record_id, "BACKEND", "Initial Debug Log Saved", "Flushed to Airtable")
 
-        # === Use fixed welcome response (no GPT call) ===
-        reply = "Just a moment while I get us started..."
-        append_message_log(record_id, reply, "brendan")
-        log_debug_event(record_id, "BACKEND", "Initial Reply Logged", f"{len(reply)} chars")
-
         log_debug_event(record_id, "BACKEND", "Init Complete", f"Final response sent. Length: {len(reply)}")
 
         return JSONResponse(content={
@@ -1190,6 +1218,7 @@ async def handle_chat_init(session_id: str):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Init Error", str(e))
         raise HTTPException(status_code=500, detail="Failed to initialize Brendan.")
+
 
 # === Brendan API Router ===
 
