@@ -5,8 +5,6 @@ import uuid
 import logging
 import requests
 import inflect
-import openai
-openai.api_key = os.getenv("OPENAI_API_KEY")
 import smtplib
 import re
 import base64
@@ -17,8 +15,6 @@ from urllib.parse import quote
 
 # === Third-Party Modules ===
 import pytz
-
-# === FastAPI Core ===
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import JSONResponse
 
@@ -40,12 +36,12 @@ from app.api.field_rules import FIELD_MAP, VALID_AIRTABLE_FIELDS, INTEGER_FIELDS
 from app.utils.logging_utils import log_debug_event, flush_debug_log
 
 # === Airtable Table Name ===
-TABLE_NAME = "Vacate Quotes"  # Airtable Table Name for Brendan Quotes
+TABLE_NAME = "Vacate Quotes"
 
 # === System Constants ===
-MAX_LOG_LENGTH = 10000        # Max character limit for message_log and gpt_error_log in Airtable
-QUOTE_EXPIRY_DAYS = 7         # Number of days after which quote expires
-LOG_TRUNCATE_LENGTH = 10000   # Max length of message_log passed to GPT context (sent to GPT-4)
+MAX_LOG_LENGTH = 10000
+QUOTE_EXPIRY_DAYS = 7
+LOG_TRUNCATE_LENGTH = 10000
 
 PDF_SYSTEM_MESSAGE = """
 SYSTEM: Brendan has already provided the customer with their full quote summary. 
@@ -58,7 +54,16 @@ Once you collect those details, wait for confirmation or further instructions.
 """
 
 # === OpenAI Client Setup ===
-client = openai.OpenAI()  # Required for openai>=1.0.0 SDK
+import openai
+from openai import OpenAI
+
+if not os.getenv("OPENAI_API_KEY"):
+    logger.error("❌ Missing OPENAI_API_KEY — Brendan will crash if GPT is called.")
+else:
+    print("✅ Brendan backend loaded and OpenAI key detected")
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
 
 # === Boolean Value True Equivalents ===
 TRUE_VALUES = {"yes", "true", "1", "on", "checked", "t"}
@@ -774,6 +779,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             return None
 
     parsed = call_gpt_and_parse(1)
+
+    # Retry on failure (Fix 3)
     if not isinstance(parsed, dict):
         messages.insert(1, {
             "role": "system",
@@ -781,9 +788,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         })
         parsed = call_gpt_and_parse(2)
 
-    if not isinstance(parsed, dict):
+    # Strict schema validation (Fix 4)
+    if not isinstance(parsed, dict) or "properties" not in parsed or "response" not in parsed:
+        log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
         fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
-        log_debug_event(record_id, "GPT", "Both Parse Attempts Failed", "Fallback triggered")
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
@@ -791,17 +799,24 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
-    log_debug_event(record_id, "GPT", "Parsed GPT Response", f"Reply: {reply[:100]} | Props Type: {type(raw_props)}")
+
+    # Fix 2: Discard if props is a list of strings like ["name", "suburb"]
+    if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
+        log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
+        fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+        return [{"property": "source", "value": "Brendan"}], fallback
 
     if isinstance(raw_props, dict):
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
-    elif isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
-        log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Got list of strings: {raw_props}")
-        raw_props = []
     elif not isinstance(raw_props, list):
         log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)}")
         raw_props = []
+
+    log_debug_event(record_id, "GPT", "Parsed GPT Response", f"Reply: {reply[:100]} | Props: {len(raw_props)}")
 
     safe_props = []
     for p in raw_props:
@@ -824,7 +839,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     safe_props = [p for p in safe_props if p["property"] != "source"]
     safe_props.append({"property": "source", "value": "Brendan"})
-
     log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
 
     flushed = flush_debug_log(record_id)
@@ -841,6 +855,8 @@ def send_gpt_error_email(error_msg: str):
     Sends a critical error email if GPT extraction fails.
     If logging or email fails, logs to Render console as fallback.
     """
+    from app.main import client  # ✅ Fix 1: use shared client definition if ever needed
+
     try:
         sender_email = "info@orcacleaning.com.au"
         recipient_email = "admin@orcacleaning.com.au"
@@ -915,8 +931,6 @@ def send_gpt_error_email(error_msg: str):
 
     except Exception as e:
         logger.error(f"💥 FATAL: send_gpt_error_email() failed to execute: {e}")
-        # No log_debug_event fallback — only raw console log
-
 
 # === Append Message Log ===
 
