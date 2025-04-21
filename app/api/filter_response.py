@@ -303,15 +303,15 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
 # === Get Quote by Session ===
 
-def get_quote_by_session(session_id: str):
+def get_quote_by_session(session_id: str) -> dict:
     """
     Retrieves the latest quote record from Airtable using session_id.
     If no record is found, creates a new one.
-    Returns: (quote_id, record_id, quote_stage, fields)
+    Always returns a dict: {"quote_id": ..., "record_id": ..., "quote_stage": ..., "fields": {...}}
     """
     if not session_id:
         logger.warning("⚠️ get_quote_by_session called with empty session_id")
-        return None
+        return {}
 
     safe_table_name = quote(TABLE_NAME)
     url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
@@ -341,7 +341,8 @@ def get_quote_by_session(session_id: str):
             if attempt == 2:
                 logger.error(f"❌ Final failure after 3 attempts for session_id: {session_id}")
                 log_debug_event(None, "BACKEND", "Session Lookup Final Failure", str(e))
-                return None
+                return {}
+
             sleep(1)
 
     records = response_data.get("records", []) if response_data else []
@@ -374,12 +375,17 @@ def get_quote_by_session(session_id: str):
             if flushed:
                 update_quote_record(record_id, {"debug_log": flushed})
 
-            return quote_id, record_id, "Gathering Info", fields
+            return {
+                "quote_id": quote_id,
+                "record_id": record_id,
+                "quote_stage": "Gathering Info",
+                "fields": fields
+            }
 
         except Exception as e:
             logger.error(f"❌ Failed to create new quote for session {session_id}: {e}")
             log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
-            return None
+            return {}
 
     # === Return existing quote ===
     record = records[0]
@@ -398,7 +404,12 @@ def get_quote_by_session(session_id: str):
     if flushed:
         update_quote_record(record_id, {"debug_log": flushed})
 
-    return quote_id, record_id, quote_stage, fields
+    return {
+        "quote_id": quote_id,
+        "record_id": record_id,
+        "quote_stage": quote_stage,
+        "fields": fields
+    }
 
 
 # === Update Quote Record ===
@@ -1180,7 +1191,6 @@ async def handle_chat_init(session_id: str):
 router = APIRouter()
 
 @router.post("/filter-response")
-@router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
         body = await request.json()
@@ -1194,13 +1204,16 @@ async def filter_response_entry(request: Request):
 
         if message.lower() == "__init__":
             try:
+                log_debug_event(None, "BACKEND", "Init Triggered", f"User opened chat — Session: {session_id}")
                 return await handle_chat_init(session_id)
             except Exception as e:
                 log_debug_event(None, "BACKEND", "Init Error", str(e))
                 raise HTTPException(status_code=500, detail="Init failed.")
 
+        # === Session Lookup ===
         quote_data = get_quote_by_session(session_id)
-        if not isinstance(quote_data, dict):
+        if not isinstance(quote_data, dict) or "record_id" not in quote_data:
+            log_debug_event(None, "BACKEND", "Quote Lookup Failed", f"Session: {session_id}, Result: {quote_data}")
             raise HTTPException(status_code=404, detail="Quote not found.")
 
         quote_id = quote_data.get("quote_id", "N/A")
@@ -1208,13 +1221,14 @@ async def filter_response_entry(request: Request):
         quote_stage = quote_data.get("quote_stage", "Gathering Info")
         fields = quote_data.get("fields", {})
 
-        # === Re-init if stale or incomplete ===
+        # === Re-init if stale or broken ===
         if quote_stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"] or not quote_id or not record_id:
-            log_debug_event(None, "BACKEND", "Stale Quote", f"Stage: {quote_stage} — Reinitializing")
+            log_debug_event(record_id, "BACKEND", "Stale Quote", f"Stage: {quote_stage} — Reinitializing")
             return await handle_chat_init(session_id)
 
         message_lower = message.lower()
 
+        # === Chat Banned ===
         if quote_stage == "Chat Banned":
             return JSONResponse(content={
                 "properties": [],
@@ -1223,9 +1237,11 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
+        # === Privacy Consent ===
         if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
             return await handle_privacy_consent(message, message_lower, record_id, session_id)
 
+        # === Personal Info Complete → Send PDF ===
         if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
             name = fields.get("customer_name", "").strip()
             email = fields.get("customer_email", "").strip()
@@ -1249,23 +1265,28 @@ async def filter_response_entry(request: Request):
                     log_debug_event(record_id, "BACKEND", "PDF/Email Error", str(e))
                     raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
+        # === Detect PDF Request After Quote ===
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
         if quote_stage == "Quote Calculated" and any(k in message_lower for k in PDF_KEYWORDS):
             message_log = PDF_SYSTEM_MESSAGE + "\n\n" + message_log
             log_debug_event(record_id, "BACKEND", "PDF Trigger", f"User asked for PDF: {message_lower[:50]}")
 
+        # === Append incoming message ===
         append_message_log(record_id, message, "user")
 
+        # === Extract fields from GPT ===
         properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
 
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         updated_fields = fields.copy()
         updated_fields.update(parsed)
 
+        # === Ensure important fields are retained ===
         for required in ["bedrooms_v2", "bathrooms_v2", "source"]:
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
 
+        # === Auto-calculate quote if ready ===
         if should_calculate_quote(updated_fields) and quote_stage != "Quote Calculated":
             try:
                 result = calculate_quote(QuoteRequest(**updated_fields))
@@ -1276,9 +1297,11 @@ async def filter_response_entry(request: Request):
             except Exception as e:
                 log_debug_event(record_id, "BACKEND", "Quote Calculation Failed", str(e))
 
+        # === Update Airtable ===
         update_quote_record(record_id, parsed)
-        append_message_log(record_id, reply, "brendan")
 
+        # === Reply to customer ===
+        append_message_log(record_id, reply, "brendan")
         next_actions = generate_next_actions(parsed.get("quote_stage", quote_stage))
 
         return JSONResponse(content={
@@ -1291,4 +1314,3 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", str(e))
         raise HTTPException(status_code=500, detail="Internal server error.")
-
