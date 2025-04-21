@@ -1207,7 +1207,7 @@ async def filter_response_entry(request: Request):
                 )
 
                 if properties:
-                    await update_quote_record(record_id, {p["property"]: p["value"] for p in properties if "property" in p and "value" in p})
+                    update_quote_record(record_id, {p["property"]: p["value"] for p in properties if "property" in p and "value" in p})
 
                 log_debug_event(record_id, "BACKEND", "Init Response Returned", f"handle_chat_init() and GPT response completed for session: {session_id}")
 
@@ -1223,7 +1223,6 @@ async def filter_response_entry(request: Request):
                 raise HTTPException(status_code=500, detail="Init failed.")
 
         quote_data = get_quote_by_session(session_id)
-
         if not isinstance(quote_data, dict) or "record_id" not in quote_data:
             log_debug_event(None, "BACKEND", "Session Lookup Failed", f"No valid quote found for session: {session_id}")
             raise HTTPException(status_code=404, detail="Quote not found.")
@@ -1357,7 +1356,6 @@ async def filter_response_entry(request: Request):
         log_debug_event(record_id, "BACKEND", "Saving Fields", f"{list(parsed.keys())}")
         update_quote_record(record_id, parsed)
         append_message_log(record_id, reply, "brendan")
-
         log_debug_event(record_id, "BACKEND", "Returning Final Response", reply[:120])
 
         return JSONResponse(content={
