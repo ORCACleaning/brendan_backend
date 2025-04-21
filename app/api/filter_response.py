@@ -313,129 +313,8 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
 # === Get Quote by Session ===
 
-def get_quote_by_session(session_id: str) -> dict:
-    """
-    Retrieves the latest quote record from Airtable using session_id.
-    If no record is found, creates a new one.
-    Always returns a dict: {"quote_id": ..., "record_id": ..., "quote_stage": ..., "fields": {...}}
-    """
 
-    # === Input validation ===
-    if not session_id:
-        logger.warning("⚠️ get_quote_by_session called with empty session_id")
-        return {}
-
-    if session_id.startswith("rec") and len(session_id) == 17:
-        logger.error(f"❌ Invalid input — record_id passed as session_id: {session_id}")
-        log_debug_event(None, "BACKEND", "Invalid Session ID", f"Looks like record_id: {session_id}")
-        return {}
-
-    # === Build Airtable request ===
-    safe_table_name = quote(TABLE_NAME)
-    url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
-    headers = {"Authorization": f"Bearer {settings.AIRTABLE_API_KEY}"}
-    params = {
-        "filterByFormula": f"{{session_id}}='{session_id}'",
-        "sort[0][field]": "timestamp",
-        "sort[0][direction]": "desc",
-        "pageSize": 1
-    }
-
-    logger.info(f"🔍 Looking up quote by session_id: {session_id}")
-    log_debug_event(None, "BACKEND", "Session Lookup Start", f"Session ID: {session_id}")
-
-    response_data = None
-    for attempt in range(3):
-        try:
-            log_debug_event(None, "BACKEND", "Session Lookup Request", f"Attempt {attempt + 1} — GET to Airtable")
-            res = requests.get(url, headers=headers, params=params)
-            res.raise_for_status()
-            response_data = res.json()
-            log_debug_event(None, "BACKEND", "Session Lookup Success", f"Data received on attempt {attempt + 1}")
-            break
-        except Exception as e:
-            logger.warning(f"⚠️ Airtable fetch failed (Attempt {attempt + 1}/3): {e}")
-            log_debug_event(None, "BACKEND", "Session Lookup Attempt Failed", f"Attempt {attempt + 1}: {str(e)}")
-            if attempt == 2:
-                logger.error(f"❌ Final failure after 3 attempts for session_id: {session_id}")
-                log_debug_event(None, "BACKEND", "Session Lookup Final Failure", str(e))
-                return {}
-            sleep(1)
-
-    records = response_data.get("records", []) if response_data else []
-
-    # === No records found — create a new quote ===
-    if not records:
-        try:
-            quote_id = get_next_quote_id()
-            new_fields = {
-                "session_id": session_id,
-                "quote_id": quote_id,
-                "quote_stage": "Gathering Info",
-                "privacy_acknowledged": False,
-                "source": "Brendan"
-            }
-
-            create_res = requests.post(
-                url,
-                headers={**headers, "Content-Type": "application/json"},
-                json={"fields": new_fields}
-            )
-            create_res.raise_for_status()
-            created = create_res.json()
-            record_id = created.get("id", "")
-            fields = created.get("fields", {})
-            logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
-            log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session ID: {session_id}, Quote ID: {quote_id}")
-
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
-
-            return {
-                "quote_id": quote_id,
-                "record_id": record_id,
-                "quote_stage": "Gathering Info",
-                "fields": fields
-            }
-
-        except Exception as e:
-            logger.error(f"❌ Failed to create new quote: {e}")
-            log_debug_event(None, "BACKEND", "Quote Creation Failed", str(e))
-            return {}
-
-    # === Record found — return existing data ===
-    record = records[0]
-    record_id = record.get("id", "")
-    fields = record.get("fields", {})
-    quote_id = fields.get("quote_id", "N/A")
-    quote_stage = fields.get("quote_stage", "Gathering Info")
-
-    if len(fields.keys()) < 10:
-        log_debug_event(record_id, "BACKEND", "Record Warning", f"Returned with only {len(fields)} fields — may be incomplete")
-
-    log_debug_event(record_id, "BACKEND", "Session Lookup Complete", f"Found quote_id: {quote_id}, stage: {quote_stage}")
-    logger.info(f"✅ Quote found — ID: {quote_id} | Stage: {quote_stage} | Record ID: {record_id}")
-
-    flushed = flush_debug_log(record_id)
-    if flushed:
-        update_quote_record(record_id, {"debug_log": flushed})
-
-    return {
-        "quote_id": quote_id,
-        "record_id": record_id,
-        "quote_stage": quote_stage,
-        "fields": fields
-    }
-
-
-# === Update Quote Record ===
-
-# === Airtable Schema Cache ===
-AIRTABLE_SCHEMA_CACHE = {
-    "actual_keys": set(),
-    "fetched": False
-}
+# === Update Quote Record ====
 
 def update_quote_record(record_id: str, fields: dict):
     """
@@ -486,9 +365,15 @@ def update_quote_record(record_id: str, fields: dict):
 
         log_debug_event(record_id, "BACKEND", "Raw Field Input", f"{raw_key} → {corrected_key} = {value}")
 
-        if corrected_key not in actual_keys:
-            logger.warning(f"⚠️ Skipping unknown Airtable field: {corrected_key}")
-            log_debug_event(record_id, "BACKEND", "Field Skipped", f"{corrected_key} not in Airtable schema")
+        # === Reject if not in schema or VALID_AIRTABLE_FIELDS
+        if corrected_key not in actual_keys or corrected_key not in VALID_AIRTABLE_FIELDS:
+            logger.warning(f"⚠️ Skipping invalid field: {corrected_key}")
+            log_debug_event(record_id, "BACKEND", "Field Skipped", f"{corrected_key} is not in schema or allowed fields")
+            continue
+
+        # === Overwrite protection ===
+        if corrected_key in {"carpet_cleaning", "quote_stage", "source"} and raw_key not in fields:
+            log_debug_event(record_id, "BACKEND", "Protected Field Skipped", f"{corrected_key} not explicitly passed")
             continue
 
         try:
@@ -563,9 +448,9 @@ def update_quote_record(record_id: str, fields: dict):
         log_debug_event(record_id, "BACKEND", "Update Skipped", "No normalized fields to update.")
         return []
 
-    validated_fields = {k: v for k, v in normalized_fields.items() if k in actual_keys}
+    validated_fields = {k: v for k, v in normalized_fields.items() if k in actual_keys and k in VALID_AIRTABLE_FIELDS}
     if not validated_fields:
-        log_debug_event(record_id, "BACKEND", "Validation Failed", "All fields invalid after schema filtering.")
+        log_debug_event(record_id, "BACKEND", "Validation Failed", "All fields invalid after schema + rules filtering.")
         return []
 
     logger.info(f"\n📤 Updating Airtable Record: {record_id}")
@@ -611,15 +496,16 @@ def update_quote_record(record_id: str, fields: dict):
     return successful
 
 
-
 # === Inline Quote Summary Helper ===
 
 def get_inline_quote_summary(data: dict) -> str:
     """
     Generates a clear, backend-driven quote summary for Brendan to show in chat.
     Includes total price, estimated time, cleaner count, discount breakdown, selected services, bedrooms/bathrooms,
-    and optional notes.
+    and optional notes. Always generated from backend — never GPT.
     """
+    record_id = data.get("record_id", "")  # optional, passed only if available for logging
+
     price = float(data.get("total_price", 0) or 0)
     time_est_mins = int(data.get("estimated_time_mins", 0) or 0)
     discount = float(data.get("discount_applied", 0) or 0)
@@ -663,14 +549,16 @@ def get_inline_quote_summary(data: dict) -> str:
             summary += f"🏷️ **Discount Applied:** ${discount:.2f} — 10% Vacate Clean Special\n"
 
     # === Property Details ===
-    if bedrooms or bathrooms or furnished:
-        summary += "\n**Property Details:**\n"
-        if bedrooms:
-            summary += f"- Bedrooms: {bedrooms}\n"
-        if bathrooms:
-            summary += f"- Bathrooms: {bathrooms}\n"
-        if furnished:
-            summary += f"- Furnished: {furnished}\n"
+    property_lines = []
+    if bedrooms:
+        property_lines.append(f"- Bedrooms: {bedrooms}")
+    if bathrooms:
+        property_lines.append(f"- Bathrooms: {bathrooms}")
+    if furnished:
+        property_lines.append(f"- Furnished: {furnished}")
+
+    if property_lines:
+        summary += "\n**Property Details:**\n" + "\n".join(property_lines)
 
     # === Selected Extras ===
     included = []
@@ -701,7 +589,7 @@ def get_inline_quote_summary(data: dict) -> str:
         included.append(f"- Special Request: {special_requests}")
 
     if included:
-        summary += "\n🧹 **Cleaning Included:**\n" + "\n".join(included)
+        summary += "\n\n🧹 **Cleaning Included:**\n" + "\n".join(included)
 
     # === Optional Note ===
     if note:
@@ -713,25 +601,33 @@ def get_inline_quote_summary(data: dict) -> str:
         "Would you like me to send it to your email as a PDF, or would you like to make any changes?"
     )
 
-    return summary.strip()
+    final_summary = summary.strip()
+
+    # === Log summary output ===
+    try:
+        log_debug_event(record_id, "BACKEND", "Inline Quote Summary Generated", final_summary[:300])
+    except Exception:
+        pass  # fail silently if record_id missing
+
+    return final_summary
 
 
 # === Generate Next Actions After Quote ===
 
-from app.utils.logging_utils import log_debug_event
-
 def generate_next_actions(quote_stage: str):
     """
-    Generates next steps based on the current quote stage.
+    Generates next step button sets based on the current quote stage.
+    Backend controls all button logic — GPT no longer decides.
 
-    - After 'Quote Calculated': Offer PDF, email, edit, call office
-    - After 'Gathering Personal Info': Ask for name/email/phone
-    - After 'Personal Info Received': Offer download and booking link
-    - Otherwise: Prompt user to continue quote
+    Stages:
+    - Quote Calculated → Show PDF/email/edit/call buttons
+    - Gathering Personal Info → Ask for name/email/phone (no buttons)
+    - Personal Info Received → Show download, booking, call buttons
+    - Other → Prompt user to continue
     """
 
     stage = str(quote_stage or "").strip()
-    log_debug_event(None, "BACKEND", "generate_next_actions()", f"Generating actions for stage: {stage}")
+    log_debug_event(None, "BACKEND", "generate_next_actions()", f"Generating actions for quote_stage = '{stage}'")
 
     if stage == "Quote Calculated":
         actions = [
@@ -752,7 +648,7 @@ def generate_next_actions(quote_stage: str):
                 ]
             }
         ]
-        log_debug_event(None, "BACKEND", "Next Actions Generated", "Quote Calculated → 4 options provided")
+        log_debug_event(None, "BACKEND", "Next Actions Generated", "Stage: Quote Calculated → 4 quote-ready buttons")
         return actions
 
     elif stage == "Gathering Personal Info":
@@ -766,7 +662,7 @@ def generate_next_actions(quote_stage: str):
                 "options": []
             }
         ]
-        log_debug_event(None, "BACKEND", "Next Actions Generated", "Gathering Personal Info → Asking for contact details")
+        log_debug_event(None, "BACKEND", "Next Actions Generated", "Stage: Gathering Personal Info → Asking for contact details")
         return actions
 
     elif stage == "Personal Info Received":
@@ -786,7 +682,7 @@ def generate_next_actions(quote_stage: str):
                 ]
             }
         ]
-        log_debug_event(None, "BACKEND", "Next Actions Generated", "Personal Info Received → Final booking options provided")
+        log_debug_event(None, "BACKEND", "Next Actions Generated", "Stage: Personal Info Received → Booking options shown")
         return actions
 
     else:
@@ -797,8 +693,9 @@ def generate_next_actions(quote_stage: str):
                 "options": []
             }
         ]
-        log_debug_event(None, "BACKEND", "Next Actions Fallback", f"No match for stage: {stage} — prompting to continue")
+        log_debug_event(None, "BACKEND", "Next Actions Fallback", f"Unrecognized stage: '{stage}' → Using fallback response")
         return fallback
+
 
 
 # === GPT Extraction (Production-Grade) ===
@@ -810,7 +707,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     if message.strip() == "__init__":
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
-        return [], "Just a moment while I get us started..."
+        return [{"property": "source", "value": "Brendan"}], "Just a moment while I get us started..."
 
     weak_inputs = {"hi", "hello", "hey", "you there?", "you hear me?", "what’s up", "oi"}
     if message.lower().strip() in weak_inputs:
@@ -821,8 +718,8 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         log_debug_event(record_id, "GPT", "Weak Message Skipped", message)
         flushed = flush_debug_log(record_id)
         if flushed:
-            update_quote_record(record_id, {"debug_log": flushed})
-        return [], reply
+            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+        return [{"property": "source", "value": "Brendan"}], reply
 
     existing_fields = {}
     if record_id and not skip_log_lookup:
@@ -843,7 +740,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
             "“G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
             "This quote is fully anonymous and no booking is required — I’m just here to help. View our Privacy Policy.”\n\n"
             "Do NOT repeat this greeting or say 'Hi', 'Hello', or 'G’day'.\n"
-            "Start by asking casually for the name to put on the quote, then suburb, bedrooms, bathrooms, and if furnished.\n"
             "Always respond with a JSON object containing only:\n"
             "{ \"properties\": [...], \"response\": \"...\" }"
         )
@@ -887,6 +783,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     if not isinstance(parsed, dict):
         fallback = "No worries — could you let me know how many bedrooms and bathrooms we're quoting for, and whether it's furnished?"
+        log_debug_event(record_id, "GPT", "Both Parse Attempts Failed", "Fallback triggered")
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
@@ -900,8 +797,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
     elif isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
-        for item in raw_props:
-            log_debug_event(record_id, "GPT", "Invalid Prop Skipped", item)
+        log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Got list of strings: {raw_props}")
         raw_props = []
     elif not isinstance(raw_props, list):
         log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)}")
@@ -926,12 +822,9 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         else:
             log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
 
-    if not safe_props:
-        log_debug_event(record_id, "GPT", "No Valid Props", "Only source will be saved.")
-        safe_props = []
-
     safe_props = [p for p in safe_props if p["property"] != "source"]
     safe_props.append({"property": "source", "value": "Brendan"})
+
     log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
 
     flushed = flush_debug_log(record_id)
@@ -1266,7 +1159,6 @@ async def filter_response_entry(request: Request):
 
         log_debug_event(None, "BACKEND", "Incoming Message", f"Session: {session_id}, Message: {message}")
 
-        # === Init Trigger ===
         if message.lower() == "__init__":
             try:
                 log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
@@ -1277,8 +1169,6 @@ async def filter_response_entry(request: Request):
                 log_debug_event(None, "BACKEND", "Init Error", str(e))
                 raise HTTPException(status_code=500, detail="Init failed.")
 
-        # === Session Lookup ===
-        log_debug_event(None, "BACKEND", "Session Lookup Start", f"Session ID: {session_id}")
         quote_data = get_quote_by_session(session_id)
 
         if not isinstance(quote_data, dict) or "record_id" not in quote_data:
@@ -1291,7 +1181,6 @@ async def filter_response_entry(request: Request):
         fields = quote_data.get("fields", {})
         log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
 
-        # === Block if banned ===
         if quote_stage == "Chat Banned":
             log_debug_event(record_id, "BACKEND", "Blocked Chat", "Chat is banned — denying interaction")
             return JSONResponse(content={
@@ -1301,12 +1190,10 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Privacy Consent Flow ===
         if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
             log_debug_event(record_id, "BACKEND", "Awaiting Privacy Consent", f"privacy_acknowledged: {fields.get('privacy_acknowledged')}")
             return await handle_privacy_consent(message, message.lower(), record_id, session_id)
 
-        # === PDF Flow ===
         if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
             name = fields.get("customer_name", "").strip()
             email = fields.get("customer_email", "").strip()
@@ -1332,7 +1219,6 @@ async def filter_response_entry(request: Request):
                     log_debug_event(record_id, "BACKEND", "PDF/Email Error", traceback.format_exc())
                     raise HTTPException(status_code=500, detail="Failed to send quote email.")
 
-        # === Locked Stage Handling ===
         if quote_stage in ["Quote Calculated", "Personal Info Received", "Booking Confirmed"]:
             append_message_log(record_id, message, "user")
             if any(k in message.lower() for k in PDF_KEYWORDS):
@@ -1351,7 +1237,41 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # === Main GPT Extraction ===
+        # === Field Prompting Logic ===
+        REQUIRED_ORDER = [
+            "customer_name", "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status",
+            "carpet_cleaning", "carpet_mainroom_count", "carpet_stairs_count", "carpet_other_count"
+        ]
+
+        # Check if carpet_cleaning is "Yes" before asking breakdowns
+        skip_carpet_counts = fields.get("carpet_cleaning") == "No"
+        for field in REQUIRED_ORDER:
+            if field.startswith("carpet_") and skip_carpet_counts:
+                continue
+            if not fields.get(field):
+                prompt = {
+                    "customer_name": "What name should I put on the quote?",
+                    "suburb": "What suburb is the property in?",
+                    "bedrooms_v2": "How many bedrooms are there?",
+                    "bathrooms_v2": "And how many bathrooms?",
+                    "furnished_status": "Is the property furnished or unfurnished?",
+                    "carpet_cleaning": "Would you like to include carpet steam cleaning in the vacate clean?",
+                    "carpet_mainroom_count": "How many carpeted bedrooms or main rooms?",
+                    "carpet_stairs_count": "How many sets of carpeted stairs?",
+                    "carpet_other_count": "Any other carpeted rooms? (e.g. hallways, lounge)"
+                }[field]
+
+                append_message_log(record_id, message, "user")
+                log_debug_event(record_id, "BACKEND", "Asking Missing Field", f"Missing: {field} → {prompt}")
+
+                return JSONResponse(content={
+                    "properties": [],
+                    "response": prompt,
+                    "next_actions": [],
+                    "session_id": session_id
+                })
+
+        # === Call GPT only for open-ended extras ===
         append_message_log(record_id, message, "user")
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
         log_debug_event(record_id, "BACKEND", "Calling GPT", f"Input: {message[:100]}")
@@ -1364,15 +1284,14 @@ async def filter_response_entry(request: Request):
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         log_debug_event(record_id, "BACKEND", "Parsed Properties", str(parsed))
 
-        updated_fields = fields.copy()
-        updated_fields.update(parsed)
-
         for required in ["source", "bedrooms_v2", "bathrooms_v2"]:
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
                 log_debug_event(record_id, "BACKEND", "Preserved Field", f"{required} = {fields[required]}")
 
-        # === Quote Calculation ===
+        updated_fields = fields.copy()
+        updated_fields.update(parsed)
+
         if should_calculate_quote(updated_fields) and quote_stage != "Quote Calculated":
             try:
                 log_debug_event(record_id, "BACKEND", "Triggering Quote Calculation", "All required fields present")
@@ -1380,7 +1299,7 @@ async def filter_response_entry(request: Request):
                 quote_result = result.model_dump()
                 parsed.update(quote_result)
                 parsed["quote_stage"] = "Quote Calculated"
-                reply = get_inline_quote_summary(quote_result)
+                reply = get_inline_quote_summary({**quote_result, "record_id": record_id})
                 log_debug_event(record_id, "BACKEND", "Quote Generated", f"Total: ${parsed.get('total_price')} | Time: {parsed.get('estimated_time_mins')} mins")
             except Exception as e:
                 log_debug_event(record_id, "BACKEND", "Quote Calc Error", traceback.format_exc())
@@ -1402,5 +1321,4 @@ async def filter_response_entry(request: Request):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Fatal Error", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Internal server error.")
-
 
