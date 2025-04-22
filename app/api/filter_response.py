@@ -306,19 +306,22 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
         log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}, Quote ID: {quote_id}, Record ID: {record_id}")
 
-        time.sleep(5)
-        log_debug_event(record_id, "BACKEND", "Session Lookup Start", f"Attempting to re-fetch session_id={session_id} post-create")
+        # Retry session check with exponential backoff
+        max_attempts = 5
+        for attempt in range(max_attempts):
+            log_debug_event(record_id, "BACKEND", "Session Lookup Start", f"Attempting to re-fetch session_id={session_id} (Attempt {attempt + 1})")
+            session_check = get_quote_by_session(session_id)
+            if session_check:
+                actual_row_id = session_check.get("record_id", "N/A")
+                log_debug_event(record_id, "BACKEND", "Session Found After Creation", f"record_id={actual_row_id} matched session_id={session_id}")
+                return quote_id, record_id, "Gathering Info", returned_fields
+            delay = 2 ** attempt
+            log_debug_event(record_id, "BACKEND", "Retry Delay", f"Waiting {delay}s before retry...")
+            time.sleep(delay)
 
-        session_check = get_quote_by_session(session_id)
-        if not session_check:
-            error_msg = f"Session not found after quote creation for session_id={session_id}"
-            log_debug_event(record_id, "BACKEND", "Session Not Found After Creation", error_msg)
-            raise HTTPException(status_code=404, detail=error_msg)
-
-        actual_row_id = session_check.get("record_id", "N/A")
-        log_debug_event(record_id, "BACKEND", "Session Found After Creation", f"record_id={actual_row_id} matched session_id={session_id}")
-
-        return quote_id, record_id, "Gathering Info", returned_fields
+        error_msg = f"Session not found after quote creation for session_id={session_id}"
+        log_debug_event(record_id, "BACKEND", "Session Not Found After Creation", error_msg)
+        raise HTTPException(status_code=404, detail=error_msg)
 
     except requests.exceptions.HTTPError as e:
         error_msg = f"Airtable Error — Status Code: {res.status_code}, Response: {res.text}"
