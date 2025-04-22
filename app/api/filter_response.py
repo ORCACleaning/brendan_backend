@@ -306,6 +306,11 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
         log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}, Quote ID: {quote_id}, Record ID: {record_id}")
 
+        # Wait before retrying to allow Airtable to index new session_id
+        initial_wait = 3
+        log_debug_event(record_id, "BACKEND", "Initial Delay", f"Waiting {initial_wait}s before retrying session check...")
+        time.sleep(initial_wait)
+
         # Retry session check with exponential backoff
         max_attempts = 5
         for attempt in range(max_attempts):
@@ -372,8 +377,6 @@ def get_quote_by_session(session_id: str):
         }
 
         max_retries = 5
-        retry_delay = 2
-
         for attempt in range(max_retries):
             try:
                 res = requests.get(url, headers=headers, params=params)
@@ -383,7 +386,7 @@ def get_quote_by_session(session_id: str):
                 if not records:
                     log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt+1})", f"No record found for session_id={session_id}")
                     if attempt < max_retries - 1:
-                        delay = retry_delay * (2 ** attempt)
+                        delay = 2 ** attempt
                         log_debug_event(None, "BACKEND", "Retry Delay", f"Waiting {delay}s before retry...")
                         time.sleep(delay)
                         continue
@@ -391,22 +394,18 @@ def get_quote_by_session(session_id: str):
                     return None
 
                 record = records[0]
-                fields = record.get("fields", {})
                 record_id = record.get("id", "")
+                fields = record.get("fields", {})
 
                 if not record_id or not fields:
                     log_debug_event(None, "BACKEND", "Incomplete Record Found", f"Missing record_id or fields for session_id={session_id}")
                     return None
 
-                required_fields = ["quote_id", "quote_stage", "customer_name"]
-                missing = [f for f in required_fields if f not in fields]
-                if missing:
-                    log_debug_event(record_id, "BACKEND", "Missing Fields in Record", f"Missing fields: {', '.join(missing)}")
-                    return None
-
+                # Normalize and trim customer_name
                 if "customer_name" in fields:
                     fields["customer_name"] = fields.get("customer_name", "").strip()
 
+                # Ensure quote_id and quote_stage exist
                 quote_id = fields.get("quote_id", "")
                 quote_stage = fields.get("quote_stage", "Gathering Info")
 
@@ -423,7 +422,7 @@ def get_quote_by_session(session_id: str):
             except requests.exceptions.RequestException as e:
                 log_debug_event(None, "BACKEND", f"HTTP Error (Attempt {attempt+1})", str(e))
                 if attempt < max_retries - 1:
-                    delay = retry_delay * (2 ** attempt)
+                    delay = 2 ** attempt
                     log_debug_event(None, "BACKEND", "Retry Delay", f"Waiting {delay}s before retry...")
                     time.sleep(delay)
                     continue
@@ -433,6 +432,7 @@ def get_quote_by_session(session_id: str):
     except Exception as e:
         log_debug_event(None, "BACKEND", "Unhandled Exception in get_quote_by_session", traceback.format_exc())
         return None
+
 
 # === Update Quote Record ====
 
