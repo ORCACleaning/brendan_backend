@@ -75,3 +75,7 @@ SINGLE_SELECT_FIELDS = {
 
 # === Truthy Strings for Boolean Normalization ===
 TRUE_VALUES = {"yes", "true", "1", "y", "sure", "correct"}
+
+# === Max Reasonable Integer Value for Safety Clamps ===
+MAX_REASONABLE_INT = 1000
+
