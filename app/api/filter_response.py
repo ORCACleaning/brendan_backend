@@ -240,6 +240,22 @@ If any carpet count fields are provided but carpet_cleaning is still blank, wait
 # Trigger Words for Abuse Detection (Escalation Logic)
 ABUSE_WORDS = ["fuck", "shit", "cunt", "bitch", "asshole"]
 
+# === Extract Customer's First Name ===
+
+def extract_first_name(full_name: str) -> str:
+    """
+    Extracts and formats the first name from a full name string.
+    Returns capitalized first name or empty string.
+    """
+    try:
+        if not full_name:
+            return ""
+        name = str(full_name).strip().split(" ")[0]
+        name_clean = re.sub(r"[^a-zA-Z\-]", "", name)  # allow hyphenated names
+        return name_clean.capitalize()
+    except Exception as e:
+        logger.warning(f"⚠️ extract_first_name() failed: {e}")
+        return ""
 # === Create New Quote ID ===
 
 def create_new_quote(session_id: str, force_new: bool = False):
@@ -850,7 +866,7 @@ def generate_next_actions(quote_stage: str, fields: dict):
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     start_time = time.time()
     logger.info(f"🟡 extract_properties_from_gpt4() called — record_id: {record_id}, message={message}")
-    
+
     if record_id:
         log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(session_id={quote_id}, message={message[:100]})")
 
@@ -860,8 +876,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         log_debug_event(record_id, "GPT", "Function Duration", f"Early return on __init__, took {duration}s")
         return [{"property": "source", "value": "Brendan"}], "Just a moment while I get us started..."
 
-    weak_inputs = {"hi", "hello", "hey", "you there", "you there?", "you hear me", "you hear me?", "what’s up",
-                   "ok", "okay", "what’s next", "next", "oi", "yo", "?", "test"}
+    weak_inputs = {"hi", "hello", "hey", "you there", "you there?", "you hear me", "you hear me?", "what’s up", "ok", "okay", "what’s next", "next", "oi", "yo", "?", "test"}
     if message.lower().strip() in weak_inputs:
         reply = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
         log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Weak input detected: '{message}'")
@@ -876,22 +891,37 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
-            session_lookup_start = time.time()
             log_debug_event(record_id, "BACKEND", "Session Lookup", f"Looking up session_id={quote_id}")
             session_data = get_quote_by_session(quote_id)
-            lookup_duration = round(time.time() - session_lookup_start, 3)
-            log_debug_event(record_id, "BACKEND", "Session Lookup Duration", f"Took {lookup_duration}s to complete")
             if isinstance(session_data, dict):
                 existing_fields = session_data.get("fields", {})
                 log_debug_event(record_id, "GPT", "Existing Fields Fetched", f"Session Data: {existing_fields}")
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
-    already_asked_name = "what name should i put on the quote" in log.lower()[-300:]
+    log_debug_event(record_id, "GPT", "Checking if name exists in current fields", "")
     name_already_filled = existing_fields.get("customer_name", "").strip() != ""
+    already_asked_name = "what name should i put on the quote" in log.lower()[-300:]
+
+    if name_already_filled:
+        log_debug_event(record_id, "GPT", "Name Already Present In Airtable", existing_fields.get("customer_name", ""))
+
     if name_already_filled and already_asked_name:
         log_debug_event(record_id, "GPT", "Suppressed Repeat Name Prompt", "Already asked & name is filled")
-        return [{"property": "source", "value": "Brendan"}], "Thanks Brad! Let’s keep going."
+        return [{"property": "source", "value": "Brendan"}], f"Thanks {existing_fields.get('customer_name', 'mate')}! Let’s keep going."
+
+    if not name_already_filled and not already_asked_name:
+        log_debug_event(record_id, "GPT", "No Name Detected in Props or Message — Asking for Name", "")
+        return [{"property": "source", "value": "Brendan"}], "No worries! Just before we begin, what name should I pop on this quote? (First name is fine)"
+
+    if len(message.split()) == 1 and message.isalpha():
+        guessed_name = message.strip().title()
+        reply = f"Thanks {guessed_name}! Let’s keep going."
+        log_debug_event(record_id, "GPT", f"Name fallback triggered → storing temporary customer_name = {guessed_name}", "")
+        return [
+            {"property": "customer_name", "value": guessed_name},
+            {"property": "source", "value": "Brendan"}
+        ], reply
 
     log_debug_event(record_id, "GPT", "Preparing Chat Log", f"Original log size: {len(log)} characters")
     prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
@@ -921,86 +951,58 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     messages.append({"role": "user", "content": message.strip()})
     log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
-    def call_gpt_and_parse(attempt=1):
-        max_retries = 3
-        retry_delay = 5
-        parsed = None
-        for attempt in range(1, max_retries + 1):
-            try:
-                gpt_start = time.time()
-                res = client.chat.completions.create(
-                    model="gpt-4-turbo",
-                    messages=messages,
-                    max_tokens=3000,
-                    temperature=0.4
-                )
-                gpt_duration = round(time.time() - gpt_start, 3)
-                log_debug_event(record_id, "GPT", "GPT Call Duration", f"GPT returned in {gpt_duration}s")
+    try:
+        gpt_start = time.time()
+        res = client.chat.completions.create(
+            model="gpt-4-turbo",
+            messages=messages,
+            max_tokens=3000,
+            temperature=0.4
+        )
+        gpt_duration = round(time.time() - gpt_start, 3)
+        raw = res.choices[0].message.content.strip()
+        log_debug_event(record_id, "GPT", "Raw GPT Response", raw[:500])
+    except Exception as e:
+        log_debug_event(record_id, "GPT", "GPT Call Failed", str(e))
+        return [{"property": "source", "value": "Brendan"}], "I had a bit of trouble processing that — mind saying it again?"
 
-                raw = res.choices[0].message.content.strip()
-                log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
-                log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
-
-                if not raw:
-                    log_debug_event(record_id, "GPT", f"Empty Response (Attempt {attempt})", "GPT response is empty.")
-                    return None
-
-                start, end = raw.find("{"), raw.rfind("}")
-                parsed = json.loads(raw[start:end + 1])
-                break
-
-            except Exception as e:
-                log_debug_event(record_id, "GPT", f"Parse Failed Attempt {attempt}", str(e))
-                if attempt < max_retries:
-                    log_debug_event(record_id, "GPT", "Retrying", f"Retrying after {retry_delay}s...")
-                    time.sleep(retry_delay)
-                else:
-                    log_debug_event(record_id, "GPT", "Final Parse Failed", f"Error after {max_retries} attempts: {str(e)}")
-                    return None
-
-        return parsed
-
-    parsed = call_gpt_and_parse()
-    if not parsed or "properties" not in parsed or "response" not in parsed:
-        log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
-        fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-        log_debug_event(record_id, "GPT", "Final Reply", fallback)
-        flushed = flush_debug_log(record_id)
-        if flushed:
-            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
-        return [{"property": "source", "value": "Brendan"}], fallback
+    start, end = raw.find("{"), raw.rfind("}")
+    try:
+        parsed = json.loads(raw[start:end + 1])
+    except Exception as e:
+        log_debug_event(record_id, "GPT", "Parse Error", str(e))
+        return [{"property": "source", "value": "Brendan"}], "Sorry — could you repeat that one more time?"
 
     raw_props = parsed.get("properties", [])
     reply = parsed.get("response", "").strip()
 
     if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
         log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
-        fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-        log_debug_event(record_id, "GPT", "Final Reply", fallback)
-        flushed = flush_debug_log(record_id)
-        if flushed:
-            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
-        return [{"property": "source", "value": "Brendan"}], fallback
+        return [{"property": "source", "value": "Brendan"}], "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
 
     if isinstance(raw_props, dict):
         raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
         log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
     elif not isinstance(raw_props, list):
-        log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)}")
         raw_props = []
+        log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)}")
 
     safe_props = []
+    name_found = False
     for p in raw_props:
         if not isinstance(p, dict) or "property" not in p or "value" not in p:
             log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
             continue
         field, value = p["property"], p["value"]
-        log_debug_event(record_id, "GPT", "Processing Field", f"{field} = {value}")
         if field == "name" or field == "first_name":
             field = "customer_name"
-            if value:
-                update_quote_record(record_id, {"customer_name": value})
-                log_debug_event(record_id, "GPT", "Customer Name Captured", f"Stored customer name: {value}")
+        if field == "customer_name":
+            name_found = True
+            first_name = value.strip().split(" ")[0]
+            value = first_name
+            log_debug_event(record_id, "GPT", f"Parsed Name From Message: customer_name = {first_name}", "")
+            update_quote_record(record_id, {"customer_name": first_name})
+            log_debug_event(record_id, "GPT", "Injected Name As Property", f"customer_name = {first_name}")
         elif field == "bedrooms":
             field = "bedrooms_v2"
         elif field == "bathrooms":
@@ -1016,26 +1018,15 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
 
     safe_props = [p for p in safe_props if p["property"] != "source"]
     safe_props.append({"property": "source", "value": "Brendan"})
+
     log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
     log_debug_event(record_id, "GPT", "Final Reply", reply)
-    log_debug_event(record_id, "GPT", "Function Return Payload", f"{len(safe_props)} properties to return")
+    log_debug_event(record_id, "GPT", "Final Props List Contains Name", str(name_found))
 
     flushed = flush_debug_log(record_id)
     if flushed:
         update_quote_record(record_id, {"debug_log": flushed})
         log_debug_event(record_id, "GPT", "Debug Log Flushed", f"{len(flushed)} chars flushed")
-
-    if not safe_props or all(p["property"] == "source" for p in safe_props):
-        if len(message.split()) == 1 and message.isalpha():
-            guessed_name = message.strip().title()
-            log_debug_event(record_id, "GPT", "Name Fallback Injected", f"customer_name = {guessed_name}")
-            log_debug_event(record_id, "GPT", "Final Reply", f"Thanks {guessed_name}! Let’s keep going.")
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed})
-            return [
-                {"property": "customer_name", "value": guessed_name},
-                {"property": "source", "value": "Brendan"}
-            ], f"Thanks {guessed_name}! Let’s keep going."
 
     return safe_props, reply
 
