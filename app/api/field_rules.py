@@ -72,3 +72,6 @@ BOOLEAN_FIELDS = {
 SINGLE_SELECT_FIELDS = {
     "carpet_cleaning"  # Allowed: "Yes", "No", or ""
 }
+
+# === Truthy Strings for Boolean Normalization ===
+TRUE_VALUES = {"yes", "true", "1", "y", "sure", "correct"}
