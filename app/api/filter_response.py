@@ -249,9 +249,9 @@ def create_new_quote(session_id: str, force_new: bool = False):
     """
     try:
         if not session_id:
+            log_debug_event(None, "BACKEND", "Invalid Input", "Session ID missing on quote creation")
             raise ValueError("Session ID is required for creating a new quote.")
         
-        # Generate a new quote ID
         quote_id = get_next_quote_id()
         url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{quote(TABLE_NAME)}"
         headers = {
@@ -259,8 +259,7 @@ def create_new_quote(session_id: str, force_new: bool = False):
             "Content-Type": "application/json"
         }
 
-        # Prepare payload fields
-        timestamp = datetime.utcnow().isoformat()  # Keep for logs only — do not include in Airtable
+        timestamp = datetime.utcnow().isoformat()
         fields = {
             "session_id": session_id,
             "quote_id": quote_id,
@@ -271,23 +270,20 @@ def create_new_quote(session_id: str, force_new: bool = False):
 
         logger.info(f"📤 Creating new quote with payload:\n{json.dumps(fields, indent=2)}")
         log_debug_event(None, "BACKEND", "Function Start", f"create_new_quote(session_id={session_id}, force_new={force_new})")
-        log_debug_event(None, "BACKEND", "Creating New Quote", f"Session: {session_id}, Quote ID: {quote_id}, Timestamp: {timestamp} (not sent)")
-        log_debug_event(None, "BACKEND", "Injected Source Field", "source = Brendan")
+        log_debug_event(None, "BACKEND", "Creating New Quote", f"Session: {session_id}, Quote ID: {quote_id}, Timestamp: {timestamp}")
+        log_debug_event(None, "BACKEND", "Quote Payload", json.dumps(fields, indent=2))
 
-        # Make request to Airtable API to create the quote record
         payload = {"fields": fields}
         res = requests.post(url, headers=headers, json=payload)
-        res.raise_for_status()  # Raise an exception for HTTP errors
+        res.raise_for_status()
 
-        # Parse the response
         response = res.json()
         record_id = response.get("id", "")
         returned_fields = response.get("fields", {})
 
-        # Log the response data and ensure the quote is properly stored
         log_debug_event(record_id, "BACKEND", "Quote Created in Airtable", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
+        log_debug_event(record_id, "BACKEND", "Returned Field Values", f"{json.dumps(returned_fields, indent=2)}")
 
-        # Validate that all required fields are present
         required = ["session_id", "quote_id", "quote_stage", "source"]
         for r in required:
             if r not in returned_fields:
@@ -296,36 +292,32 @@ def create_new_quote(session_id: str, force_new: bool = False):
                 logger.error(f"❌ {error_msg}")
                 raise HTTPException(status_code=500, detail=error_msg)
 
-        # Additional safeguard to check for session_id mismatch
         if returned_fields.get("session_id") != session_id:
             error_msg = f"Session ID mismatch: expected {session_id}, got {returned_fields.get('session_id')}"
             log_debug_event(record_id, "BACKEND", "Session ID Mismatch", error_msg)
             logger.error(f"❌ {error_msg}")
             raise HTTPException(status_code=500, detail="Session ID mismatch during quote creation.")
 
-        # Flush and store the debug log after quote creation
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
             log_debug_event(record_id, "BACKEND", "Debug Log Flushed", f"{len(flushed)} chars flushed post-create")
 
         logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
-        log_debug_event(record_id, "BACKEND", "New Quote Created", f"Record ID: {record_id}, Fields: {list(returned_fields.keys())}")
+        log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}, Quote ID: {quote_id}, Record ID: {record_id}")
 
-        # Adding delay to allow Airtable to process and index the newly created record
-        time.sleep(5)  # Wait for Airtable to process the quote and make it available for session lookup
+        time.sleep(5)
+        log_debug_event(record_id, "BACKEND", "Session Lookup Start", f"Attempting to re-fetch session_id={session_id} post-create")
 
-        # Ensure the session is accessible after creation
-        log_debug_event(record_id, "BACKEND", "Session Lookup Start", f"Attempting to fetch session_id={session_id} post-creation")
-
-        # Check if the session exists immediately after creation
         session_check = get_quote_by_session(session_id)
         if not session_check:
             error_msg = f"Session not found after quote creation for session_id={session_id}"
             log_debug_event(record_id, "BACKEND", "Session Not Found After Creation", error_msg)
             raise HTTPException(status_code=404, detail=error_msg)
 
-        # Return relevant information after quote creation and successful session lookup
+        actual_row_id = session_check.get("record_id", "N/A")
+        log_debug_event(record_id, "BACKEND", "Session Found After Creation", f"record_id={actual_row_id} matched session_id={session_id}")
+
         return quote_id, record_id, "Gathering Info", returned_fields
 
     except requests.exceptions.HTTPError as e:
@@ -341,16 +333,14 @@ def create_new_quote(session_id: str, force_new: bool = False):
         raise HTTPException(status_code=400, detail=error_msg)
 
     except KeyError as e:
-        # Handle missing keys in response
         error_msg = f"Missing key in Airtable response: {str(e)}"
         logger.error(f"❌ Missing key error during quote creation: {error_msg}")
         log_debug_event(None, "BACKEND", "Quote Creation Failed", error_msg)
         raise HTTPException(status_code=500, detail=f"Quote creation failed — missing key: {str(e)}")
 
     except Exception as e:
-        # Handle other unexpected errors
         logger.error(f"❌ Unexpected exception during quote creation: {e}")
-        log_debug_event(None, "BACKEND", "Quote Creation Exception", str(e))
+        log_debug_event(None, "BACKEND", "Quote Creation Exception", traceback.format_exc())
         raise HTTPException(status_code=500, detail="Quote creation failed — unexpected error.")
 
 
@@ -364,12 +354,11 @@ def get_quote_by_session(session_id: str):
     Ensures customer_name is included in the fields.
     """
     try:
-        # Validate session_id
         if not session_id:
             log_debug_event(None, "BACKEND", "Invalid Session", "Empty session_id passed to get_quote_by_session")
             raise ValueError("Empty session_id passed to get_quote_by_session")
 
-        log_debug_event(None, "BACKEND", "Session Lookup Start", f"session_id={session_id}")
+        log_debug_event(None, "BACKEND", "Session Lookup Start", f"Searching Airtable for session_id: {session_id}")
 
         safe_table_name = quote(TABLE_NAME)
         url = f"https://api.airtable.com/v0/{settings.AIRTABLE_BASE_ID}/{safe_table_name}"
@@ -379,52 +368,42 @@ def get_quote_by_session(session_id: str):
             "maxRecords": 1
         }
 
-        # Retry logic with exponential backoff
         max_retries = 5
-        retry_delay = 2  # Start with 2 seconds for the first retry
+        retry_delay = 2
 
         for attempt in range(max_retries):
-            # Make the API request
             try:
                 res = requests.get(url, headers=headers, params=params)
                 res.raise_for_status()
 
-                # Check if records are returned
                 records = res.json().get("records", [])
                 if not records:
-                    log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt+1})", f"No Airtable record found for session_id={session_id}")
+                    log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt+1})", f"No record found for session_id={session_id}")
                     if attempt < max_retries - 1:
-                        delay = retry_delay * (2 ** attempt)  # Exponential backoff
-                        log_debug_event(None, "BACKEND", f"Retrying after {delay}s...")
-                        time.sleep(delay)  # Wait before retrying
+                        delay = retry_delay * (2 ** attempt)
+                        log_debug_event(None, "BACKEND", "Retry Delay", f"Waiting {delay}s before retry...")
+                        time.sleep(delay)
                         continue
-                    log_debug_event(None, "BACKEND", "Session Not Found After All Attempts", f"Session not found for session_id={session_id} after {max_retries} attempts.")
-                    return None  # After all retries, return None
+                    log_debug_event(None, "BACKEND", "Final Session Lookup Failure", f"session_id={session_id} not found after {max_retries} attempts.")
+                    return None
 
-                # Extract the first record
                 record = records[0]
                 fields = record.get("fields", {})
                 record_id = record.get("id", "")
 
-                # Ensure required fields are in the response
                 if not record_id or not fields:
-                    log_debug_event(None, "BACKEND", "Session Found But Incomplete", f"Missing record_id or fields for session_id={session_id}")
+                    log_debug_event(None, "BACKEND", "Incomplete Record Found", f"Missing record_id or fields for session_id={session_id}")
                     return None
 
-                # Validate required fields in the fields response
                 required_fields = ["quote_id", "quote_stage", "customer_name"]
-                missing_fields = [field for field in required_fields if field not in fields]
-
-                if missing_fields:
-                    log_debug_event(record_id, "BACKEND", "Missing Required Fields", f"Missing fields: {', '.join(missing_fields)} for session_id={session_id}")
+                missing = [f for f in required_fields if f not in fields]
+                if missing:
+                    log_debug_event(record_id, "BACKEND", "Missing Fields in Record", f"Missing fields: {', '.join(missing)}")
                     return None
 
-                # If customer_name is present, clean it
-                customer_name = fields.get("customer_name", "").strip()
-                if customer_name:
-                    fields["customer_name"] = customer_name
+                if "customer_name" in fields:
+                    fields["customer_name"] = fields.get("customer_name", "").strip()
 
-                # Return the result
                 quote_id = fields.get("quote_id", "")
                 quote_stage = fields.get("quote_stage", "Gathering Info")
 
@@ -435,27 +414,22 @@ def get_quote_by_session(session_id: str):
                     "fields": fields
                 }
 
-                log_debug_event(record_id, "BACKEND", "Session Found", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
+                log_debug_event(record_id, "BACKEND", "Session Found", f"session_id={session_id}, quote_id={quote_id}, fields={list(fields.keys())}")
                 return result
 
             except requests.exceptions.RequestException as e:
-                # Handle request errors
-                logger.warning(f"⚠️ get_quote_by_session() HTTP request failed (Attempt {attempt+1}): {e}")
-                log_debug_event(None, "BACKEND", f"Session Lookup Error (Attempt {attempt+1})", f"HTTP request failed: {str(e)}")
+                log_debug_event(None, "BACKEND", f"HTTP Error (Attempt {attempt+1})", str(e))
                 if attempt < max_retries - 1:
-                    delay = retry_delay * (2 ** attempt)  # Exponential backoff
-                    log_debug_event(None, "BACKEND", f"Retrying after {delay}s...")
-                    time.sleep(delay)  # Wait before retrying
+                    delay = retry_delay * (2 ** attempt)
+                    log_debug_event(None, "BACKEND", "Retry Delay", f"Waiting {delay}s before retry...")
+                    time.sleep(delay)
                     continue
-                log_debug_event(None, "BACKEND", "Session Not Found After All Attempts", f"Session not found for session_id={session_id} after {max_retries} attempts.")
-                return None  # After all retries, return None
+                log_debug_event(None, "BACKEND", "Final Session Lookup Failure", f"session_id={session_id} not found due to repeated HTTP errors.")
+                return None
 
     except Exception as e:
-        # Handle other unexpected errors
-        logger.warning(f"⚠️ get_quote_by_session() failed: {e}")
-        log_debug_event(None, "BACKEND", "Session Lookup Error", str(e))
+        log_debug_event(None, "BACKEND", "Unhandled Exception in get_quote_by_session", traceback.format_exc())
         return None
-
 
 # === Update Quote Record ====
 
@@ -1383,54 +1357,46 @@ router = APIRouter()
 @router.post("/filter-response")
 async def filter_response_entry(request: Request):
     try:
-        # Parse the incoming JSON request
         body = await request.json()
         message = str(body.get("message", "")).strip()
         session_id = str(body.get("session_id", "")).strip()
 
-        # Check for session ID
         if not session_id:
             log_debug_event(None, "BACKEND", "Session Error", "No session_id provided in request")
             raise HTTPException(status_code=400, detail="Session ID is required.")
 
         log_debug_event(None, "BACKEND", "Incoming Message", f"Session: {session_id}, Message: {message}")
 
-        # Initialize the chat if __init__ is received
         if message.lower() == "__init__":
             try:
                 log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}")
 
-                # Check if a valid session already exists
                 existing_quote = get_quote_by_session(session_id)
                 if not existing_quote:
-                    # If no valid session is found, create a new quote
                     log_debug_event(None, "BACKEND", "Session Not Found, Creating New Quote", f"Creating new quote for session {session_id}")
                     quote_id, record_id, quote_stage, fields = create_new_quote(session_id, force_new=True)
 
-                    # Adding a delay to allow Airtable to process the new quote and session
                     retry_attempts = 5
                     for attempt in range(retry_attempts):
-                        time.sleep(5 * (attempt + 1))  # Exponential backoff: 5s, 10s, 15s, etc.
-
-                        # Retry session lookup after delay
+                        time.sleep(5 * (attempt + 1))
                         existing_quote = get_quote_by_session(session_id)
                         if existing_quote:
                             break
-                        else:
-                            log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt + 1})", f"Retrying session lookup for session_id={session_id}")
-                    
+                        log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt + 1})", f"Retrying session lookup for session_id={session_id}")
+
                     if not existing_quote:
                         log_debug_event(None, "BACKEND", "Failed to Retrieve New Quote", f"Session {session_id} still not found after retries.")
                         raise HTTPException(status_code=404, detail="Session not found after creating quote.")
+                    else:
+                        retrieved = existing_quote.get("fields", {}).get("session_id", "NOT RETURNED")
+                        log_debug_event(None, "BACKEND", "Recheck Success", f"Session ID found after retry: {retrieved}")
 
-                # If session exists, retrieve quote data
                 quote_id = existing_quote.get("quote_id", "N/A")
                 record_id = existing_quote.get("record_id", "")
                 quote_stage = existing_quote.get("quote_stage", "Gathering Info")
                 fields = existing_quote.get("fields", {})
-                log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
+                log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}, Airtable session_id: {fields.get('session_id', 'MISSING')}")
 
-                # Handle specific quote stages (like gathering personal info or chat banning)
                 if quote_stage == "Chat Banned":
                     log_debug_event(record_id, "BACKEND", "Blocked Chat", "Chat is banned — denying interaction")
                     return JSONResponse(content={
@@ -1462,7 +1428,7 @@ async def filter_response_entry(request: Request):
                             return JSONResponse(content={
                                 "properties": [],
                                 "response": f"Thanks {name}! I’ve just sent your quote to {email}. Let me know if you need help with anything else — or feel free to book directly anytime: https://orcacleaning.com.au/schedule?quote_id={quote_id}",
-                                "next_actions": generate_next_actions("Personal Info Received", fields),  # Pass fields here
+                                "next_actions": generate_next_actions("Personal Info Received", fields),
                                 "session_id": session_id
                             })
                         except Exception as e:
@@ -1473,20 +1439,17 @@ async def filter_response_entry(request: Request):
                 log_debug_event(None, "BACKEND", "Init Error", traceback.format_exc())
                 raise HTTPException(status_code=500, detail="Init failed.")
 
-        # Existing logic continues here...
         quote_data = get_quote_by_session(session_id)
         if not isinstance(quote_data, dict) or "record_id" not in quote_data:
             log_debug_event(None, "BACKEND", "Session Lookup Failed", f"No valid quote found for session: {session_id}")
             raise HTTPException(status_code=404, detail="Quote not found.")
 
-        # Proceed with the quote processing if found
         quote_id = quote_data.get("quote_id", "N/A")
         record_id = quote_data.get("record_id", "")
         quote_stage = quote_data.get("quote_stage", "Gathering Info")
         fields = quote_data.get("fields", {})
-        log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}")
+        log_debug_event(record_id, "BACKEND", "Session Retrieved", f"Quote ID: {quote_id}, Stage: {quote_stage}, Fields: {list(fields.keys())}, Airtable session_id: {fields.get('session_id', 'MISSING')}")
 
-        # Handle chat banning or progress through stages
         if quote_stage == "Chat Banned":
             log_debug_event(record_id, "BACKEND", "Blocked Chat", "Chat is banned — denying interaction")
             return JSONResponse(content={
@@ -1496,7 +1459,6 @@ async def filter_response_entry(request: Request):
                 "session_id": session_id
             })
 
-        # Collect missing fields if any
         if quote_stage == "Gathering Info":
             REQUIRED_FIELDS = [
                 "customer_name", "suburb", "bedrooms_v2", "bathrooms_v2", "furnished_status"
@@ -1517,11 +1479,10 @@ async def filter_response_entry(request: Request):
                     return JSONResponse(content={
                         "properties": [],
                         "response": prompt,
-                        "next_actions": generate_next_actions("Gathering Info", fields),  # Pass fields here
+                        "next_actions": generate_next_actions("Gathering Info", fields),
                         "session_id": session_id
                     })
 
-        # Proceed with regular quote processing if all required fields are present
         append_message_log(record_id, message, "user")
         message_log = fields.get("message_log", "")[-LOG_TRUNCATE_LENGTH:]
         log_debug_event(record_id, "BACKEND", "Calling GPT", f"Input: {message[:100]}")
@@ -1534,7 +1495,6 @@ async def filter_response_entry(request: Request):
         parsed = {p["property"]: p["value"] for p in properties if "property" in p and "value" in p}
         log_debug_event(record_id, "BACKEND", "Parsed Properties", str(parsed))
 
-        # Ensure required fields are preserved if GPT does not provide them
         for required in ["source", "bedrooms_v2", "bathrooms_v2"]:
             if required not in parsed and required in fields:
                 parsed[required] = fields[required]
@@ -1564,7 +1524,7 @@ async def filter_response_entry(request: Request):
         return JSONResponse(content={
             "properties": properties,
             "response": reply,
-            "next_actions": generate_next_actions(parsed.get("quote_stage", quote_stage), fields),  # Pass fields here
+            "next_actions": generate_next_actions(parsed.get("quote_stage", quote_stage), fields),
             "session_id": session_id
         })
 
