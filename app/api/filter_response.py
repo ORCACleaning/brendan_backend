@@ -1008,10 +1008,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
                 continue
             field, value = p["property"], p["value"]
+            log_debug_event(record_id, "GPT", "Processing Field", f"{field} = {value}")
             if field == "name" or field == "first_name":
                 field = "customer_name"
                 if value:
-                    # Store customer name in Airtable immediately
                     update_quote_record(record_id, {"customer_name": value})
                     log_debug_event(record_id, "GPT", "Customer Name Captured", f"Stored customer name: {value}")
             elif field == "bedrooms":
@@ -1020,8 +1020,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 field = "bathrooms_v2"
             elif field == "furnished":
                 field = "furnished_status"
+
             if field in VALID_AIRTABLE_FIELDS:
                 safe_props.append({"property": field, "value": value})
+                log_debug_event(record_id, "GPT", "Field Accepted", f"{field} accepted")
             else:
                 log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
 
@@ -1029,11 +1031,12 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         safe_props.append({"property": "source", "value": "Brendan"})
         log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
         log_debug_event(record_id, "GPT", "Final Reply", reply)
-        log_debug_event(record_id, "GPT", "Function Return Payload", str(safe_props))
+        log_debug_event(record_id, "GPT", "Function Return Payload", f"{len(safe_props)} properties to return")
 
         flushed = flush_debug_log(record_id)
         if flushed:
             update_quote_record(record_id, {"debug_log": flushed})
+            log_debug_event(record_id, "GPT", "Debug Log Flushed", f"{len(flushed)} chars flushed")
 
         if not safe_props or all(p["property"] == "source" for p in safe_props):
             if len(message.split()) == 1 and message.isalpha():
@@ -1048,7 +1051,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
                 ], f"Thanks {guessed_name}! Let’s keep going."
 
         return safe_props, reply
-
 
 # === GPT Error Email Alert ===
 
