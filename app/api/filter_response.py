@@ -306,6 +306,9 @@ def create_new_quote(session_id: str, force_new: bool = False):
         logger.info(f"✅ New quote created — session_id: {session_id} | quote_id: {quote_id} | record_id: {record_id}")
         log_debug_event(record_id, "BACKEND", "New Quote Created", f"Session: {session_id}, Quote ID: {quote_id}, Record ID: {record_id}")
 
+        # ✅ ADDITION: mark when quote creation fully completes
+        log_debug_event(record_id, "BACKEND", "Quote Creation Complete", f"Returning quote record at {datetime.utcnow().isoformat()}")
+
         # Wait before retrying to allow Airtable to index new session_id
         initial_wait = 3
         log_debug_event(record_id, "BACKEND", "Initial Delay", f"Waiting {initial_wait}s before retrying session check...")
@@ -843,6 +846,7 @@ def generate_next_actions(quote_stage: str, fields: dict):
 
 
 # === GPT Extraction (Production-Grade) ===
+
 async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     start_time = time.time()
     logger.info(f"🟡 extract_properties_from_gpt4() called — record_id: {record_id}, message={message}")
@@ -850,17 +854,14 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     if record_id:
         log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(session_id={quote_id}, message={message[:100]})")
 
-    # If the message is "__init__", suppress GPT call
     if message.strip() == "__init__":
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
         duration = round(time.time() - start_time, 3)
         log_debug_event(record_id, "GPT", "Function Duration", f"Early return on __init__, took {duration}s")
         return [{"property": "source", "value": "Brendan"}], "Just a moment while I get us started..."
 
-    weak_inputs = {
-        "hi", "hello", "hey", "you there", "you there?", "you hear me", "you hear me?", "what’s up",
-        "ok", "okay", "what’s next", "next", "oi", "yo", "?", "test"
-    }
+    weak_inputs = {"hi", "hello", "hey", "you there", "you there?", "you hear me", "you hear me?", "what’s up",
+                   "ok", "okay", "what’s next", "next", "oi", "yo", "?", "test"}
     if message.lower().strip() in weak_inputs:
         reply = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
         log_debug_event(record_id, "GPT", "Weak Message Skipped", f"Weak input detected: '{message}'")
@@ -875,182 +876,169 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
-            lookup_start = time.time()
-            log_debug_event(record_id, "BACKEND", "Session Lookup", f"Looking up session_id={quote_id}")
-
-            # Attempt to fetch session data, retry if necessary
             session_lookup_start = time.time()
             log_debug_event(record_id, "BACKEND", "Session Lookup", f"Looking up session_id={quote_id}")
             session_data = get_quote_by_session(quote_id)
-            session_lookup_duration = round(time.time() - session_lookup_start, 3)
-            log_debug_event(record_id, "BACKEND", "Session Lookup Duration", f"Took {session_lookup_duration}s to complete")
-
+            lookup_duration = round(time.time() - session_lookup_start, 3)
+            log_debug_event(record_id, "BACKEND", "Session Lookup Duration", f"Took {lookup_duration}s to complete")
             if isinstance(session_data, dict):
                 existing_fields = session_data.get("fields", {})
                 log_debug_event(record_id, "GPT", "Existing Fields Fetched", f"Session Data: {existing_fields}")
         except Exception as e:
             log_debug_event(record_id, "GPT", "Record Fetch Failed", str(e))
 
-        # === Check if name was just asked ===
-        already_asked_name = "what name should i put on the quote" in log.lower()[-300:]
-        name_already_filled = existing_fields.get("customer_name", "").strip() != ""
-        if name_already_filled and already_asked_name:
-            log_debug_event(record_id, "GPT", "Suppressed Repeat Name Prompt", "Already asked & name is filled")
-            return [{"property": "source", "value": "Brendan"}], "Thanks Brad! Let’s keep going."
+    already_asked_name = "what name should i put on the quote" in log.lower()[-300:]
+    name_already_filled = existing_fields.get("customer_name", "").strip() != ""
+    if name_already_filled and already_asked_name:
+        log_debug_event(record_id, "GPT", "Suppressed Repeat Name Prompt", "Already asked & name is filled")
+        return [{"property": "source", "value": "Brendan"}], "Thanks Brad! Let’s keep going."
 
-        log_debug_event(record_id, "GPT", "Preparing Chat Log", f"Original log size: {len(log)} characters")
-        prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
-        log_debug_event(record_id, "GPT", "Cleaned Chat Log", f"Trimmed log to {len(prepared_log)} characters")
+    log_debug_event(record_id, "GPT", "Preparing Chat Log", f"Original log size: {len(log)} characters")
+    prepared_log = re.sub(r"[^\x20-\x7E\n]", "", log[-10000:])
+    log_debug_event(record_id, "GPT", "Cleaned Chat Log", f"Trimmed log to {len(prepared_log)} characters")
 
-        messages = [{
-            "role": "system",
-            "content": (
-                "You are Brendan, the quoting assistant for Orca Cleaning.\n"
-                "The customer has already seen this greeting from the frontend:\n\n"
-                "“G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
-                "This quote is fully anonymous and no booking is required — I’m just here to help. View our Privacy Policy.”\n\n"
-                "Do NOT repeat this greeting or say 'Hi', 'Hello', or 'G’day'.\n"
-                "Always respond with a JSON object containing only:\n"
-                "{ \"properties\": [...], \"response\": \"...\" }"
-            )
-        }]
+    messages = [{
+        "role": "system",
+        "content": (
+            "You are Brendan, the quoting assistant for Orca Cleaning.\n"
+            "The customer has already seen this greeting from the frontend:\n\n"
+            "“G’day! I’m Brendan from Orca Cleaning — your quoting officer for vacate cleans in Perth and Mandurah. "
+            "This quote is fully anonymous and no booking is required — I’m just here to help. View our Privacy Policy.”\n\n"
+            "Do NOT repeat this greeting or say 'Hi', 'Hello', or 'G’day'.\n"
+            "Always respond with a JSON object containing only:\n"
+            "{ \"properties\": [...], \"response\": \"...\" }"
+        )
+    }]
 
-        for line in prepared_log.split("\n"):
-            if line.startswith("USER:") and line.strip() != "USER: __init__":
-                messages.append({"role": "user", "content": line[5:].strip()})
-            elif line.startswith("BRENDAN:"):
-                messages.append({"role": "assistant", "content": line[8:].strip()})
-            elif line.startswith("SYSTEM:"):
-                messages.append({"role": "system", "content": line[7:].strip()})
+    for line in prepared_log.split("\n"):
+        if line.startswith("USER:") and line.strip() != "USER: __init__":
+            messages.append({"role": "user", "content": line[5:].strip()})
+        elif line.startswith("BRENDAN:"):
+            messages.append({"role": "assistant", "content": line[8:].strip()})
+        elif line.startswith("SYSTEM:"):
+            messages.append({"role": "system", "content": line[7:].strip()})
 
-        messages.append({"role": "user", "content": message.strip()})
-        log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
+    messages.append({"role": "user", "content": message.strip()})
+    log_debug_event(record_id, "GPT", "Messages Prepared", f"{len(messages)} messages ready for GPT")
 
-        def call_gpt_and_parse(attempt=1):
-            max_retries = 3
-            retry_delay = 5
-            parsed = None
+    def call_gpt_and_parse(attempt=1):
+        max_retries = 3
+        retry_delay = 5
+        parsed = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                gpt_start = time.time()
+                res = client.chat.completions.create(
+                    model="gpt-4-turbo",
+                    messages=messages,
+                    max_tokens=3000,
+                    temperature=0.4
+                )
+                gpt_duration = round(time.time() - gpt_start, 3)
+                log_debug_event(record_id, "GPT", "GPT Call Duration", f"GPT returned in {gpt_duration}s")
 
-            for attempt in range(1, max_retries + 1):
-                try:
-                    gpt_start = time.time()
-                    res = client.chat.completions.create(
-                        model="gpt-4-turbo",
-                        messages=messages,
-                        max_tokens=3000,
-                        temperature=0.4
-                    )
-                    gpt_duration = round(time.time() - gpt_start, 3)
-                    log_debug_event(record_id, "GPT", "GPT Call Duration", f"GPT returned in {gpt_duration}s")
+                raw = res.choices[0].message.content.strip()
+                log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
+                log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
 
-                    raw = res.choices[0].message.content.strip()
-                    log_debug_event(record_id, "GPT", f"Raw Response {attempt}", raw[:300])
-                    log_debug_event(record_id, "GPT", "Full GPT Response", raw[:3000])
+                if not raw:
+                    log_debug_event(record_id, "GPT", f"Empty Response (Attempt {attempt})", "GPT response is empty.")
+                    return None
 
-                    if not raw:
-                        log_debug_event(record_id, "GPT", f"Empty Response (Attempt {attempt})", "GPT response is empty.")
-                        return None
+                start, end = raw.find("{"), raw.rfind("}")
+                parsed = json.loads(raw[start:end + 1])
+                break
 
-                    start, end = raw.find("{"), raw.rfind("}")
-                    parsed = json.loads(raw[start:end + 1])
-                    break
-    
-                except Exception as e:
-                    log_debug_event(record_id, "GPT", f"Parse Failed Attempt {attempt}", str(e))
-                    if attempt < max_retries:
-                        log_debug_event(record_id, "GPT", "Retrying", f"Retrying after {retry_delay}s...")
-                        time.sleep(retry_delay)
-                    else:
-                        log_debug_event(record_id, "GPT", "Final Parse Failed", f"Error after {max_retries} attempts: {str(e)}")
-                        return None
+            except Exception as e:
+                log_debug_event(record_id, "GPT", f"Parse Failed Attempt {attempt}", str(e))
+                if attempt < max_retries:
+                    log_debug_event(record_id, "GPT", "Retrying", f"Retrying after {retry_delay}s...")
+                    time.sleep(retry_delay)
+                else:
+                    log_debug_event(record_id, "GPT", "Final Parse Failed", f"Error after {max_retries} attempts: {str(e)}")
+                    return None
 
-            if not isinstance(parsed, dict):
-                messages.insert(1, {
-                    "role": "system",
-                    "content": "You MUST respond with valid JSON containing only 'properties' and 'response'. Do not reply in plain text."
-                })
-                return call_gpt_and_parse(attempt + 1)
+        return parsed
 
-            if "properties" not in parsed or "response" not in parsed:
-                log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
-                fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-                log_debug_event(record_id, "GPT", "Final Reply", fallback)
-                flushed = flush_debug_log(record_id)
-                if flushed:
-                    update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
-                return [{"property": "source", "value": "Brendan"}], fallback
-
-            raw_props = parsed.get("properties", [])
-            reply = parsed.get("response", "").strip()
-
-        # Handling malformed props
-        if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
-            log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
-            fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
-            log_debug_event(record_id, "GPT", "Final Reply", fallback)
-            flushed = flush_debug_log(record_id)
-            if flushed:
-                update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
-            return [{"property": "source", "value": "Brendan"}], fallback
-
-        if isinstance(raw_props, dict):
-            raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
-            log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
-        elif not isinstance(raw_props, list):
-            log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)}")
-            raw_props = []
-
-        log_debug_event(record_id, "GPT", "Parsed GPT Response", f"Reply: {reply[:100]} | Props: {len(raw_props)}")
-
-        safe_props = []
-        for p in raw_props:
-            if not isinstance(p, dict) or "property" not in p or "value" not in p:
-                log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
-                continue
-            field, value = p["property"], p["value"]
-            log_debug_event(record_id, "GPT", "Processing Field", f"{field} = {value}")
-            if field == "name" or field == "first_name":
-                field = "customer_name"
-                if value:
-                    update_quote_record(record_id, {"customer_name": value})
-                    log_debug_event(record_id, "GPT", "Customer Name Captured", f"Stored customer name: {value}")
-            elif field == "bedrooms":
-                field = "bedrooms_v2"
-            elif field == "bathrooms":
-                field = "bathrooms_v2"
-            elif field == "furnished":
-                field = "furnished_status"
-
-            if field in VALID_AIRTABLE_FIELDS:
-                safe_props.append({"property": field, "value": value})
-                log_debug_event(record_id, "GPT", "Field Accepted", f"{field} accepted")
-            else:
-                log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
-
-        safe_props = [p for p in safe_props if p["property"] != "source"]
-        safe_props.append({"property": "source", "value": "Brendan"})
-        log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
-        log_debug_event(record_id, "GPT", "Final Reply", reply)
-        log_debug_event(record_id, "GPT", "Function Return Payload", f"{len(safe_props)} properties to return")
-
+    parsed = call_gpt_and_parse()
+    if not parsed or "properties" not in parsed or "response" not in parsed:
+        log_debug_event(record_id, "GPT", "Schema Validation Failed", str(parsed))
+        fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
+        log_debug_event(record_id, "GPT", "Final Reply", fallback)
         flushed = flush_debug_log(record_id)
         if flushed:
-            update_quote_record(record_id, {"debug_log": flushed})
-            log_debug_event(record_id, "GPT", "Debug Log Flushed", f"{len(flushed)} chars flushed")
+            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+        return [{"property": "source", "value": "Brendan"}], fallback
 
-        if not safe_props or all(p["property"] == "source" for p in safe_props):
-            if len(message.split()) == 1 and message.isalpha():
-                guessed_name = message.strip().title()
-                log_debug_event(record_id, "GPT", "Name Fallback Injected", f"customer_name = {guessed_name}")
-                log_debug_event(record_id, "GPT", "Final Reply", f"Thanks {guessed_name}! Let’s keep going.")
-                if flushed:
-                    update_quote_record(record_id, {"debug_log": flushed})
-                return [
-                    {"property": "customer_name", "value": guessed_name},
-                    {"property": "source", "value": "Brendan"}
-                ], f"Thanks {guessed_name}! Let’s keep going."
+    raw_props = parsed.get("properties", [])
+    reply = parsed.get("response", "").strip()
 
-        return safe_props, reply
+    if isinstance(raw_props, list) and all(isinstance(p, str) for p in raw_props):
+        log_debug_event(record_id, "GPT", "Malformed Prop Format", f"Discarded list of strings: {raw_props}")
+        fallback = "Could you let me know how many bedrooms and bathrooms we’re quoting for, and whether the property is furnished?"
+        log_debug_event(record_id, "GPT", "Final Reply", fallback)
+        flushed = flush_debug_log(record_id)
+        if flushed:
+            update_quote_record(record_id, {"debug_log": flushed, "source": "Brendan"})
+        return [{"property": "source", "value": "Brendan"}], fallback
+
+    if isinstance(raw_props, dict):
+        raw_props = [{"property": k, "value": v} for k, v in raw_props.items()]
+        log_debug_event(record_id, "GPT", "Converted Dict Props", f"Fixed to list with {len(raw_props)} items")
+    elif not isinstance(raw_props, list):
+        log_debug_event(record_id, "GPT", "Malformed Props", f"Type: {type(raw_props)}")
+        raw_props = []
+
+    safe_props = []
+    for p in raw_props:
+        if not isinstance(p, dict) or "property" not in p or "value" not in p:
+            log_debug_event(record_id, "GPT", "Skipped Invalid Prop", str(p))
+            continue
+        field, value = p["property"], p["value"]
+        log_debug_event(record_id, "GPT", "Processing Field", f"{field} = {value}")
+        if field == "name" or field == "first_name":
+            field = "customer_name"
+            if value:
+                update_quote_record(record_id, {"customer_name": value})
+                log_debug_event(record_id, "GPT", "Customer Name Captured", f"Stored customer name: {value}")
+        elif field == "bedrooms":
+            field = "bedrooms_v2"
+        elif field == "bathrooms":
+            field = "bathrooms_v2"
+        elif field == "furnished":
+            field = "furnished_status"
+
+        if field in VALID_AIRTABLE_FIELDS:
+            safe_props.append({"property": field, "value": value})
+            log_debug_event(record_id, "GPT", "Field Accepted", f"{field} accepted")
+        else:
+            log_debug_event(record_id, "GPT", "Unknown Field Skipped", f"{field} = {value}")
+
+    safe_props = [p for p in safe_props if p["property"] != "source"]
+    safe_props.append({"property": "source", "value": "Brendan"})
+    log_debug_event(record_id, "GPT", "Final Props Injected", str(safe_props))
+    log_debug_event(record_id, "GPT", "Final Reply", reply)
+    log_debug_event(record_id, "GPT", "Function Return Payload", f"{len(safe_props)} properties to return")
+
+    flushed = flush_debug_log(record_id)
+    if flushed:
+        update_quote_record(record_id, {"debug_log": flushed})
+        log_debug_event(record_id, "GPT", "Debug Log Flushed", f"{len(flushed)} chars flushed")
+
+    if not safe_props or all(p["property"] == "source" for p in safe_props):
+        if len(message.split()) == 1 and message.isalpha():
+            guessed_name = message.strip().title()
+            log_debug_event(record_id, "GPT", "Name Fallback Injected", f"customer_name = {guessed_name}")
+            log_debug_event(record_id, "GPT", "Final Reply", f"Thanks {guessed_name}! Let’s keep going.")
+            if flushed:
+                update_quote_record(record_id, {"debug_log": flushed})
+            return [
+                {"property": "customer_name", "value": guessed_name},
+                {"property": "source", "value": "Brendan"}
+            ], f"Thanks {guessed_name}! Let’s keep going."
+
+    return safe_props, reply
+
 
 # === GPT Error Email Alert ===
 
@@ -1390,14 +1378,13 @@ async def filter_response_entry(request: Request):
         if message.lower() == "__init__":
             try:
                 log_debug_event(None, "BACKEND", "Init Triggered", f"New chat started — Session ID: {session_id}, Δ {time.time() - start_ts:.2f}s")
-
                 existing_quote = get_quote_by_session(session_id)
+
                 if not existing_quote:
                     log_debug_event(None, "BACKEND", "Session Not Found, Creating New Quote", f"Creating new quote for session {session_id}")
                     quote_id, record_id, quote_stage, fields = create_new_quote(session_id, force_new=True)
 
-                    retry_attempts = 5
-                    for attempt in range(retry_attempts):
+                    for attempt in range(5):
                         time.sleep(5 * (attempt + 1))
                         existing_quote = get_quote_by_session(session_id)
                         if existing_quote:
