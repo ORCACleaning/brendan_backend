@@ -860,6 +860,23 @@ def generate_next_actions(quote_stage: str, fields: dict):
         log_debug_event(None, "BACKEND", "Next Actions Fallback", f"Unrecognized stage: '{stage}' → Using fallback response")
         return fallback
 
+# === Extract Name ===
+
+def extract_first_name(full_name: str) -> str:
+    """
+    Extracts and formats the first name from a full name string.
+    Returns capitalized first name or empty string.
+    """
+    try:
+        if not full_name:
+            return ""
+        name = str(full_name).strip().split(" ")[0]
+        name_clean = re.sub(r"[^a-zA-Z\-]", "", name)  # allow hyphenated names
+        return name_clean.capitalize()
+    except Exception as e:
+        logger.warning(f"⚠️ extract_first_name() failed: {e}")
+        return ""
+
 
 # === GPT Extraction (Production-Grade) ===
 
@@ -915,7 +932,7 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         return [{"property": "source", "value": "Brendan"}], "No worries! Just before we begin, what name should I pop on this quote? (First name is fine)"
 
     if len(message.split()) == 1 and message.isalpha():
-        guessed_name = message.strip().title()
+        guessed_name = message.strip().title().split(" ")[0]
         reply = f"Thanks {guessed_name}! Let’s keep going."
         log_debug_event(record_id, "GPT", f"Name fallback triggered → storing temporary customer_name = {guessed_name}", "")
         return [
