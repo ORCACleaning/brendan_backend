@@ -1393,11 +1393,21 @@ async def filter_response_entry(request: Request):
                     quote_id, record_id, quote_stage, fields = create_new_quote(session_id, force_new=True)
 
                     for attempt in range(5):
-                        time.sleep(5 * (attempt + 1))
                         existing_quote = get_quote_by_session(session_id)
                         if existing_quote:
+                            log_debug_event(None, "BACKEND", "Quote Ready", f"Session found after {attempt + 1} attempt(s)")
                             break
                         log_debug_event(None, "BACKEND", f"Session Not Found (Attempt {attempt + 1})", f"Retrying session lookup for session_id={session_id}")
+                        time.sleep(attempt + 1)
+
+                        try:
+                            check_fields = get_quote_by_session(session_id)
+                            if check_fields and check_fields.get("fields", {}).get("message_log", "").strip():
+                                log_debug_event(None, "BACKEND", "Message Arrived During Retry", f"Proceeding after attempt {attempt + 1}")
+                                existing_quote = check_fields
+                                break
+                        except:
+                            pass
 
                     if not existing_quote:
                         log_debug_event(None, "BACKEND", "Failed to Retrieve New Quote", f"Session {session_id} still not found after retries.")
@@ -1475,7 +1485,7 @@ async def filter_response_entry(request: Request):
         log_debug_event(record_id, "BACKEND", "Calling GPT", f"Input: {message[:100]} — Δ {time.time() - start_ts:.2f}s")
 
         gpt_start = time.time()
-        properties, reply = await extract_properties_from_gpt4(message, message_log, record_id=record_id, session_id=session_id, quote_id=quote_id)
+        properties, reply = await extract_properties_from_gpt4(message, message_log, record_id=record_id, quote_id=quote_id)
         gpt_end = time.time()
         log_debug_event(record_id, "BACKEND", "GPT Completed", f"Δ {gpt_end - gpt_start:.2f}s (GPT) | Total Δ {gpt_end - start_ts:.2f}s")
 
