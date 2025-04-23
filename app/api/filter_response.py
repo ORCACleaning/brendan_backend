@@ -880,12 +880,12 @@ def extract_first_name(full_name: str) -> str:
 
 # === GPT Extraction (Production-Grade) ===
 
-async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
+async def extract_properties_from_gpt4(message: str, log: str, record_id: str = None, session_id: str = None, quote_id: str = None, skip_log_lookup: bool = False):
     start_time = time.time()
-    logger.info(f"🟡 extract_properties_from_gpt4() called — record_id: {record_id}, message={message}")
+    logger.info(f"⯾️ extract_properties_from_gpt4() called — record_id: {record_id}, message={message}")
 
     if record_id:
-        log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(session_id={quote_id}, message={message[:100]})")
+        log_debug_event(record_id, "BACKEND", "Function Start", f"extract_properties_from_gpt4(session_id={session_id}, message={message[:100]})")
 
     if message.strip() == "__init__":
         log_debug_event(record_id, "GPT", "Init Skipped", "Suppressing GPT call on __init__")
@@ -908,8 +908,10 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
     existing_fields = {}
     if record_id and not skip_log_lookup:
         try:
-            log_debug_event(record_id, "BACKEND", "Session Lookup", f"Looking up session_id={quote_id}")
-            session_data = get_quote_by_session(quote_id)
+            if not session_id or not session_id.startswith("brendan-"):
+                log_debug_event(record_id, "GPT", "⚠️ Invalid Session ID", f"Expected session_id like brendan-..., got: {session_id}")
+            log_debug_event(record_id, "BACKEND", "Session Lookup", f"Looking up session_id={session_id}")
+            session_data = get_quote_by_session(session_id)
             if isinstance(session_data, dict):
                 existing_fields = session_data.get("fields", {})
                 log_debug_event(record_id, "GPT", "Existing Fields Fetched", f"Session Data: {existing_fields}")
@@ -1046,7 +1048,6 @@ async def extract_properties_from_gpt4(message: str, log: str, record_id: str = 
         log_debug_event(record_id, "GPT", "Debug Log Flushed", f"{len(flushed)} chars flushed")
 
     return safe_props, reply
-
 
 # === GPT Error Email Alert ===
 
