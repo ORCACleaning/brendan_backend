@@ -1421,7 +1421,6 @@ async def filter_response_entry(request: Request):
                         "session_id": session_id
                     })
 
-                # === ⬇️ First Message Customisation with Rotation (Asking for Name) ===
                 import random
                 first_messages = [
                     "What name should I use to chat with you today? Totally fine to stay anonymous if you’d prefer 🙂",
@@ -1476,7 +1475,7 @@ async def filter_response_entry(request: Request):
         log_debug_event(record_id, "BACKEND", "Calling GPT", f"Input: {message[:100]} — Δ {time.time() - start_ts:.2f}s")
 
         gpt_start = time.time()
-        properties, reply = await extract_properties_from_gpt4(message, message_log, record_id, quote_id)
+        properties, reply = await extract_properties_from_gpt4(message, message_log, record_id=record_id, session_id=session_id, quote_id=quote_id)
         gpt_end = time.time()
         log_debug_event(record_id, "BACKEND", "GPT Completed", f"Δ {gpt_end - gpt_start:.2f}s (GPT) | Total Δ {gpt_end - start_ts:.2f}s")
 
