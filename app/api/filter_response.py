@@ -1421,34 +1421,27 @@ async def filter_response_entry(request: Request):
                         "session_id": session_id
                     })
 
-                if quote_stage == "Gathering Personal Info" and not fields.get("privacy_acknowledged"):
-                    log_debug_event(record_id, "BACKEND", "Awaiting Privacy Consent", f"privacy_acknowledged: {fields.get('privacy_acknowledged')}")
-                    return await handle_privacy_consent(message, message.lower(), record_id, session_id)
+                # === ⬇️ First Message Customisation with Rotation (Asking for Name) ===
+                import random
+                first_messages = [
+                    "What name should I use to chat with you today? Totally fine to stay anonymous if you’d prefer 🙂",
+                    "I can call you by name if you like — or we can keep it casual and anonymous! What’s your name?",
+                    "Just before we begin — got a name you’d like me to use for the chat? Feel free to skip it.",
+                    "Do you have a name you’d like me to use during our convo? Or I can just say mate!",
+                    "Want to tell me your name so I can personalise things a bit? No pressure if not.",
+                    "Alrighty — should I call you by a name or just keep it friendly and casual?",
+                    "By the way, do you have a name you’d like me to use while we chat? It’s totally optional."
+                ]
+                name_prompt = random.choice(first_messages)
 
-                if quote_stage == "Gathering Personal Info" and fields.get("privacy_acknowledged"):
-                    name = fields.get("customer_name", "").strip()
-                    email = fields.get("customer_email", "").strip()
-                    phone = fields.get("customer_phone", "").strip()
-                    log_debug_event(record_id, "BACKEND", "PDF Flow Check", f"Name={name}, Email={email}, Phone={phone}")
-
-                    if name and email and phone:
-                        try:
-                            log_debug_event(record_id, "BACKEND", "Generating PDF", f"Preparing for: {name} ({email})")
-                            pdf_path = generate_quote_pdf(fields)
-                            send_quote_email(email, name, pdf_path, quote_id)
-                            update_quote_record(record_id, {"quote_stage": "Personal Info Received"})
-                            append_message_log(record_id, f"PDF quote sent to {email}", "brendan")
-                            log_debug_event(record_id, "BACKEND", "PDF Sent", f"PDF sent to {email}, stage updated")
-
-                            return JSONResponse(content={
-                                "properties": [],
-                                "response": f"Thanks {name}! I’ve just sent your quote to {email}. Let me know if you need help with anything else — or feel free to book directly anytime: https://orcacleaning.com.au/schedule?quote_id={quote_id}",
-                                "next_actions": generate_next_actions("Personal Info Received", fields),
-                                "session_id": session_id
-                            })
-                        except Exception as e:
-                            log_debug_event(record_id, "BACKEND", "PDF/Email Error", traceback.format_exc())
-                            raise HTTPException(status_code=500, detail="Failed to send quote email.")
+                append_message_log(record_id, name_prompt, "brendan")
+                update_quote_record(record_id, {"source": "Brendan"})
+                return JSONResponse(content={
+                    "properties": [],
+                    "response": name_prompt,
+                    "next_actions": generate_next_actions(quote_stage, fields),
+                    "session_id": session_id
+                })
 
             except Exception as e:
                 log_debug_event(None, "BACKEND", "Init Error", traceback.format_exc())
